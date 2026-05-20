@@ -204,7 +204,7 @@ fn nativeLoadBuiltin(info: *u8, _ud: *u8): void {
         let nameLen = v8c_string_write_utf8(iso, arg, nameBuf as *u8, 512)
         if nameLen <= 0 { return }
 
-        // Build path: LIB_DIR + "/" + name + ".js"
+        // Build path: libDir + "/" + name + ".js"
         var pathBuf: [u8; 1024] = [0; 1024]
         let libDir = nm_get_lib_dir()
         let libLen = strlen(libDir)
@@ -245,7 +245,6 @@ fn nativeLoadBuiltin(info: *u8, _ud: *u8): void {
     }
 }
 
-// Stored externally in C (module-level vars not allowed in Milo)
 extern fn nm_set_lib_dir(dir: *u8): void
 extern fn nm_get_lib_dir(): *u8
 
@@ -292,7 +291,15 @@ fn setupProcessObject(iso: *u8, ctx: *u8, argc: i32, argv: *i64): i32 {
         v8c_object_set(ctx, proc, "pid", v8c_int32(iso, getpid()))
         v8c_object_set(ctx, proc, "ppid", v8c_int32(iso, getppid()))
         v8c_object_set(ctx, proc, "platform", v8c_string_utf8(iso, "darwin"))
+        v8c_object_set(ctx, proc, "arch", v8c_string_utf8(iso, "arm64"))
         v8c_object_set(ctx, proc, "version", v8c_string_utf8(iso, "v27.0.0-milo"))
+
+        // process.versions
+        let versions = v8c_object_new(iso)
+        v8c_object_set(ctx, versions, "node", v8c_string_utf8(iso, "27.0.0"))
+        v8c_object_set(ctx, versions, "v8", v8c_string_utf8(iso, "12.4.0"))
+        v8c_object_set(ctx, versions, "modules", v8c_string_utf8(iso, "131"))
+        v8c_object_set(ctx, proc, "versions", versions)
 
         // process.argv
         let arr = v8c_array_new(iso, argc)
@@ -314,241 +321,19 @@ fn setupProcessObject(iso: *u8, ctx: *u8, argc: i32, argv: *i64): i32 {
     }
 }
 
-// Bootstrap JS: defines console.log and require()
-fn runBootstrap(iso: *u8, ctx: *u8): i32 {
+fn runBootstrap(ctx: *u8, path: *u8): i32 {
     unsafe {
-        let bootstrap = "(function() {
-  // primordials — frozen copies of built-in prototypes
-  // Node's lib/*.js use these to protect against prototype pollution
-  const primordials = {};
-  const _pSrc = __loadBuiltin('internal/per_context/primordials');
-  if (_pSrc) {
-    (new Function('primordials', _pSrc))(primordials);
-  }
-  globalThis.primordials = primordials;
-
-  // Register constants binding (pure JS data)
-  const _constants = {
-    os: {
-      signals: {
-        SIGHUP:1, SIGINT:2, SIGQUIT:3, SIGILL:4, SIGTRAP:5, SIGABRT:6,
-        SIGFPE:8, SIGKILL:9, SIGBUS:10, SIGSEGV:11, SIGSYS:12, SIGPIPE:13,
-        SIGALRM:14, SIGTERM:15, SIGURG:16, SIGSTOP:17, SIGTSTP:18,
-        SIGCONT:19, SIGCHLD:20, SIGTTIN:21, SIGTTOU:22, SIGIO:23,
-        SIGXCPU:24, SIGXFSZ:25, SIGVTALRM:26, SIGPROF:27, SIGINFO:29,
-        SIGUSR1:30, SIGUSR2:31,
-      },
-      errno: {
-        E2BIG:7, EACCES:13, EADDRINUSE:48, EADDRNOTAVAIL:49,
-        EAGAIN:35, EALREADY:37, EBADF:9, EBUSY:16, ECANCELED:89,
-        ECHILD:10, ECONNABORTED:53, ECONNREFUSED:61, ECONNRESET:54,
-        EDEADLK:11, EDESTADDRREQ:39, EDOM:33, EEXIST:17, EFAULT:14,
-        EFBIG:27, EHOSTUNREACH:65, EINPROGRESS:36, EINTR:4, EINVAL:22,
-        EIO:5, EISCONN:56, EISDIR:21, ELOOP:62, EMFILE:24, EMLINK:31,
-        EMSGSIZE:40, ENAMETOOLONG:63, ENETDOWN:50, ENETUNREACH:51,
-        ENFILE:23, ENOBUFS:55, ENODEV:19, ENOENT:2, ENOMEM:12,
-        ENOSPC:28, ENOSYS:78, ENOTCONN:57, ENOTDIR:20, ENOTEMPTY:66,
-        ENOTSOCK:38, ENOTSUP:45, EPERM:1, EPIPE:32, ERANGE:34,
-        EROFS:30, ESPIPE:29, ESRCH:3, ETIMEDOUT:60, EXDEV:18,
-      },
-      priority: {
-        PRIORITY_LOW:19, PRIORITY_BELOW_NORMAL:10, PRIORITY_NORMAL:0,
-        PRIORITY_ABOVE_NORMAL:-7, PRIORITY_HIGH:-14, PRIORITY_HIGHEST:-20,
-      },
-    },
-    fs: {
-      O_RDONLY:0, O_WRONLY:1, O_RDWR:2, O_CREAT:512, O_EXCL:2048,
-      O_TRUNC:1024, O_APPEND:8, O_DIRECTORY:1048576, O_NOFOLLOW:256,
-      O_SYNC:128, O_SYMLINK:2097152, O_NONBLOCK:4,
-      S_IFMT:61440, S_IFREG:32768, S_IFDIR:16384, S_IFLNK:40960,
-      S_IFCHR:8192, S_IFBLK:24576, S_IFIFO:4096, S_IFSOCK:49152,
-      S_IRWXU:448, S_IRUSR:256, S_IWUSR:128, S_IXUSR:64,
-      S_IRWXG:56, S_IRGRP:32, S_IWGRP:16, S_IXGRP:8,
-      S_IRWXO:7, S_IROTH:4, S_IWOTH:2, S_IXOTH:1,
-      F_OK:0, R_OK:4, W_OK:2, X_OK:1,
-      UV_FS_COPYFILE_EXCL:1, UV_FS_COPYFILE_FICLONE:2,
-      COPYFILE_EXCL:1, COPYFILE_FICLONE:2,
-    },
-  };
-  // types binding — V8 type checks via JS
-  const _types = {
-    isDate: (v) => v instanceof Date,
-    isMap: (v) => v instanceof Map,
-    isSet: (v) => v instanceof Set,
-    isWeakMap: (v) => v instanceof WeakMap,
-    isWeakSet: (v) => v instanceof WeakSet,
-    isRegExp: (v) => v instanceof RegExp,
-    isPromise: (v) => v instanceof Promise,
-    isNativeError: (v) => v instanceof Error,
-    isArrayBuffer: (v) => v instanceof ArrayBuffer,
-    isSharedArrayBuffer: (v) => typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer,
-    isProxy: (v) => false,
-    isExternal: (v) => false,
-    isAnyArrayBuffer: (v) => v instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer),
-    isTypedArray: (v) => ArrayBuffer.isView(v) && !(v instanceof DataView),
-    isDataView: (v) => v instanceof DataView,
-  };
-
-  // JS-defined bindings
-  const _mksnapshot = { isBuildingSnapshotBuffer: new Uint8Array(1) };
-  const _jsBindings = { constants: _constants, types: _types, mksnapshot: _mksnapshot };
-  const _origInternalBinding = internalBinding;
-  const _emptyBinding = Object.freeze(Object.create(null));
-  globalThis.internalBinding = function(name) {
-    if (_jsBindings[name]) return _jsBindings[name];
-    try { return _origInternalBinding(name); }
-    catch(e) { return _emptyBinding; }
-  };
-  globalThis.getInternalBinding = globalThis.internalBinding;
-
-  // Minimal stubs for internal modules needed by lib/*.js
-  const _internalModules = {
-    'internal/util': {
-      isWindows: process.platform === 'win32',
-      isMacOS: process.platform === 'darwin',
-      getLazy(init) { let v; return () => (v ??= init()); },
-      spliceOne(list, idx) { for (let i=idx; i<list.length-1; i++) list[i]=list[i+1]; list.pop(); },
-      kEmptyObject: Object.freeze(Object.create(null)),
-      normalizeEncoding(enc) {
-        if (!enc || enc === 'utf8' || enc === 'utf-8') return 'utf8';
-        return enc.toLowerCase();
-      },
-      isError(e) { return e instanceof Error; },
-      setOwnProperty(obj, key, val) { Object.defineProperty(obj, key, {value:val, writable:true, enumerable:true, configurable:true}); },
-    },
-    'internal/validators': {
-      validateString(v, name) { if (typeof v !== 'string') throw new TypeError(name + ' must be a string'); },
-      validateObject(v, name, opts) { if (typeof v !== 'object' || v === null) throw new TypeError(name + ' must be an object'); },
-      validateInt32(v, name) { if (typeof v !== 'number' || v !== (v|0)) throw new RangeError(name + ' must be a 32-bit integer'); },
-      validateFunction(v, name) { if (typeof v !== 'function') throw new TypeError(name + ' must be a function'); },
-      validateBoolean(v, name) { if (typeof v !== 'boolean') throw new TypeError(name + ' must be a boolean'); },
-      validateNumber(v, name) { if (typeof v !== 'number') throw new TypeError(name + ' must be a number'); },
-      validateOneOf(v, name, oneOf) { if (!oneOf.includes(v)) throw new TypeError(name + ' must be one of: ' + oneOf.join(', ')); },
-      validateAbortSignal(v, name) {},
-    },
-    'internal/util/types': _types,
-    'internal/assert': function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); },
-    'internal/bootstrap/realm': {
-      BuiltinModule: {
-        normalizeRequirableId(id) { return id; },
-        isBuiltin(id) { return false; },
-        map: new Map(),
-      },
-    },
-    'internal/events/abort_listener': {
-      addAbortListener(signal, listener) { if (signal) signal.addEventListener('abort', listener, {once: true}); return { [Symbol.dispose]() {} }; },
-    },
-  };
-  // Pre-seed module cache with internal stubs
-  globalThis.__internalModules = _internalModules;
-
-  // process stubs that need JS-level implementation
-  process.emitWarning = function(msg) { console.error('Warning:', msg); };
-  process.env = new Proxy({}, {
-    get(_, key) { return internalBinding('env').get(String(key)); },
-    has(_, key) { return internalBinding('env').get(String(key)) !== undefined; },
-  });
-
-  // console.log/error/warn
-  globalThis.console = {
-    log(...args) {
-      const s = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-      internalBinding('_console').write(s + '\\n');
-    },
-    error(...args) {
-      const s = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-      internalBinding('_console').writeError(s + '\\n');
-    },
-    warn(...args) { console.error(...args); },
-  };
-
-  // require() shim — wraps internalBinding with Node-compatible API
-  const moduleCache = {};
-  const moduleFactories = {
-    os() {
-      const b = internalBinding('os');
-      return {
-        hostname: () => b.getHostname(),
-        cpus: () => ({ length: b.getAvailableParallelism() }),
-        availableParallelism: () => b.getAvailableParallelism(),
-        freemem: () => b.getFreeMem(),
-        totalmem: () => b.getTotalMem(),
-        uptime: () => b.getUptime(),
-        loadavg: () => [b.getLoadAvg1(), b.getLoadAvg5(), b.getLoadAvg15()],
-        release: () => b.getOsRelease(),
-        pid: process.pid,
-        platform: 'darwin',
-        type: () => 'Darwin',
-        arch: 'arm64',
-        homedir: () => internalBinding('env').get('HOME') || '/',
-        tmpdir: () => internalBinding('env').get('TMPDIR') || '/tmp',
-      };
-    },
-    process() { return internalBinding('process_methods'); },
-    fs() {
-      const b = internalBinding('fs');
-      return {
-        readFileSync(path, opts) {
-          const enc = typeof opts === 'string' ? opts : (opts && opts.encoding);
-          const r = b.readFile(String(path));
-          if (r === -1) throw new Error('ENOENT: no such file: ' + path);
-          return r;
-        },
-        writeFileSync(path, data) {
-          const r = b.writeFile(String(path), String(data));
-          if (r === -1) throw new Error('EIO: write failed: ' + path);
-        },
-        statSync(path) {
-          const s = b.stat(String(path));
-          if (s === -1) throw new Error('ENOENT: no such file: ' + path);
-          return { ...s, isFile: () => !!s.isFile, isDirectory: () => !!s.isDirectory };
-        },
-        existsSync(path) { return !!b.exists(String(path)); },
-        mkdirSync(path, opts) {
-          const mode = (opts && opts.mode) || 0o777;
-          const r = b.mkdir(String(path), mode);
-          if (r !== 0) throw new Error('EEXIST: mkdir failed: ' + path);
-        },
-        unlinkSync(path) { b.unlink(String(path)); },
-        rmdirSync(path) { b.rmdir(String(path)); },
-        renameSync(old, n) { b.rename(String(old), String(n)); },
-        readdirSync(path) { return b.readdir(String(path)) || []; },
-        realpathSync(path) { return b.realpath(String(path)); },
-        chmodSync(path, mode) { b.chmod(String(path), mode); },
-      };
-    },
-  };
-  globalThis.require = function require(id) {
-    if (moduleCache[id]) return moduleCache[id];
-    if (moduleFactories[id]) {
-      moduleCache[id] = moduleFactories[id]();
-      return moduleCache[id];
-    }
-    // Internal module stubs
-    if (__internalModules[id]) {
-      moduleCache[id] = __internalModules[id];
-      return moduleCache[id];
-    }
-    // Try loading from lib/ as CJS module first
-    const src = __loadBuiltin(id);
-    if (src !== undefined) {
-      const mod = { exports: {} };
-      const wrapped = new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src);
-      wrapped(mod.exports, require, mod, id, '', primordials);
-      moduleCache[id] = mod.exports;
-      return mod.exports;
-    }
-    // Fall back to native bindings
-    const binding = internalBinding(id);
-    if (binding !== _emptyBinding) {
-      moduleCache[id] = binding;
-      return binding;
-    }
-    throw new Error('Cannot find module \\'' + id + '\\'');
-  };
-})();"
-        let len = strlen(bootstrap) as i32
-        return v8c_script_compile_run(ctx, bootstrap, len, "[bootstrap]")
+        var fileLen: [i64; 1] = [0]
+        let source = readFile(path, fileLen as *i64)
+        if source as i64 == 0 {
+            printErr("error: cannot read bootstrap: ")
+            printErr(path)
+            printErr("\n")
+            return -1
+        }
+        let result = v8c_script_compile_run(ctx, source, fileLen[0] as i32, path)
+        free(source)
+        return result
     }
 }
 
@@ -661,6 +446,25 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
             nm_set_lib_dir(libPath as *u8)
         }
 
+        // Bootstrap path: <root>/src/milo/runtime/bootstrap.js
+        var bsPath: [u8; 1024] = [0; 1024]
+        let ld = nm_get_lib_dir()
+        let rootLen = strlen(ld) - 3
+        var bp: i64 = 0
+        while bp < rootLen {
+            bsPath[bp] = ld[bp]
+            bp = bp + 1
+        }
+        let bsSuffix = "src/milo/runtime/bootstrap.js"
+        let bsSuffixLen = strlen(bsSuffix)
+        var bs: i64 = 0
+        while bs < bsSuffixLen {
+            bsPath[bp] = bsSuffix[bs]
+            bp = bp + 1
+            bs = bs + 1
+        }
+        bsPath[bp] = 0
+
         // Boot V8
         let execPath = argv[0] as *u8
         if v8c_platform_init(execPath) != 0 {
@@ -679,12 +483,13 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         let ctx = v8c_context_new(iso)
         v8c_context_enter(ctx)
 
-        // Expose internalBinding(), __loadBuiltin() and process on global
+        // Expose internalBinding(), __loadBuiltin(), __libDir on global
         let global = v8c_context_global(ctx)
         let ib_fn = v8c_function_new(ctx, nm_internal_binding as *u8, 0 as *u8)
         v8c_object_set(ctx, global, "internalBinding", ib_fn)
         let lb_fn = v8c_function_new(ctx, nativeLoadBuiltin as *u8, 0 as *u8)
         v8c_object_set(ctx, global, "__loadBuiltin", lb_fn)
+        v8c_object_set(ctx, global, "__libDir", v8c_string_utf8(iso, nm_get_lib_dir()))
 
         // Register _console binding (used by bootstrap's console.log)
         nm_binding_register("_console", nm_init_console as *u8)
@@ -694,7 +499,7 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
 
         // Run bootstrap (defines console.log, require)
         let tc = v8c_try_catch_new(iso)
-        let bootResult = runBootstrap(iso, ctx)
+        let bootResult = runBootstrap(ctx, bsPath as *u8)
         if bootResult < 0 {
             printErr("error: bootstrap failed\n")
             if v8c_try_catch_has_caught(tc) != 0 {
@@ -725,6 +530,10 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         let tc2 = v8c_try_catch_new(iso)
         var result: i32 = -1
         if scriptFile as i64 != 0 {
+            // Set __filename/__dirname for relative requires
+            v8c_object_set(ctx, global, "__filename", v8c_string_utf8(iso, scriptFile))
+            let setCtx = "(function(){const p=require('path');const f=p.resolve(__filename);globalThis.__filename=f;globalThis.__dirname=p.dirname(f);globalThis._requireStack.push(p.dirname(f));})()"
+            v8c_script_compile_run(ctx, setCtx, strlen(setCtx) as i32, "[setup]")
             result = v8c_script_compile_run(ctx, script, scriptLen, scriptFile)
         } else {
             result = v8c_script_compile_run(ctx, script, scriptLen, "[eval]")
@@ -767,7 +576,7 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
 }
 
 // _console binding init — provides write/writeError for bootstrap's console
-fn nm_init_console(iso: *u8, ctx: *u8, exports: i32): void {
+fn nm_init_console(_iso: *u8, ctx: *u8, exports: i32): void {
     unsafe {
         let w_fn = v8c_function_new(ctx, consoleWrite as *u8, 0 as *u8)
         let we_fn = v8c_function_new(ctx, consoleWriteError as *u8, 0 as *u8)

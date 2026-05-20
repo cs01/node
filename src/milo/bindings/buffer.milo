@@ -38,7 +38,7 @@ fn bufNoopWrite(info: *u8, _ud: *u8): void {
     unsafe { v8c_fci_return(info, v8c_int32(v8c_fci_isolate(info), 0)) }
 }
 
-fn nm_init_buffer(iso: *u8, ctx: *u8, exports: i32): void {
+fn nm_init_buffer(_iso: *u8, ctx: *u8, exports: i32): void {
     unsafe {
         setMethod(ctx, exports, "createUnsafeArrayBuffer", bufCreateUnsafeArrayBuffer as *u8)
         setMethod(ctx, exports, "setDetachKey", bufSetDetachKey as *u8)

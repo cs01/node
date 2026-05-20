@@ -145,6 +145,10 @@ fn nmFsFutimes(fd: i32, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime_u
 // --- setup ---
 
 extern fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void
+extern fn v8c_arraybuffer_new(iso: *u8, size: i64): i32
+extern fn v8c_uint32array_new(iso: *u8, ab: i32, offset: i64, length: i64): i32
+extern fn v8c_biguint64array_new(iso: *u8, ab: i32, offset: i64, length: i64): i32
+extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
 
 // Binding init — populates exports object for internalBinding('process_methods')
 fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
@@ -153,5 +157,10 @@ fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
         setMethod(ctx, exports, "hrtimeBigint", processHrtimeBigint as *u8)
         setMethod(ctx, exports, "kill", processKill as *u8)
         setMethod(ctx, exports, "cpuUsage", processCpuUsage as *u8)
+
+        // hrtimeBuffer: Uint32Array(5) backed by ArrayBuffer(20)
+        let ab = v8c_arraybuffer_new(iso, 20)
+        let u32arr = v8c_uint32array_new(iso, ab, 0, 5)
+        v8c_object_set(ctx, exports, "hrtimeBuffer", u32arr)
     }
 }

@@ -1198,6 +1198,24 @@ extern "C" v8c_value v8c_uint8array_new(v8c_isolate* iso, v8c_value ab,
                                        offset, length));
 }
 
+extern "C" v8c_value v8c_uint32array_new(v8c_isolate* iso, v8c_value ab,
+                                          size_t offset, size_t length) {
+    auto* i = ISO(iso);
+    auto local = unwrap(i, ab);
+    if (local.IsEmpty() || !local->IsArrayBuffer()) return V8C_VALUE_INVALID;
+    return wrap(i, v8::Uint32Array::New(local.As<v8::ArrayBuffer>(),
+                                        offset, length));
+}
+
+extern "C" v8c_value v8c_biguint64array_new(v8c_isolate* iso, v8c_value ab,
+                                              size_t offset, size_t length) {
+    auto* i = ISO(iso);
+    auto local = unwrap(i, ab);
+    if (local.IsEmpty() || !local->IsArrayBuffer()) return V8C_VALUE_INVALID;
+    return wrap(i, v8::BigUint64Array::New(local.As<v8::ArrayBuffer>(),
+                                           offset, length));
+}
+
 extern "C" void* v8c_typedarray_data(v8c_isolate* iso, v8c_value ta) {
     auto* i = ISO(iso);
     auto local = unwrap(i, ta);

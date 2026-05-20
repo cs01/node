@@ -106,7 +106,7 @@ fn utilGetCallerLocation(info: *u8, _ud: *u8): void {
     unsafe { v8c_fci_return_undefined(info) }
 }
 
-fn utilSleep(info: *u8, _ud: *u8): void {}
+fn utilSleep(_info: *u8, _ud: *u8): void {}
 
 // Binding init
 fn nm_init_util(iso: *u8, ctx: *u8, exports: i32): void {

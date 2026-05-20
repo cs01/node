@@ -335,6 +335,12 @@ size_t    v8c_arraybuffer_byte_length(v8c_isolate* iso, v8c_value ab);
 // Uint8Array
 v8c_value v8c_uint8array_new(v8c_isolate* iso, v8c_value ab,
                               size_t offset, size_t length);
+// Uint32Array
+v8c_value v8c_uint32array_new(v8c_isolate* iso, v8c_value ab,
+                               size_t offset, size_t length);
+// BigUint64Array
+v8c_value v8c_biguint64array_new(v8c_isolate* iso, v8c_value ab,
+                                  size_t offset, size_t length);
 void*     v8c_typedarray_data(v8c_isolate* iso, v8c_value ta);
 size_t    v8c_typedarray_byte_length(v8c_isolate* iso, v8c_value ta);
 size_t    v8c_typedarray_byte_offset(v8c_isolate* iso, v8c_value ta);

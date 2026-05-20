@@ -340,7 +340,7 @@ fn fsChmod(info: *u8, _ud: *u8): void {
 extern fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void
 
 // Binding init — populates exports for internalBinding('fs')
-fn nm_init_fs(iso: *u8, ctx: *u8, exports: i32): void {
+fn nm_init_fs(_iso: *u8, ctx: *u8, exports: i32): void {
     unsafe {
         setMethod(ctx, exports, "readFile", fsReadFile as *u8)
         setMethod(ctx, exports, "writeFile", fsWriteFile as *u8)

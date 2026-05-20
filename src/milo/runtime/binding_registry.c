@@ -1,5 +1,4 @@
-// binding_registry.c — mutable global state for binding dispatch table + runtime config
-// Milo can't do module-level vars, so the table lives here.
+// binding_registry.c — binding dispatch table, runtime config, ARM64 variadic wrapper
 
 #include <string.h>
 #include <stdint.h>
