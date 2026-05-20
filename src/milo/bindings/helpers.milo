@@ -1,0 +1,26 @@
+// helpers.milo — shared utility functions for V8 binding callbacks
+
+extern fn v8c_fci_length(info: *u8): i32
+extern fn v8c_fci_arg(info: *u8, idx: i32): i32
+extern fn v8c_fci_isolate(info: *u8): *u8
+extern fn v8c_to_int32(iso: *u8, val: i32, out: *i32): i32
+extern fn v8c_function_new(ctx: *u8, cb: *u8, data: *u8): i32
+extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
+
+fn argI32(info: *u8, idx: i32, defaultVal: i32): i32 {
+    unsafe {
+        if idx >= v8c_fci_length(info) { return defaultVal }
+        let arg = v8c_fci_arg(info, idx)
+        let iso = v8c_fci_isolate(info)
+        var out: i32 = defaultVal
+        v8c_to_int32(iso, arg, &out)
+        return out
+    }
+}
+
+fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void {
+    unsafe {
+        let fnVal = v8c_function_new(ctx, cb, 0 as *u8)
+        v8c_object_set(ctx, obj, name, fnVal)
+    }
+}

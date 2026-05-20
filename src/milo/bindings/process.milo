@@ -51,16 +51,7 @@ extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
 extern fn v8c_function_new(ctx: *u8, cb: *u8, data: *u8): i32
 extern fn v8c_context_global(ctx: *u8): i32
 
-fn argI32(info: *u8, idx: i32, defaultVal: i32): i32 {
-    unsafe {
-        if idx >= v8c_fci_length(info) { return defaultVal }
-        let arg = v8c_fci_arg(info, idx)
-        let iso = v8c_fci_isolate(info)
-        var out: i32 = defaultVal
-        v8c_to_int32(iso, arg, &out)
-        return out
-    }
-}
+extern fn argI32(info: *u8, idx: i32, defaultVal: i32): i32
 
 // --- hrtime ---
 
@@ -153,12 +144,7 @@ fn nmFsFutimes(fd: i32, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime_u
 
 // --- setup ---
 
-fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void {
-    unsafe {
-        let fnVal = v8c_function_new(ctx, cb, 0 as *u8)
-        v8c_object_set(ctx, obj, name, fnVal)
-    }
-}
+extern fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void
 
 // Binding init — populates exports object for internalBinding('process_methods')
 fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
