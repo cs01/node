@@ -520,11 +520,10 @@ extern "C" int32_t v8c_string_write_utf8(v8c_isolate* iso, v8c_value str,
     if (local.IsEmpty() || !local->IsString()) return -1;
     auto s = local.As<v8::String>();
     if (!buf) {
-        return s->Utf8Length(i);
+        return s->Utf8LengthV2(i);
     }
-    int written;
-    s->WriteUtf8(i, buf, bufsize, &written);
-    return written;
+    return s->WriteUtf8V2(i, buf, bufsize,
+                          v8::String::WriteFlags::kNullTerminate);
 }
 
 extern "C" int32_t v8c_string_length(v8c_isolate* iso, v8c_value str) {
@@ -649,32 +648,58 @@ extern "C" v8c_value v8c_object_get_own_property_names(v8c_context* ctx,
     return wrap(i, result);
 }
 
-extern "C" void v8c_object_set_internal_field(v8c_value obj, int index,
-                                               v8c_value val) {
-    // Need isolate — get from the value's handle table
-    // For now, use a simplified approach
-    // Internal fields require the isolate for unwrapping
+extern "C" void v8c_object_set_internal_field(v8c_isolate* iso, v8c_value obj,
+                                               int index, v8c_value val) {
+    auto* i = ISO(iso);
+    auto lo = unwrap(i, obj);
+    auto lv = unwrap(i, val);
+    if (lo.IsEmpty() || !lo->IsObject()) return;
+    lo.As<v8::Object>()->SetInternalField(index, lv);
 }
 
-extern "C" v8c_value v8c_object_get_internal_field(v8c_value obj, int index) {
-    return V8C_VALUE_INVALID; // stub — needs isolate context
+extern "C" v8c_value v8c_object_get_internal_field(v8c_isolate* iso,
+                                                    v8c_value obj, int index) {
+    auto* i = ISO(iso);
+    auto lo = unwrap(i, obj);
+    if (lo.IsEmpty() || !lo->IsObject()) return V8C_VALUE_INVALID;
+    auto o = lo.As<v8::Object>();
+    if (index >= o->InternalFieldCount()) return V8C_VALUE_INVALID;
+    auto field = o->GetInternalField(index);
+    if (field.IsEmpty()) return V8C_VALUE_INVALID;
+    return wrap(i, field.As<v8::Value>());
 }
 
-extern "C" void v8c_object_set_aligned_pointer(v8c_value obj, int index,
-                                                void* ptr) {
-    // stub — needs isolate
+extern "C" void v8c_object_set_aligned_pointer(v8c_isolate* iso, v8c_value obj,
+                                                int index, void* ptr) {
+    auto* i = ISO(iso);
+    auto lo = unwrap(i, obj);
+    if (lo.IsEmpty() || !lo->IsObject()) return;
+    lo.As<v8::Object>()->SetAlignedPointerInInternalField(index, ptr, {});
 }
 
-extern "C" void* v8c_object_get_aligned_pointer(v8c_value obj, int index) {
-    return nullptr; // stub
+extern "C" void* v8c_object_get_aligned_pointer(v8c_isolate* iso,
+                                                 v8c_value obj, int index) {
+    auto* i = ISO(iso);
+    auto lo = unwrap(i, obj);
+    if (lo.IsEmpty() || !lo->IsObject()) return nullptr;
+    auto o = lo.As<v8::Object>();
+    if (index >= o->InternalFieldCount()) return nullptr;
+    return o->GetAlignedPointerFromInternalField(index, {});
 }
 
-extern "C" int v8c_object_internal_field_count(v8c_value obj) {
-    return 0; // stub
+extern "C" int v8c_object_internal_field_count(v8c_isolate* iso,
+                                                v8c_value obj) {
+    auto* i = ISO(iso);
+    auto lo = unwrap(i, obj);
+    if (lo.IsEmpty() || !lo->IsObject()) return 0;
+    return lo.As<v8::Object>()->InternalFieldCount();
 }
 
-extern "C" v8c_value v8c_object_get_prototype(v8c_value obj) {
-    return V8C_VALUE_INVALID; // stub
+extern "C" v8c_value v8c_object_get_prototype(v8c_isolate* iso, v8c_value obj) {
+    auto* i = ISO(iso);
+    auto lo = unwrap(i, obj);
+    if (lo.IsEmpty() || !lo->IsObject()) return V8C_VALUE_INVALID;
+    return wrap(i, lo.As<v8::Object>()->GetPrototypeV2());
 }
 
 extern "C" int v8c_object_set_prototype(v8c_context* ctx, v8c_value obj,
@@ -684,7 +709,7 @@ extern "C" int v8c_object_set_prototype(v8c_context* ctx, v8c_value obj,
     auto lp = unwrap(i, proto);
     if (lo.IsEmpty() || !lo->IsObject()) return -1;
     auto context = ctx_local(ctx);
-    auto result = lo.As<v8::Object>()->SetPrototype(context, lp);
+    auto result = lo.As<v8::Object>()->SetPrototypeV2(context, lp);
     return result.IsJust() ? 0 : -1;
 }
 
@@ -882,14 +907,21 @@ extern "C" v8c_value v8c_function_template_get_function(
 }
 
 extern "C" v8c_object_template v8c_function_template_instance_template(
-    v8c_function_template ft) {
-    // This requires knowing the isolate — stub for now
-    return {-1};
+    v8c_isolate* iso, v8c_function_template ft) {
+    auto* i = ISO(iso);
+    auto* tt = static_cast<TemplateTable*>(i->GetData(kHandleTableSlot + 1));
+    auto local_ft = tt->get_ft(ft.slot);
+    auto it = local_ft->InstanceTemplate();
+    return {tt->store_ot(it)};
 }
 
 extern "C" v8c_object_template v8c_function_template_prototype_template(
-    v8c_function_template ft) {
-    return {-1}; // stub
+    v8c_isolate* iso, v8c_function_template ft) {
+    auto* i = ISO(iso);
+    auto* tt = static_cast<TemplateTable*>(i->GetData(kHandleTableSlot + 1));
+    auto local_ft = tt->get_ft(ft.slot);
+    auto pt = local_ft->PrototypeTemplate();
+    return {tt->store_ot(pt)};
 }
 
 extern "C" void v8c_function_template_set_class_name(
@@ -900,9 +932,12 @@ extern "C" void v8c_function_template_set_class_name(
     local_ft->SetClassName(v8::String::NewFromUtf8(i, name).ToLocalChecked());
 }
 
-extern "C" void v8c_function_template_inherit(v8c_function_template child,
+extern "C" void v8c_function_template_inherit(v8c_isolate* iso,
+                                               v8c_function_template child,
                                                v8c_function_template parent) {
-    // stub — needs isolate
+    auto* i = ISO(iso);
+    auto* tt = static_cast<TemplateTable*>(i->GetData(kHandleTableSlot + 1));
+    tt->get_ft(child.slot)->Inherit(tt->get_ft(parent.slot));
 }
 
 extern "C" v8c_object_template v8c_object_template_new(v8c_isolate* iso) {
@@ -913,8 +948,10 @@ extern "C" v8c_object_template v8c_object_template_new(v8c_isolate* iso) {
 }
 
 extern "C" void v8c_object_template_set_internal_field_count(
-    v8c_object_template ot, int count) {
-    // stub — needs isolate
+    v8c_isolate* iso, v8c_object_template ot, int count) {
+    auto* i = ISO(iso);
+    auto* tt = static_cast<TemplateTable*>(i->GetData(kHandleTableSlot + 1));
+    tt->get_ot(ot.slot)->SetInternalFieldCount(count);
 }
 
 extern "C" v8c_value v8c_object_template_new_instance(v8c_context* ctx,
@@ -1098,34 +1135,56 @@ extern "C" v8c_value v8c_arraybuffer_new_backing(v8c_isolate* iso, void* data,
     return wrap(i, v8::ArrayBuffer::New(i, std::move(store)));
 }
 
-extern "C" void* v8c_arraybuffer_data(v8c_value ab) {
-    // stub — needs isolate to unwrap
-    return nullptr;
+extern "C" void* v8c_arraybuffer_data(v8c_isolate* iso, v8c_value ab) {
+    auto* i = ISO(iso);
+    auto local = unwrap(i, ab);
+    if (local.IsEmpty() || !local->IsArrayBuffer()) return nullptr;
+    return local.As<v8::ArrayBuffer>()->Data();
 }
 
-extern "C" size_t v8c_arraybuffer_byte_length(v8c_value ab) {
-    return 0; // stub
+extern "C" size_t v8c_arraybuffer_byte_length(v8c_isolate* iso, v8c_value ab) {
+    auto* i = ISO(iso);
+    auto local = unwrap(i, ab);
+    if (local.IsEmpty() || !local->IsArrayBuffer()) return 0;
+    return local.As<v8::ArrayBuffer>()->ByteLength();
 }
 
-extern "C" v8c_value v8c_uint8array_new(v8c_value ab, size_t offset,
-                                         size_t length) {
-    return V8C_VALUE_INVALID; // stub
+extern "C" v8c_value v8c_uint8array_new(v8c_isolate* iso, v8c_value ab,
+                                         size_t offset, size_t length) {
+    auto* i = ISO(iso);
+    auto local = unwrap(i, ab);
+    if (local.IsEmpty() || !local->IsArrayBuffer()) return V8C_VALUE_INVALID;
+    return wrap(i, v8::Uint8Array::New(local.As<v8::ArrayBuffer>(),
+                                       offset, length));
 }
 
-extern "C" void* v8c_typedarray_data(v8c_value ta) {
-    return nullptr; // stub
+extern "C" void* v8c_typedarray_data(v8c_isolate* iso, v8c_value ta) {
+    auto* i = ISO(iso);
+    auto local = unwrap(i, ta);
+    if (local.IsEmpty() || !local->IsArrayBufferView()) return nullptr;
+    auto view = local.As<v8::ArrayBufferView>();
+    return static_cast<uint8_t*>(view->Buffer()->Data()) + view->ByteOffset();
 }
 
-extern "C" size_t v8c_typedarray_byte_length(v8c_value ta) {
-    return 0; // stub
+extern "C" size_t v8c_typedarray_byte_length(v8c_isolate* iso, v8c_value ta) {
+    auto* i = ISO(iso);
+    auto local = unwrap(i, ta);
+    if (local.IsEmpty() || !local->IsArrayBufferView()) return 0;
+    return local.As<v8::ArrayBufferView>()->ByteLength();
 }
 
-extern "C" size_t v8c_typedarray_byte_offset(v8c_value ta) {
-    return 0; // stub
+extern "C" size_t v8c_typedarray_byte_offset(v8c_isolate* iso, v8c_value ta) {
+    auto* i = ISO(iso);
+    auto local = unwrap(i, ta);
+    if (local.IsEmpty() || !local->IsArrayBufferView()) return 0;
+    return local.As<v8::ArrayBufferView>()->ByteOffset();
 }
 
-extern "C" size_t v8c_typedarray_length(v8c_value ta) {
-    return 0; // stub
+extern "C" size_t v8c_typedarray_length(v8c_isolate* iso, v8c_value ta) {
+    auto* i = ISO(iso);
+    auto local = unwrap(i, ta);
+    if (local.IsEmpty() || !local->IsTypedArray()) return 0;
+    return local.As<v8::TypedArray>()->Length();
 }
 
 // ---------------------------------------------------------------------------

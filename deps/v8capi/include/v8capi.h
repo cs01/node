@@ -198,14 +198,18 @@ int v8c_object_delete(v8c_context* ctx, v8c_value obj, const char* key);
 v8c_value v8c_object_get_own_property_names(v8c_context* ctx, v8c_value obj);
 
 // Internal fields (for BaseObject / wrapped native pointers)
-void  v8c_object_set_internal_field(v8c_value obj, int index, v8c_value val);
-v8c_value v8c_object_get_internal_field(v8c_value obj, int index);
-void  v8c_object_set_aligned_pointer(v8c_value obj, int index, void* ptr);
-void* v8c_object_get_aligned_pointer(v8c_value obj, int index);
-int   v8c_object_internal_field_count(v8c_value obj);
+void  v8c_object_set_internal_field(v8c_isolate* iso, v8c_value obj,
+                                     int index, v8c_value val);
+v8c_value v8c_object_get_internal_field(v8c_isolate* iso, v8c_value obj,
+                                         int index);
+void  v8c_object_set_aligned_pointer(v8c_isolate* iso, v8c_value obj,
+                                      int index, void* ptr);
+void* v8c_object_get_aligned_pointer(v8c_isolate* iso, v8c_value obj,
+                                      int index);
+int   v8c_object_internal_field_count(v8c_isolate* iso, v8c_value obj);
 
 // Prototype chain
-v8c_value v8c_object_get_prototype(v8c_value obj);
+v8c_value v8c_object_get_prototype(v8c_isolate* iso, v8c_value obj);
 int       v8c_object_set_prototype(v8c_context* ctx, v8c_value obj,
                                     v8c_value proto);
 
@@ -258,17 +262,19 @@ v8c_function_template v8c_function_template_new(v8c_isolate* iso,
 v8c_value v8c_function_template_get_function(v8c_context* ctx,
                                               v8c_function_template ft);
 v8c_object_template v8c_function_template_instance_template(
-    v8c_function_template ft);
+    v8c_isolate* iso, v8c_function_template ft);
 v8c_object_template v8c_function_template_prototype_template(
-    v8c_function_template ft);
+    v8c_isolate* iso, v8c_function_template ft);
 void v8c_function_template_set_class_name(v8c_function_template ft,
                                            v8c_isolate* iso,
                                            const char* name);
-void v8c_function_template_inherit(v8c_function_template child,
+void v8c_function_template_inherit(v8c_isolate* iso,
+                                    v8c_function_template child,
                                     v8c_function_template parent);
 
 v8c_object_template v8c_object_template_new(v8c_isolate* iso);
-void v8c_object_template_set_internal_field_count(v8c_object_template ot,
+void v8c_object_template_set_internal_field_count(v8c_isolate* iso,
+                                                   v8c_object_template ot,
                                                    int count);
 v8c_value v8c_object_template_new_instance(v8c_context* ctx,
                                             v8c_object_template ot);
@@ -322,15 +328,16 @@ v8c_value v8c_script_compile_run(v8c_context* ctx,
 v8c_value v8c_arraybuffer_new(v8c_isolate* iso, size_t byte_length);
 v8c_value v8c_arraybuffer_new_backing(v8c_isolate* iso, void* data,
                                        size_t byte_length);
-void*     v8c_arraybuffer_data(v8c_value ab);
-size_t    v8c_arraybuffer_byte_length(v8c_value ab);
+void*     v8c_arraybuffer_data(v8c_isolate* iso, v8c_value ab);
+size_t    v8c_arraybuffer_byte_length(v8c_isolate* iso, v8c_value ab);
 
 // Uint8Array
-v8c_value v8c_uint8array_new(v8c_value ab, size_t offset, size_t length);
-void*     v8c_typedarray_data(v8c_value ta);
-size_t    v8c_typedarray_byte_length(v8c_value ta);
-size_t    v8c_typedarray_byte_offset(v8c_value ta);
-size_t    v8c_typedarray_length(v8c_value ta);
+v8c_value v8c_uint8array_new(v8c_isolate* iso, v8c_value ab,
+                              size_t offset, size_t length);
+void*     v8c_typedarray_data(v8c_isolate* iso, v8c_value ta);
+size_t    v8c_typedarray_byte_length(v8c_isolate* iso, v8c_value ta);
+size_t    v8c_typedarray_byte_offset(v8c_isolate* iso, v8c_value ta);
+size_t    v8c_typedarray_length(v8c_isolate* iso, v8c_value ta);
 
 // ---------------------------------------------------------------------------
 // Promise
