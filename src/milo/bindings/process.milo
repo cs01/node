@@ -160,14 +160,12 @@ fn set_method(ctx: *u8, obj: i32, name: *u8, cb: *u8): void {
     }
 }
 
-fn nm_register_process(iso: *u8, ctx: *u8): void {
+// Binding init — populates exports object for internalBinding('process_methods')
+fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
     unsafe {
-        let obj = v8c_object_new(iso)
-        set_method(ctx, obj, "hrtime", process_hrtime as *u8)
-        set_method(ctx, obj, "hrtimeBigint", process_hrtime_bigint as *u8)
-        set_method(ctx, obj, "kill", process_kill as *u8)
-        set_method(ctx, obj, "cpuUsage", process_cpu_usage as *u8)
-        let global = v8c_context_global(ctx)
-        v8c_object_set(ctx, global, "__nm_process", obj)
+        set_method(ctx, exports, "hrtime", process_hrtime as *u8)
+        set_method(ctx, exports, "hrtimeBigint", process_hrtime_bigint as *u8)
+        set_method(ctx, exports, "kill", process_kill as *u8)
+        set_method(ctx, exports, "cpuUsage", process_cpu_usage as *u8)
     }
 }

@@ -1,6 +1,6 @@
 // os bindings — native OS info via v8capi, calling POSIX/macOS APIs directly
 
-// POSIX
+// POSIX / macOS syscalls (not all in std/os yet)
 extern fn gethostname(name: *u8, len: i64): i32
 extern fn getuid(): u32
 extern fn getgid(): u32
@@ -212,26 +212,24 @@ fn set_method(ctx: *u8, obj: i32, name: *u8, cb: *u8): void {
     }
 }
 
-fn nm_register_os(iso: *u8, ctx: *u8): void {
+// Binding init — populates exports object for internalBinding('os')
+fn nm_init_os(iso: *u8, ctx: *u8, exports: i32): void {
     unsafe {
-        let obj = v8c_object_new(iso)
-        set_method(ctx, obj, "getHostname", os_get_hostname as *u8)
-        set_method(ctx, obj, "getAvailableParallelism", os_get_cpus as *u8)
-        set_method(ctx, obj, "getPid", os_get_pid as *u8)
-        set_method(ctx, obj, "getPpid", os_get_ppid as *u8)
-        set_method(ctx, obj, "umask", os_umask as *u8)
-        set_method(ctx, obj, "getCpuModel", os_get_cpu_model as *u8)
-        set_method(ctx, obj, "getFreeMem", os_get_freemem as *u8)
-        set_method(ctx, obj, "getTotalMem", os_get_totalmem as *u8)
-        set_method(ctx, obj, "getUptime", os_get_uptime as *u8)
-        set_method(ctx, obj, "getOsRelease", os_get_os_release as *u8)
-        set_method(ctx, obj, "getLoadAvg1", os_get_loadavg1 as *u8)
-        set_method(ctx, obj, "getLoadAvg5", os_get_loadavg5 as *u8)
-        set_method(ctx, obj, "getLoadAvg15", os_get_loadavg15 as *u8)
-        set_method(ctx, obj, "setPriority", os_set_priority as *u8)
-        set_method(ctx, obj, "getPriority", os_get_priority as *u8)
-        let global = v8c_context_global(ctx)
-        v8c_object_set(ctx, global, "__nm_os", obj)
+        set_method(ctx, exports, "getHostname", os_get_hostname as *u8)
+        set_method(ctx, exports, "getAvailableParallelism", os_get_cpus as *u8)
+        set_method(ctx, exports, "getPid", os_get_pid as *u8)
+        set_method(ctx, exports, "getPpid", os_get_ppid as *u8)
+        set_method(ctx, exports, "umask", os_umask as *u8)
+        set_method(ctx, exports, "getCpuModel", os_get_cpu_model as *u8)
+        set_method(ctx, exports, "getFreeMem", os_get_freemem as *u8)
+        set_method(ctx, exports, "getTotalMem", os_get_totalmem as *u8)
+        set_method(ctx, exports, "getUptime", os_get_uptime as *u8)
+        set_method(ctx, exports, "getOsRelease", os_get_os_release as *u8)
+        set_method(ctx, exports, "getLoadAvg1", os_get_loadavg1 as *u8)
+        set_method(ctx, exports, "getLoadAvg5", os_get_loadavg5 as *u8)
+        set_method(ctx, exports, "getLoadAvg15", os_get_loadavg15 as *u8)
+        set_method(ctx, exports, "setPriority", os_set_priority as *u8)
+        set_method(ctx, exports, "getPriority", os_get_priority as *u8)
     }
 }
 

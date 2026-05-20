@@ -32,6 +32,12 @@ No libuv compat layer. Each Milo binding uses std/runtime directly (kqueue/epoll
 - Panic at FFI boundary: Milo panic inside V8 callback must not unwind through V8. Need longjmp or error-code convention at shim.
 - Memory ownership at FFI boundary: who frees when Milo allocates and passes to V8?
 - Thread safety: Node uses worker_threads + libuv thread pool. Milo's threading model needs to be compatible.
+- std/args uses Milo runtime intrinsics — need argsFromRaw(argc, argv) to use std/argparse with custom entry points
+
+## Dev notes
+
+- Always check ../milo/std/os.milo before writing `extern fn` for libc. Import with `from "std/os" import { ... }`.
+- Can't use std/args or std/argparse yet — they rely on Milo runtime intrinsics (_miloArgCount/_miloArgAt) that aren't linked when using custom entry.c
 
 ---
 
@@ -79,14 +85,21 @@ Hand-written C++ static lib. Flattens V8 API subset Node uses → C ABI.
 
 **Handle model**: Milo holds `v8c_value { slot: i32 }` handles. Never dereferences V8 pointers. Lifetime managed by Global<> in handle table. HandleScope wrapping via struct embedding (V8 forbids heap-allocated HandleScope).
 
-## Phase 3 — Milo runtime spine
+## Phase 3 — Milo runtime spine ✅ DONE
 
-Reimplement in Milo:
-- Bootstrap: node_main.cc, node_main_instance.*, node.cc Start path
-- Environment / IsolateData lifecycle (Milo struct owning isolate + loop refs)
-- Binding registry (replace NODE_BINDING_CONTEXT_AWARE_INTERNAL)
-- JS builtin loader (node_builtins.cc — loads lib/*.js)
-- **Gate**: boot `node -e "1+1"` — isolate+context+eval, no I/O bindings
+- [x] Minimal main.milo: boot V8, parse -e, eval script, print result
+- [x] C entry stub (entry.c) — Milo codegen adds implicit params before user args
+- [x] Linked: milo_main.o + v8capi.o + V8 libs → working binary
+- [x] **Gate PASSED**: `milo-node -e "1+1"` → `2`. Strings, numbers, JSON all work.
+
+**TODO (Phase 3b — full spine):**
+- [ ] Environment / IsolateData lifecycle (Milo struct owning isolate + context)
+- [x] Binding registry (internalBinding() dispatch — binding_registry.c + binding_registry.milo)
+- [x] JS builtin loader (__loadBuiltin reads lib/*.js, CJS module wrapper, primordials)
+- [x] Primordials loaded from lib/internal/per_context/primordials.js
+- [x] Real lib/path.js loads and works (first real Node module running on Milo runtime)
+- [x] Constants binding (JS-defined, macOS signal/errno/fs constants)
+- [ ] Boot with Node's actual lib/ bootstrap (needs more internal module stubs)
 
 ## Phase 4 — Binding migration (66 bindings)
 
@@ -125,7 +138,9 @@ Order by dependency/risk:
 |------|-------|
 | v8capi shim | deps/v8capi/{include/v8capi.h, src/v8capi.cc, test/test_v8capi.cc} |
 | V8 inventory | docs/V8_API_INVENTORY.md |
-| Milo bindings (salvaged) | src/milo/bindings/{fs,os,process,env}.milo |
+| Milo bindings | src/milo/bindings/{fs,os,process,env}.milo |
+| Milo runtime | src/milo/runtime/{main,binding_registry}.milo, {entry,binding_registry}.c |
+| Build script | src/milo/build.sh |
 | Milo compiler (Phase 1) | ../milo/src/{parser,checker,lower,codegen,main,types,tokens}.ts |
 | Node spine | src/{node_main,node_main_instance,node,env,node_binding,node_builtins}.{cc,h} |
 | Build config | node.gyp, node.gypi, common.gypi |

@@ -1,0 +1,56 @@
+// Binding registry — Milo-side: registration helpers + internalBinding() V8 callback
+// Mutable state lives in binding_registry.c (Milo has no module-level vars)
+
+extern fn nm_registry_add(name: *u8, init: *u8): void
+extern fn nm_registry_get(iso: *u8, ctx: *u8, name: *u8, make_obj: *u8): i32
+
+extern fn v8c_fci_length(info: *u8): i32
+extern fn v8c_fci_arg(info: *u8, idx: i32): i32
+extern fn v8c_fci_isolate(info: *u8): *u8
+extern fn v8c_fci_context(info: *u8): *u8
+extern fn v8c_fci_return(info: *u8, val: i32): void
+extern fn v8c_fci_return_undefined(info: *u8): void
+extern fn v8c_string_write_utf8(iso: *u8, val: i32, buf: *u8, bufsize: i32): i32
+extern fn v8c_object_new(iso: *u8): i32
+extern fn v8c_isolate_throw(iso: *u8, exc: i32): void
+extern fn v8c_exception_error(iso: *u8, msg: *u8): i32
+
+// Wrapper so C can call v8c_object_new via function pointer
+fn make_object(iso: *u8): i32 {
+    unsafe { return v8c_object_new(iso) }
+}
+
+// Register a binding — called from main.milo at startup
+fn nm_binding_register(name: *u8, init: *u8): void {
+    unsafe { nm_registry_add(name, init) }
+}
+
+// V8 callback: internalBinding(name)
+fn nm_internal_binding(info: *u8, _ud: *u8): void {
+    unsafe {
+        if v8c_fci_length(info) < 1 {
+            v8c_fci_return_undefined(info)
+            return
+        }
+
+        let iso = v8c_fci_isolate(info)
+        let ctx = v8c_fci_context(info)
+        let arg = v8c_fci_arg(info, 0)
+
+        var name_buf: [u8; 256] = [0; 256]
+        let len = v8c_string_write_utf8(iso, arg, name_buf as *u8, 255)
+        if len <= 0 {
+            v8c_fci_return_undefined(info)
+            return
+        }
+
+        let exports = nm_registry_get(iso, ctx, name_buf as *u8, make_object as *u8)
+        if exports < 0 {
+            let err = v8c_exception_error(iso, "No such binding")
+            v8c_isolate_throw(iso, err)
+            return
+        }
+
+        v8c_fci_return(info, exports)
+    }
+}
