@@ -1,146 +1,108 @@
 // util binding — V8 introspection APIs needed by lib/internal/util/inspect.js and lib/internal/errors.js
 
-extern fn v8c_fci_length(info: *u8): i32
-extern fn v8c_fci_arg(info: *u8, idx: i32): i32
-extern fn v8c_fci_isolate(info: *u8): *u8
-extern fn v8c_fci_context(info: *u8): *u8
-extern fn v8c_fci_return(info: *u8, val: i32): void
-extern fn v8c_fci_return_int32(info: *u8, val: i32): void
-extern fn v8c_fci_return_bool(info: *u8, val: i32): void
-extern fn v8c_fci_return_undefined(info: *u8): void
-extern fn v8c_fci_return_string(info: *u8, str: *u8): void
-extern fn v8c_object_new(iso: *u8): i32
-extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
-extern fn v8c_object_get(ctx: *u8, obj: i32, key: *u8): i32
-extern fn v8c_int32(iso: *u8, val: i32): i32
-extern fn v8c_string_utf8(iso: *u8, data: *u8): i32
-extern fn v8c_value_is_object(iso: *u8, val: i32): i32
-extern fn v8c_value_is_function(iso: *u8, val: i32): i32
-extern fn v8c_value_is_string(iso: *u8, val: i32): i32
-extern fn v8c_value_is_array(iso: *u8, val: i32): i32
-extern fn v8c_array_new(iso: *u8, length: i32): i32
-extern fn v8c_array_length(iso: *u8, arr: i32): i32
-extern fn v8c_object_set_index(ctx: *u8, obj: i32, idx: u32, val: i32): i32
-extern fn v8c_object_get_index(ctx: *u8, obj: i32, idx: u32): i32
-extern fn v8c_undefined(iso: *u8): i32
-extern fn v8c_false(iso: *u8): i32
-extern fn v8c_true(iso: *u8): i32
-extern fn v8c_bigint_i64(iso: *u8, val: i64): i32
-
-// Symbols (used as private-like markers — real V8 Private can't be exposed to JS)
-extern fn v8c_symbol_new(iso: *u8, desc: *u8): i32
-
-// Property enumeration (filter: 0=ALL_PROPERTIES, 2=ONLY_ENUMERABLE)
-extern fn v8c_object_get_property_names(ctx: *u8, obj: i32, filter: i32): i32
-
-extern fn v8c_function_new(ctx: *u8, cb: *u8, data: *u8): i32
-extern fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void
-
-// --- callbacks ---
+from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
 
 fn utilGetOwnNonIndexProperties(info: *u8, _ud: *u8): void {
-    unsafe {
-        if v8c_fci_length(info) < 2 { return }
-        let iso = v8c_fci_isolate(info)
-        let ctx = v8c_fci_context(info)
-        let obj = v8c_fci_arg(info, 0)
-        let filterArg = v8c_fci_arg(info, 1)
-        if v8c_value_is_object(iso, obj) == 0 {
-            v8c_fci_return(info, v8c_array_new(iso, 0))
-            return
-        }
-        // Use V8's GetPropertyNames with filter and kSkipIndices
-        var filter: i32 = 0
-        v8c_fci_return(info, v8c_object_get_property_names(ctx, obj, filter))
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 2 { return }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    let obj = ci.arg(0)
+    if obj.isObject(iso) == 0 {
+        ci.ret(iso.array(0))
+        return
     }
+    var filter: i32 = 0
+    ci.ret(ctx.getPropertyNames(obj, filter))
 }
 
 fn utilGetConstructorName(info: *u8, _ud: *u8): void {
-    unsafe {
-        if v8c_fci_length(info) < 1 {
-            v8c_fci_return_string(info, "")
-            return
-        }
-        let iso = v8c_fci_isolate(info)
-        let obj = v8c_fci_arg(info, 0)
-        if v8c_value_is_object(iso, obj) == 0 {
-            v8c_fci_return_string(info, "")
-            return
-        }
-        // Return "Object" as fallback — real impl would use V8's GetConstructorName
-        v8c_fci_return_string(info, "Object")
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 1 {
+        unsafe { ci.retStr("" as *u8) }
+        return
     }
+    let iso = ci.isolate()
+    if ci.arg(0).isObject(iso) == 0 {
+        unsafe { ci.retStr("" as *u8) }
+        return
+    }
+    unsafe { ci.retStr("Object" as *u8) }
 }
 
 fn utilGetPromiseDetails(info: *u8, _ud: *u8): void {
-    unsafe { v8c_fci_return_undefined(info) }
+    let ci = CallbackInfo { ptr: info }
+    ci.retUndefined()
 }
 
 fn utilGetProxyDetails(info: *u8, _ud: *u8): void {
-    unsafe { v8c_fci_return_undefined(info) }
+    let ci = CallbackInfo { ptr: info }
+    ci.retUndefined()
 }
 
 fn utilPreviewEntries(info: *u8, _ud: *u8): void {
-    unsafe {
-        let iso = v8c_fci_isolate(info)
-        let ctx = v8c_fci_context(info)
-        let result = v8c_array_new(iso, 2)
-        v8c_object_set_index(ctx, result, 0, v8c_array_new(iso, 0))
-        v8c_object_set_index(ctx, result, 1, v8c_false(iso))
-        v8c_fci_return(info, result)
-    }
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    let result = iso.array(2)
+    ctx.objectSetIndex(result, 0, iso.array(0))
+    ctx.objectSetIndex(result, 1, iso.falseVal())
+    ci.ret(result)
 }
 
 fn utilGetExternalValue(info: *u8, _ud: *u8): void {
-    unsafe {
-        let iso = v8c_fci_isolate(info)
-        v8c_fci_return(info, v8c_bigint_i64(iso, 0))
-    }
+    let ci = CallbackInfo { ptr: info }
+    ci.ret(ci.isolate().bigintI64(0))
 }
 
 fn utilIsInsideNodeModules(info: *u8, _ud: *u8): void {
-    unsafe { v8c_fci_return_bool(info, 0) }
+    let ci = CallbackInfo { ptr: info }
+    ci.retBool(0)
 }
 
 fn utilGetCallerLocation(info: *u8, _ud: *u8): void {
-    unsafe { v8c_fci_return_undefined(info) }
+    let ci = CallbackInfo { ptr: info }
+    ci.retUndefined()
 }
 
 fn utilSleep(_info: *u8, _ud: *u8): void {}
 
-// Binding init
 fn nm_init_util(iso: *u8, ctx: *u8, exports: i32): void {
-    unsafe {
-        // constants sub-object
-        let consts = v8c_object_new(iso)
-        v8c_object_set(ctx, consts, "ALL_PROPERTIES", v8c_int32(iso, 0))
-        v8c_object_set(ctx, consts, "ONLY_ENUMERABLE", v8c_int32(iso, 2))
-        v8c_object_set(ctx, consts, "kPending", v8c_int32(iso, 0))
-        v8c_object_set(ctx, consts, "kFulfilled", v8c_int32(iso, 1))
-        v8c_object_set(ctx, consts, "kRejected", v8c_int32(iso, 2))
-        v8c_object_set(ctx, exports, "constants", consts)
+    let i = Isolate { ptr: iso }
+    let c = Context { ptr: ctx }
+    let exp = Value { slot: exports }
 
-        // privateSymbols sub-object — use regular Symbols (unique, non-enumerable)
-        let privSyms = v8c_object_new(iso)
-        v8c_object_set(ctx, privSyms, "arrow_message_private_symbol",
-            v8c_symbol_new(iso, "node:arrowMessage"))
-        v8c_object_set(ctx, privSyms, "decorated_private_symbol",
-            v8c_symbol_new(iso, "node:decorated"))
-        v8c_object_set(ctx, privSyms, "transfer_mode_private_symbol",
-            v8c_symbol_new(iso, "node:transfer_mode"))
-        v8c_object_set(ctx, privSyms, "untransferable_object_private_symbol",
-            v8c_symbol_new(iso, "node:untransferable"))
-        v8c_object_set(ctx, exports, "privateSymbols", privSyms)
+    // constants sub-object
+    let consts = i.object()
+    unsafe {
+        c.objectSet(consts, "ALL_PROPERTIES" as *u8, i.int32(0))
+        c.objectSet(consts, "ONLY_ENUMERABLE" as *u8, i.int32(2))
+        c.objectSet(consts, "kPending" as *u8, i.int32(0))
+        c.objectSet(consts, "kFulfilled" as *u8, i.int32(1))
+        c.objectSet(consts, "kRejected" as *u8, i.int32(2))
+        c.objectSet(exp, "constants" as *u8, consts)
+
+        // privateSymbols sub-object
+        let privSyms = i.object()
+        c.objectSet(privSyms, "arrow_message_private_symbol" as *u8,
+            i.symbolNew("node:arrowMessage" as *u8))
+        c.objectSet(privSyms, "decorated_private_symbol" as *u8,
+            i.symbolNew("node:decorated" as *u8))
+        c.objectSet(privSyms, "transfer_mode_private_symbol" as *u8,
+            i.symbolNew("node:transfer_mode" as *u8))
+        c.objectSet(privSyms, "untransferable_object_private_symbol" as *u8,
+            i.symbolNew("node:untransferable" as *u8))
+        c.objectSet(exp, "privateSymbols" as *u8, privSyms)
 
         // methods
-        setMethod(ctx, exports, "getOwnNonIndexProperties", utilGetOwnNonIndexProperties as *u8)
-        setMethod(ctx, exports, "getConstructorName", utilGetConstructorName as *u8)
-        setMethod(ctx, exports, "getPromiseDetails", utilGetPromiseDetails as *u8)
-        setMethod(ctx, exports, "getProxyDetails", utilGetProxyDetails as *u8)
-        setMethod(ctx, exports, "previewEntries", utilPreviewEntries as *u8)
-        setMethod(ctx, exports, "getExternalValue", utilGetExternalValue as *u8)
-        setMethod(ctx, exports, "isInsideNodeModules", utilIsInsideNodeModules as *u8)
-        setMethod(ctx, exports, "getCallerLocation", utilGetCallerLocation as *u8)
-        setMethod(ctx, exports, "sleep", utilSleep as *u8)
+        c.setMethod(exp, "getOwnNonIndexProperties" as *u8, utilGetOwnNonIndexProperties as *u8)
+        c.setMethod(exp, "getConstructorName" as *u8, utilGetConstructorName as *u8)
+        c.setMethod(exp, "getPromiseDetails" as *u8, utilGetPromiseDetails as *u8)
+        c.setMethod(exp, "getProxyDetails" as *u8, utilGetProxyDetails as *u8)
+        c.setMethod(exp, "previewEntries" as *u8, utilPreviewEntries as *u8)
+        c.setMethod(exp, "getExternalValue" as *u8, utilGetExternalValue as *u8)
+        c.setMethod(exp, "isInsideNodeModules" as *u8, utilIsInsideNodeModules as *u8)
+        c.setMethod(exp, "getCallerLocation" as *u8, utilGetCallerLocation as *u8)
+        c.setMethod(exp, "sleep" as *u8, utilSleep as *u8)
     }
 }

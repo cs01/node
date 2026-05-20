@@ -10,7 +10,7 @@ echo "=== compiling milo sources ==="
 cd "$MILO_DIR"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/runtime/main.milo" -o "$OUT/milo_main.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/runtime/binding_registry.milo" -o "$OUT/milo_binding_registry.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/helpers.milo" -o "$OUT/milo_helpers.o"
+bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/v8/v8.milo" -o "$OUT/milo_v8.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/os.milo" -o "$OUT/milo_os.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/env.milo" -o "$OUT/milo_env.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/process.milo" -o "$OUT/milo_process.o"
@@ -34,7 +34,7 @@ clang++ -o "$OUT/milo-node" \
   "$OUT/binding_registry_c.o" \
   "$OUT/milo_main.o" \
   "$OUT/milo_binding_registry.o" \
-  "$OUT/milo_helpers.o" \
+  "$OUT/milo_v8.o" \
   "$OUT/milo_os.o" \
   "$OUT/milo_env.o" \
   "$OUT/milo_process.o" \

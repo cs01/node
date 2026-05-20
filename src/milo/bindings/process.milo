@@ -1,5 +1,7 @@
 // process bindings — hrtime, kill, cpuUsage, utimes/futimes via POSIX + extern struct
 
+from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
+
 // --- C struct layouts ---
 
 extern struct Timespec {
@@ -30,75 +32,54 @@ extern fn getrusage(who: i32, usage: *Rusage): i32
 extern fn utimes(path: *u8, times: *Timeval): i32
 extern fn futimes(fd: i32, times: *Timeval): i32
 
-// CLOCK_MONOTONIC: macOS = 6, Linux = 1
-// Hardcoded per platform — no C helper needed
-
-// v8capi FFI — v8c_value is struct { i32 slot }, ABI-equivalent to i32
-extern fn v8c_fci_length(info: *u8): i32
-extern fn v8c_fci_arg(info: *u8, idx: i32): i32
-extern fn v8c_fci_isolate(info: *u8): *u8
-extern fn v8c_fci_context(info: *u8): *u8
-extern fn v8c_fci_return(info: *u8, val: i32): void
-extern fn v8c_fci_return_int32(info: *u8, val: i32): void
-extern fn v8c_fci_return_double(info: *u8, val: f64): void
-extern fn v8c_to_int32(iso: *u8, val: i32, out: *i32): i32
-extern fn v8c_bigint_i64(iso: *u8, val: i64): i32
-extern fn v8c_array_new(iso: *u8, length: i32): i32
-extern fn v8c_object_set_index(ctx: *u8, obj: i32, idx: u32, val: i32): i32
-extern fn v8c_number(iso: *u8, val: f64): i32
-extern fn v8c_object_new(iso: *u8): i32
-extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
-extern fn v8c_function_new(ctx: *u8, cb: *u8, data: *u8): i32
-extern fn v8c_context_global(ctx: *u8): i32
-
-extern fn argI32(info: *u8, idx: i32, defaultVal: i32): i32
+// CLOCK_MONOTONIC: macOS = 6
 
 // --- hrtime ---
 
 fn processHrtime(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
     var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
+    let arr = iso.array(2)
     unsafe {
-        let clk = 6
-        let iso = v8c_fci_isolate(info)
-        let ctx = v8c_fci_context(info)
-        let arr = v8c_array_new(iso, 2)
-        if clock_gettime(clk, &ts) != 0 {
-            v8c_object_set_index(ctx, arr, 0, v8c_number(iso, 0.0))
-            v8c_object_set_index(ctx, arr, 1, v8c_number(iso, 0.0))
+        if clock_gettime(6, &ts) != 0 {
+            ctx.objectSetIndex(arr, 0, iso.number(0.0))
+            ctx.objectSetIndex(arr, 1, iso.number(0.0))
         } else {
-            v8c_object_set_index(ctx, arr, 0, v8c_number(iso, ts.tv_sec as f64))
-            v8c_object_set_index(ctx, arr, 1, v8c_number(iso, ts.tv_nsec as f64))
+            ctx.objectSetIndex(arr, 0, iso.number(ts.tv_sec as f64))
+            ctx.objectSetIndex(arr, 1, iso.number(ts.tv_nsec as f64))
         }
-        v8c_fci_return(info, arr)
     }
+    ci.ret(arr)
 }
 
 fn processHrtimeBigint(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
     var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
     unsafe {
-        let clk = 6
-        let iso = v8c_fci_isolate(info)
-        if clock_gettime(clk, &ts) != 0 {
-            v8c_fci_return(info, v8c_bigint_i64(iso, 0))
+        if clock_gettime(6, &ts) != 0 {
+            ci.ret(iso.bigintI64(0))
             return
         }
-        v8c_fci_return(info, v8c_bigint_i64(iso, ts.tv_sec * 1000000000 + ts.tv_nsec))
+        ci.ret(iso.bigintI64(ts.tv_sec * 1000000000 + ts.tv_nsec))
     }
 }
 
 // --- kill ---
 
 fn processKill(info: *u8, _ud: *u8): void {
-    unsafe {
-        let pid = argI32(info, 0, 0)
-        let sig = argI32(info, 1, 15)
-        v8c_fci_return_int32(info, kill(pid, sig))
-    }
+    let ci = CallbackInfo { ptr: info }
+    unsafe { ci.retI32(kill(ci.i32Arg(0, 0), ci.i32Arg(1, 15))) }
 }
 
 // --- cpuUsage: returns [user_usec, system_usec] ---
 
 fn processCpuUsage(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
     var ru = Rusage {
         ru_utime: Timeval { tv_sec: 0, tv_usec: 0 },
         ru_stime: Timeval { tv_sec: 0, tv_usec: 0 },
@@ -107,21 +88,19 @@ fn processCpuUsage(info: *u8, _ud: *u8): void {
         _p8: 0, _p9: 0, _pA: 0, _pB: 0,
         _pC: 0, _pD: 0,
     }
+    let arr = iso.array(2)
     unsafe {
-        let iso = v8c_fci_isolate(info)
-        let ctx = v8c_fci_context(info)
-        let arr = v8c_array_new(iso, 2)
         if getrusage(0, &ru) != 0 {
-            v8c_object_set_index(ctx, arr, 0, v8c_number(iso, 0.0))
-            v8c_object_set_index(ctx, arr, 1, v8c_number(iso, 0.0))
+            ctx.objectSetIndex(arr, 0, iso.number(0.0))
+            ctx.objectSetIndex(arr, 1, iso.number(0.0))
         } else {
             let user_us = ru.ru_utime.tv_sec * 1000000 + ru.ru_utime.tv_usec as i64
             let sys_us = ru.ru_stime.tv_sec * 1000000 + ru.ru_stime.tv_usec as i64
-            v8c_object_set_index(ctx, arr, 0, v8c_number(iso, user_us as f64))
-            v8c_object_set_index(ctx, arr, 1, v8c_number(iso, sys_us as f64))
+            ctx.objectSetIndex(arr, 0, iso.number(user_us as f64))
+            ctx.objectSetIndex(arr, 1, iso.number(sys_us as f64))
         }
-        v8c_fci_return(info, arr)
     }
+    ci.ret(arr)
 }
 
 // --- utimes/futimes (called from C, not V8 callbacks) ---
@@ -144,23 +123,19 @@ fn nmFsFutimes(fd: i32, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime_u
 
 // --- setup ---
 
-extern fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void
-extern fn v8c_arraybuffer_new(iso: *u8, size: i64): i32
-extern fn v8c_uint32array_new(iso: *u8, ab: i32, offset: i64, length: i64): i32
-extern fn v8c_biguint64array_new(iso: *u8, ab: i32, offset: i64, length: i64): i32
-extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
-
-// Binding init — populates exports object for internalBinding('process_methods')
 fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
+    let i = Isolate { ptr: iso }
+    let c = Context { ptr: ctx }
+    let exp = Value { slot: exports }
     unsafe {
-        setMethod(ctx, exports, "hrtime", processHrtime as *u8)
-        setMethod(ctx, exports, "hrtimeBigint", processHrtimeBigint as *u8)
-        setMethod(ctx, exports, "kill", processKill as *u8)
-        setMethod(ctx, exports, "cpuUsage", processCpuUsage as *u8)
+        c.setMethod(exp, "hrtime" as *u8, processHrtime as *u8)
+        c.setMethod(exp, "hrtimeBigint" as *u8, processHrtimeBigint as *u8)
+        c.setMethod(exp, "kill" as *u8, processKill as *u8)
+        c.setMethod(exp, "cpuUsage" as *u8, processCpuUsage as *u8)
 
         // hrtimeBuffer: Uint32Array(5) backed by ArrayBuffer(20)
-        let ab = v8c_arraybuffer_new(iso, 20)
-        let u32arr = v8c_uint32array_new(iso, ab, 0, 5)
-        v8c_object_set(ctx, exports, "hrtimeBuffer", u32arr)
+        let ab = i.arraybufferNew(20)
+        let u32arr = i.uint32arrayNew(ab, 0, 5)
+        c.objectSet(exp, "hrtimeBuffer" as *u8, u32arr)
     }
 }
