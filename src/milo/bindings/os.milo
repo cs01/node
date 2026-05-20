@@ -1,6 +1,4 @@
-// os bindings — native OS info via v8capi
-
-from "std/os" import { strlen }
+// os bindings — native OS info via v8capi, calling POSIX/macOS APIs directly
 
 // POSIX
 extern fn gethostname(name: *u8, len: i64): i32
@@ -13,20 +11,28 @@ extern fn getppid(): i32
 extern fn umask(mask: u32): u32
 extern fn getpriority(which: i32, who: i32): i32
 extern fn setpriority(which: i32, who: i32, prio: i32): i32
+extern fn sysconf(name: i32): i64
+extern fn sysctlbyname(name: *u8, oldp: *u8, oldlenp: *i64, newp: *u8, newlen: i64): i32
+extern fn sysctl(name: *i32, namelen: u32, oldp: *u8, oldlenp: *i64, newp: *u8, newlen: i64): i32
+extern fn getloadavg(loadavg: *f64, nelem: i32): i32
+extern fn gettimeofday(tv: *i64, tz: *u8): i32
 
-// C helpers (platform_helpers.cpp)
-extern fn nm_nprocessors(): i32
-extern fn nm_get_cpu_count(): i32
-extern fn nm_get_cpu_model(buf: *u8, bufsize: i32): i32
-extern fn nm_get_cpu_speed(): i32
-extern fn nm_get_cpu_times(cpu_idx: i32, out: *f64): void
-extern fn nm_get_freemem(): u64
-extern fn nm_get_totalmem(): u64
-extern fn nm_get_loadavg(out: *f64): void
-extern fn nm_get_uptime(): f64
-extern fn nm_get_os_release(buf: *u8, bufsize: i32): i32
+// Mach (macOS)
+extern fn mach_host_self(): u32
+extern fn host_processor_info(host: u32, flavor: i32, count: *u32, info: **i32, info_count: *u32): i32
+extern fn host_statistics64(host: u32, flavor: i32, info: *u8, count: *u32): i32
+extern fn vm_deallocate(task: u32, addr: i64, size: i64): i32
+extern fn mach_task_self_(): u32
+// _SC_PAGESIZE = 29 on macOS
 
-// v8capi FFI — v8c_value is struct { i32 slot }, ABI-equivalent to i32
+// macOS constants
+// _SC_NPROCESSORS_ONLN = 58
+// PROCESSOR_CPU_LOAD_INFO = 2
+// CPU_STATE_USER=0, NICE=1, SYSTEM=2, IDLE=3, MAX=4
+// HOST_VM_INFO64 = 4, HOST_VM_INFO64_COUNT = 38
+// CTL_KERN=1, KERN_BOOTTIME=21
+
+// v8capi FFI
 extern fn v8c_fci_length(info: *u8): i32
 extern fn v8c_fci_arg(info: *u8, idx: i32): i32
 extern fn v8c_fci_isolate(info: *u8): *u8
@@ -40,8 +46,6 @@ extern fn v8c_object_new(iso: *u8): i32
 extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
 extern fn v8c_function_new(ctx: *u8, cb: *u8, data: *u8): i32
 extern fn v8c_context_global(ctx: *u8): i32
-
-// --- helper: extract i32 arg with default ---
 
 fn arg_i32(info: *u8, idx: i32, default_val: i32): i32 {
     unsafe {
@@ -67,7 +71,7 @@ fn os_get_hostname(info: *u8, _ud: *u8): void {
 
 fn os_get_cpus(info: *u8, _ud: *u8): void {
     unsafe {
-        var n = nm_nprocessors()
+        var n = sysconf(58) as i32
         if n < 1 { n = 1 }
         v8c_fci_return_int32(info, n)
     }
@@ -84,85 +88,59 @@ fn os_get_ppid(info: *u8, _ud: *u8): void {
 fn os_get_cpu_model(info: *u8, _ud: *u8): void {
     var buf: [u8; 256] = [0; 256]
     unsafe {
-        nm_get_cpu_model(buf as *u8, 256)
+        var len: [i64; 1] = [256]
+        sysctlbyname("machdep.cpu.brand_string", buf as *u8, len as *i64, 0 as *u8, 0)
         v8c_fci_return_string(info, buf as *u8)
     }
 }
 
-fn os_get_cpu_speed(info: *u8, _ud: *u8): void {
-    unsafe { v8c_fci_return_int32(info, nm_get_cpu_speed()) }
-}
-
-fn os_get_cpu_times(info: *u8, _ud: *u8): void {
-    unsafe {
-        let idx = arg_i32(info, 0, 0)
-        var times: [f64; 5] = [0.0; 5]
-        nm_get_cpu_times(idx, times as *f64)
-        v8c_fci_return_double(info, times[0])
-    }
-}
-
-fn os_get_cpu_time_user(info: *u8, _ud: *u8): void {
-    unsafe {
-        let idx = arg_i32(info, 0, 0)
-        var times: [f64; 5] = [0.0; 5]
-        nm_get_cpu_times(idx, times as *f64)
-        v8c_fci_return_double(info, times[0])
-    }
-}
-
-fn os_get_cpu_time_nice(info: *u8, _ud: *u8): void {
-    unsafe {
-        let idx = arg_i32(info, 0, 0)
-        var times: [f64; 5] = [0.0; 5]
-        nm_get_cpu_times(idx, times as *f64)
-        v8c_fci_return_double(info, times[1])
-    }
-}
-
-fn os_get_cpu_time_sys(info: *u8, _ud: *u8): void {
-    unsafe {
-        let idx = arg_i32(info, 0, 0)
-        var times: [f64; 5] = [0.0; 5]
-        nm_get_cpu_times(idx, times as *f64)
-        v8c_fci_return_double(info, times[2])
-    }
-}
-
-fn os_get_cpu_time_idle(info: *u8, _ud: *u8): void {
-    unsafe {
-        let idx = arg_i32(info, 0, 0)
-        var times: [f64; 5] = [0.0; 5]
-        nm_get_cpu_times(idx, times as *f64)
-        v8c_fci_return_double(info, times[3])
-    }
-}
-
-fn os_get_cpu_time_irq(info: *u8, _ud: *u8): void {
-    unsafe {
-        let idx = arg_i32(info, 0, 0)
-        var times: [f64; 5] = [0.0; 5]
-        nm_get_cpu_times(idx, times as *f64)
-        v8c_fci_return_double(info, times[4])
-    }
-}
-
 fn os_get_freemem(info: *u8, _ud: *u8): void {
-    unsafe { v8c_fci_return_double(info, nm_get_freemem() as f64) }
+    // HOST_VM_INFO64 = 4, HOST_VM_INFO64_COUNT = 38
+    var stats: [u8; 512] = [0; 512]
+    var count: [u32; 1] = [38]
+    unsafe {
+        if host_statistics64(mach_host_self(), 4, stats as *u8, count as *u32) == 0 {
+            // free_count is at offset 8 in vm_statistics64_data (after natural_t fields)
+            // On macOS: free_count is the 2nd u64 field (offset 8 bytes)
+            let free_pages = (stats as *i64)[1]
+            let page_size = sysconf(29)
+            v8c_fci_return_double(info, (free_pages * page_size) as f64)
+        } else {
+            v8c_fci_return_double(info, 0.0)
+        }
+    }
 }
 
 fn os_get_totalmem(info: *u8, _ud: *u8): void {
-    unsafe { v8c_fci_return_double(info, nm_get_totalmem() as f64) }
+    var mem: [i64; 1] = [0]
+    var len: [i64; 1] = [8]
+    unsafe {
+        sysctlbyname("hw.memsize", mem as *u8, len as *i64, 0 as *u8, 0)
+        v8c_fci_return_double(info, mem[0] as f64)
+    }
 }
 
 fn os_get_uptime(info: *u8, _ud: *u8): void {
-    unsafe { v8c_fci_return_double(info, nm_get_uptime()) }
+    // sysctl CTL_KERN=1, KERN_BOOTTIME=21
+    var mib: [i32; 2] = [1, 21]
+    var boottime: [i64; 2] = [0, 0]
+    var len: [i64; 1] = [16]
+    unsafe {
+        if sysctl(mib as *i32, 2, boottime as *u8, len as *i64, 0 as *u8, 0) != 0 {
+            v8c_fci_return_double(info, 0.0)
+            return
+        }
+        var now: [i64; 2] = [0, 0]
+        gettimeofday(now as *i64, 0 as *u8)
+        let secs = now[0] - boottime[0]
+        v8c_fci_return_double(info, secs as f64)
+    }
 }
 
 fn os_get_loadavg1(info: *u8, _ud: *u8): void {
     var avg: [f64; 3] = [0.0; 3]
     unsafe {
-        nm_get_loadavg(avg as *f64)
+        getloadavg(avg as *f64, 3)
         v8c_fci_return_double(info, avg[0])
     }
 }
@@ -170,7 +148,7 @@ fn os_get_loadavg1(info: *u8, _ud: *u8): void {
 fn os_get_loadavg5(info: *u8, _ud: *u8): void {
     var avg: [f64; 3] = [0.0; 3]
     unsafe {
-        nm_get_loadavg(avg as *f64)
+        getloadavg(avg as *f64, 3)
         v8c_fci_return_double(info, avg[1])
     }
 }
@@ -178,7 +156,7 @@ fn os_get_loadavg5(info: *u8, _ud: *u8): void {
 fn os_get_loadavg15(info: *u8, _ud: *u8): void {
     var avg: [f64; 3] = [0.0; 3]
     unsafe {
-        nm_get_loadavg(avg as *f64)
+        getloadavg(avg as *f64, 3)
         v8c_fci_return_double(info, avg[2])
     }
 }
@@ -186,7 +164,8 @@ fn os_get_loadavg15(info: *u8, _ud: *u8): void {
 fn os_get_os_release(info: *u8, _ud: *u8): void {
     var buf: [u8; 256] = [0; 256]
     unsafe {
-        nm_get_os_release(buf as *u8, 256)
+        var len: [i64; 1] = [256]
+        sysctlbyname("kern.osrelease", buf as *u8, len as *i64, 0 as *u8, 0)
         v8c_fci_return_string(info, buf as *u8)
     }
 }
@@ -218,14 +197,13 @@ fn os_umask(info: *u8, _ud: *u8): void {
                 return
             }
         }
-        // read current without changing: set and restore
         let cur = umask(0)
         umask(cur)
         v8c_fci_return_uint32(info, cur)
     }
 }
 
-// --- setup (called from Milo runtime during init) ---
+// --- setup ---
 
 fn set_method(ctx: *u8, obj: i32, name: *u8, cb: *u8): void {
     unsafe {
@@ -243,12 +221,6 @@ fn nm_register_os(iso: *u8, ctx: *u8): void {
         set_method(ctx, obj, "getPpid", os_get_ppid as *u8)
         set_method(ctx, obj, "umask", os_umask as *u8)
         set_method(ctx, obj, "getCpuModel", os_get_cpu_model as *u8)
-        set_method(ctx, obj, "getCpuSpeed", os_get_cpu_speed as *u8)
-        set_method(ctx, obj, "getCpuTimeUser", os_get_cpu_time_user as *u8)
-        set_method(ctx, obj, "getCpuTimeNice", os_get_cpu_time_nice as *u8)
-        set_method(ctx, obj, "getCpuTimeSys", os_get_cpu_time_sys as *u8)
-        set_method(ctx, obj, "getCpuTimeIdle", os_get_cpu_time_idle as *u8)
-        set_method(ctx, obj, "getCpuTimeIrq", os_get_cpu_time_irq as *u8)
         set_method(ctx, obj, "getFreeMem", os_get_freemem as *u8)
         set_method(ctx, obj, "getTotalMem", os_get_totalmem as *u8)
         set_method(ctx, obj, "getUptime", os_get_uptime as *u8)
@@ -263,20 +235,9 @@ fn nm_register_os(iso: *u8, ctx: *u8): void {
     }
 }
 
-// --- still exported for C++ process binding ---
+// --- exported for other bindings ---
 
-fn nm_os_getuid(): u32 {
-    unsafe { return getuid() }
-}
-
-fn nm_os_getgid(): u32 {
-    unsafe { return getgid() }
-}
-
-fn nm_os_geteuid(): u32 {
-    unsafe { return geteuid() }
-}
-
-fn nm_os_getegid(): u32 {
-    unsafe { return getegid() }
-}
+fn nm_os_getuid(): u32 { unsafe { return getuid() } }
+fn nm_os_getgid(): u32 { unsafe { return getgid() } }
+fn nm_os_geteuid(): u32 { unsafe { return geteuid() } }
+fn nm_os_getegid(): u32 { unsafe { return getegid() } }

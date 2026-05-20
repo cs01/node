@@ -30,8 +30,8 @@ extern fn getrusage(who: i32, usage: *Rusage): i32
 extern fn utimes(path: *u8, times: *Timeval): i32
 extern fn futimes(fd: i32, times: *Timeval): i32
 
-// macOS CLOCK_MONOTONIC = 6, Linux = 1
-extern fn nm_clock_monotonic_id(): i32
+// CLOCK_MONOTONIC: macOS = 6, Linux = 1
+// Hardcoded per platform — no C helper needed
 
 // v8capi FFI — v8c_value is struct { i32 slot }, ABI-equivalent to i32
 extern fn v8c_fci_length(info: *u8): i32
@@ -67,7 +67,7 @@ fn arg_i32(info: *u8, idx: i32, default_val: i32): i32 {
 fn process_hrtime(info: *u8, _ud: *u8): void {
     var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
     unsafe {
-        let clk = nm_clock_monotonic_id()
+        let clk = 6
         let iso = v8c_fci_isolate(info)
         let ctx = v8c_fci_context(info)
         let arr = v8c_array_new(iso, 2)
@@ -85,7 +85,7 @@ fn process_hrtime(info: *u8, _ud: *u8): void {
 fn process_hrtime_bigint(info: *u8, _ud: *u8): void {
     var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
     unsafe {
-        let clk = nm_clock_monotonic_id()
+        let clk = 6
         let iso = v8c_fci_isolate(info)
         if clock_gettime(clk, &ts) != 0 {
             v8c_fci_return(info, v8c_bigint_i64(iso, 0))
