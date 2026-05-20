@@ -25,7 +25,7 @@ extern fn nm_init_env(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void
 
 // --- v8capi FFI ---
-extern fn v8c_platform_init(exec_path: *u8): i32
+extern fn v8c_platform_init(execPath: *u8): i32
 extern fn v8c_platform_shutdown(): void
 extern fn v8c_isolate_new(): *u8
 extern fn v8c_isolate_dispose(iso: *u8): void
@@ -62,24 +62,24 @@ extern fn v8c_fci_isolate(info: *u8): *u8
 extern fn v8c_fci_context(info: *u8): *u8
 extern fn v8c_fci_return(info: *u8, val: i32): void
 
-fn print_str(s: *u8): void {
+fn printStr(s: *u8): void {
     unsafe {
         let len = strlen(s)
         write(1, s, len)
     }
 }
 
-fn print_err(s: *u8): void {
+fn printErr(s: *u8): void {
     unsafe {
         let len = strlen(s)
         write(2, s, len)
     }
 }
 
-fn print_val(iso: *u8, val: i32): void {
+fn printVal(iso: *u8, val: i32): void {
     unsafe {
         if v8c_value_is_null_or_undefined(iso, val) != 0 {
-            print_str("undefined\n")
+            printStr("undefined\n")
             return
         }
 
@@ -99,20 +99,20 @@ fn print_val(iso: *u8, val: i32): void {
             let i = d as i64
             if i as f64 == d {
                 var nbuf: [u8; 32] = [0; 32]
-                let len = i64_to_str(i, nbuf as *u8, 32)
+                let len = i64ToStr(i, nbuf as *u8, 32)
                 write(1, nbuf as *u8, len as i64)
                 write(1, "\n", 1)
             } else {
-                print_str("<number>\n")
+                printStr("<number>\n")
             }
             return
         }
 
-        print_str("[object]\n")
+        printStr("[object]\n")
     }
 }
 
-fn i64_to_str(val: i64, buf: *u8, _bufsize: i32): i32 {
+fn i64ToStr(val: i64, buf: *u8, _bufsize: i32): i32 {
     unsafe {
         var n = val
         if n == 0 {
@@ -153,7 +153,7 @@ fn i64_to_str(val: i64, buf: *u8, _bufsize: i32): i32 {
 
 // Read file into malloc'd buffer. Returns ptr (caller frees) and sets *out_len.
 // Returns null on failure.
-fn read_file(path: *u8, out_len: *i64): *u8 {
+fn readFile(path: *u8, out_len: *i64): *u8 {
     unsafe {
         // O_RDONLY = 0
         let fd = open(path, 0)
@@ -189,7 +189,7 @@ fn read_file(path: *u8, out_len: *i64): *u8 {
 
 // V8 callback: load and evaluate a JS file, return its module.exports
 // Called as: __loadBuiltin(filename) from JS
-fn native_load_builtin(info: *u8, _ud: *u8): void {
+fn nativeLoadBuiltin(info: *u8, _ud: *u8): void {
     unsafe {
         if v8c_fci_length(info) < 1 { return }
         let iso = v8c_fci_isolate(info)
@@ -197,44 +197,44 @@ fn native_load_builtin(info: *u8, _ud: *u8): void {
         let arg = v8c_fci_arg(info, 0)
 
         // Get filename string
-        var name_buf: [u8; 512] = [0; 512]
-        let name_len = v8c_string_write_utf8(iso, arg, name_buf as *u8, 512)
-        if name_len <= 0 { return }
+        var nameBuf: [u8; 512] = [0; 512]
+        let nameLen = v8c_string_write_utf8(iso, arg, nameBuf as *u8, 512)
+        if nameLen <= 0 { return }
 
         // Build path: LIB_DIR + "/" + name + ".js"
-        var path_buf: [u8; 1024] = [0; 1024]
-        let lib_dir = nm_get_lib_dir()
-        let lib_len = strlen(lib_dir)
+        var pathBuf: [u8; 1024] = [0; 1024]
+        let libDir = nm_get_lib_dir()
+        let libLen = strlen(libDir)
         var pos: i32 = 0
         var j: i32 = 0
-        while j < lib_len as i32 {
-            path_buf[j as i64] = lib_dir[j as i64]
+        while j < libLen as i32 {
+            pathBuf[j as i64] = libDir[j as i64]
             j = j + 1
         }
         pos = j
-        path_buf[pos as i64] = 47  // '/'
+        pathBuf[pos as i64] = 47  // '/'
         pos = pos + 1
         j = 0
-        while j < name_len && name_buf[j as i64] != 0 {
-            path_buf[pos as i64] = name_buf[j as i64]
+        while j < nameLen && nameBuf[j as i64] != 0 {
+            pathBuf[pos as i64] = nameBuf[j as i64]
             pos = pos + 1
             j = j + 1
         }
         // Append .js
-        path_buf[pos as i64] = 46   // '.'
+        pathBuf[pos as i64] = 46   // '.'
         pos = pos + 1
-        path_buf[pos as i64] = 106  // 'j'
+        pathBuf[pos as i64] = 106  // 'j'
         pos = pos + 1
-        path_buf[pos as i64] = 115  // 's'
+        pathBuf[pos as i64] = 115  // 's'
         pos = pos + 1
-        path_buf[pos as i64] = 0
+        pathBuf[pos as i64] = 0
 
         // Read file and return source as string
-        var file_len: [i64; 1] = [0]
-        let source = read_file(path_buf as *u8, file_len as *i64)
+        var fileLen: [i64; 1] = [0]
+        let source = readFile(pathBuf as *u8, fileLen as *i64)
         if source as i64 == 0 { return }
 
-        let str_val = v8c_string_utf8_len(iso, source, file_len[0] as i32)
+        let str_val = v8c_string_utf8_len(iso, source, fileLen[0] as i32)
         free(source)
         if str_val >= 0 {
             v8c_fci_return(info, str_val)
@@ -246,7 +246,7 @@ fn native_load_builtin(info: *u8, _ud: *u8): void {
 extern fn nm_set_lib_dir(dir: *u8): void
 extern fn nm_get_lib_dir(): *u8
 
-fn register_builtin_bindings(): void {
+fn registerBuiltinBindings(): void {
     unsafe {
         nm_binding_register("os", nm_init_os as *u8)
         nm_binding_register("env", nm_init_env as *u8)
@@ -258,7 +258,7 @@ extern fn v8c_fci_return_string(info: *u8, str: *u8): void
 
 extern fn v8c_to_int32(iso: *u8, val: i32, out: *i32): i32
 
-fn process_cwd(info: *u8, _ud: *u8): void {
+fn processCwd(info: *u8, _ud: *u8): void {
     var buf: [u8; 4096] = [0; 4096]
     unsafe {
         let r = getcwd(buf as *u8, 4096)
@@ -268,7 +268,7 @@ fn process_cwd(info: *u8, _ud: *u8): void {
     }
 }
 
-fn process_exit(info: *u8, _ud: *u8): void {
+fn processExit(info: *u8, _ud: *u8): void {
     unsafe {
         var code: i32 = 0
         if v8c_fci_length(info) > 0 {
@@ -280,7 +280,7 @@ fn process_exit(info: *u8, _ud: *u8): void {
     }
 }
 
-fn setup_process_object(iso: *u8, ctx: *u8, argc: i32, argv: *i64): i32 {
+fn setupProcessObject(iso: *u8, ctx: *u8, argc: i32, argv: *i64): i32 {
     unsafe {
         let proc = v8c_object_new(iso)
         v8c_object_set(ctx, proc, "pid", v8c_int32(iso, getpid()))
@@ -299,9 +299,9 @@ fn setup_process_object(iso: *u8, ctx: *u8, argc: i32, argv: *i64): i32 {
         v8c_object_set(ctx, proc, "argv", arr)
 
         // process.cwd() / process.exit() / process.env proxy
-        let cwd_fn = v8c_function_new(ctx, process_cwd as *u8, 0 as *u8)
+        let cwd_fn = v8c_function_new(ctx, processCwd as *u8, 0 as *u8)
         v8c_object_set(ctx, proc, "cwd", cwd_fn)
-        let exit_fn = v8c_function_new(ctx, process_exit as *u8, 0 as *u8)
+        let exit_fn = v8c_function_new(ctx, processExit as *u8, 0 as *u8)
         v8c_object_set(ctx, proc, "exit", exit_fn)
 
         return proc
@@ -309,7 +309,7 @@ fn setup_process_object(iso: *u8, ctx: *u8, argc: i32, argv: *i64): i32 {
 }
 
 // Bootstrap JS: defines console.log and require()
-fn run_bootstrap(iso: *u8, ctx: *u8): i32 {
+fn runBootstrap(iso: *u8, ctx: *u8): i32 {
     unsafe {
         let bootstrap = "(function() {
   // primordials — frozen copies of built-in prototypes
@@ -504,7 +504,7 @@ fn run_bootstrap(iso: *u8, ctx: *u8): i32 {
 }
 
 // V8 callback: console write to stdout
-fn console_write(info: *u8, _ud: *u8): void {
+fn consoleWrite(info: *u8, _ud: *u8): void {
     unsafe {
         if v8c_fci_length(info) < 1 { return }
         let iso = v8c_fci_isolate(info)
@@ -518,7 +518,7 @@ fn console_write(info: *u8, _ud: *u8): void {
 }
 
 // V8 callback: console write to stderr
-fn console_write_error(info: *u8, _ud: *u8): void {
+fn consoleWriteError(info: *u8, _ud: *u8): void {
     unsafe {
         if v8c_fci_length(info) < 1 { return }
         let iso = v8c_fci_isolate(info)
@@ -536,9 +536,9 @@ extern fn strcmp(a: *u8, b: *u8): i32
 fn milo_node_main(argc: i32, argv: *i64): i32 {
     unsafe {
         var script: *u8 = 0 as *u8
-        var script_file: *u8 = 0 as *u8
-        var is_eval = false
-        var print_result = false
+        var scriptFile: *u8 = 0 as *u8
+        var isEval = false
+        var printResult = false
         var i: i64 = 1
         let ac = argc as i64
         while i < ac {
@@ -546,82 +546,82 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
             if strcmp(arg, "-e") == 0 || strcmp(arg, "--eval") == 0 {
                 if i + 1 < ac {
                     script = argv[i + 1] as *u8
-                    is_eval = true
+                    isEval = true
                 }
                 break
             }
             if strcmp(arg, "-p") == 0 || strcmp(arg, "--print") == 0 {
                 if i + 1 < ac {
                     script = argv[i + 1] as *u8
-                    is_eval = true
-                    print_result = true
+                    isEval = true
+                    printResult = true
                 }
                 break
             }
             if arg[0] != 45 {
-                script_file = arg
+                scriptFile = arg
                 break
             }
             i = i + 1
         }
 
-        if script as i64 == 0 && script_file as i64 == 0 {
-            print_str("usage: milo-node [-e '<script>' | -p '<expr>' | <file.js>]\n")
+        if script as i64 == 0 && scriptFile as i64 == 0 {
+            printStr("usage: milo-node [-e '<script>' | -p '<expr>' | <file.js>]\n")
             return 1
         }
 
         // Read file if needed
-        var file_buf: *u8 = 0 as *u8
-        var file_len: [i64; 1] = [0]
-        if script_file as i64 != 0 {
-            file_buf = read_file(script_file, file_len as *i64)
-            if file_buf as i64 == 0 {
-                print_err("error: cannot read file: ")
-                print_err(script_file)
-                print_err("\n")
+        var fileBuf: *u8 = 0 as *u8
+        var fileLen: [i64; 1] = [0]
+        if scriptFile as i64 != 0 {
+            fileBuf = readFile(scriptFile, fileLen as *i64)
+            if fileBuf as i64 == 0 {
+                printErr("error: cannot read file: ")
+                printErr(scriptFile)
+                printErr("\n")
                 return 1
             }
-            script = file_buf
+            script = fileBuf
         }
 
-        register_builtin_bindings()
+        registerBuiltinBindings()
 
         // Set lib dir for builtin JS module loading
-        // Derive from exec_path: strip last 3 components (out/Release/milo-node) to get repo root
+        // Derive from execPath: strip last 3 components (out/Release/milo-node) to get repo root
         let exec = argv[0] as *u8
-        var lib_path: [u8; 1024] = [0; 1024]
-        let exec_len = strlen(exec)
+        var libPath: [u8; 1024] = [0; 1024]
+        let execLen = strlen(exec)
         // Copy exec path
         var k: i64 = 0
-        while k < exec_len {
-            lib_path[k] = exec[k]
+        while k < execLen {
+            libPath[k] = exec[k]
             k = k + 1
         }
         // Walk back 3 slashes to get repo root
         var slashes: i32 = 0
         while k > 0 && slashes < 3 {
             k = k - 1
-            if lib_path[k] == 47 { slashes = slashes + 1 }
+            if libPath[k] == 47 { slashes = slashes + 1 }
         }
         if slashes == 3 {
-            lib_path[k] = 47  // '/'
-            lib_path[k + 1] = 108  // 'l'
-            lib_path[k + 2] = 105  // 'i'
-            lib_path[k + 3] = 98  // 'b'
-            lib_path[k + 4] = 0
-            nm_set_lib_dir(lib_path as *u8)
+            libPath[k] = 47  // '/'
+            libPath[k + 1] = 108  // 'l'
+            libPath[k + 2] = 105  // 'i'
+            libPath[k + 3] = 98  // 'b'
+            libPath[k + 4] = 0
+            nm_set_lib_dir(libPath as *u8)
         }
 
         // Boot V8
-        let exec_path = argv[0] as *u8
-        if v8c_platform_init(exec_path) != 0 {
-            print_err("error: v8c_platform_init failed\n")
+        let execPath = argv[0] as *u8
+        if v8c_platform_init(execPath) != 0 {
+            printErr("error: v8c_platform_init failed\n")
             return 1
         }
 
         let iso = v8c_isolate_new()
         if iso as i64 == 0 {
-            print_err("error: v8c_isolate_new failed\n")
+            printErr("error: v8c_isolate_new failed\n")
             return 1
         }
 
@@ -634,20 +634,20 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         let global = v8c_context_global(ctx)
         let ib_fn = v8c_function_new(ctx, nm_internal_binding as *u8, 0 as *u8)
         v8c_object_set(ctx, global, "internalBinding", ib_fn)
-        let lb_fn = v8c_function_new(ctx, native_load_builtin as *u8, 0 as *u8)
+        let lb_fn = v8c_function_new(ctx, nativeLoadBuiltin as *u8, 0 as *u8)
         v8c_object_set(ctx, global, "__loadBuiltin", lb_fn)
 
         // Register _console binding (used by bootstrap's console.log)
         nm_binding_register("_console", nm_init_console as *u8)
 
-        let proc = setup_process_object(iso, ctx, argc, argv)
+        let proc = setupProcessObject(iso, ctx, argc, argv)
         v8c_object_set(ctx, global, "process", proc)
 
         // Run bootstrap (defines console.log, require)
         let tc = v8c_try_catch_new(iso)
-        let boot_result = run_bootstrap(iso, ctx)
-        if boot_result < 0 {
-            print_err("error: bootstrap failed\n")
+        let bootResult = runBootstrap(iso, ctx)
+        if bootResult < 0 {
+            printErr("error: bootstrap failed\n")
             if v8c_try_catch_has_caught(tc) != 0 {
                 let msg = v8c_try_catch_message(tc)
                 if msg >= 0 {
@@ -671,14 +671,14 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         v8c_try_catch_delete(tc)
 
         // Run user script
-        let script_len = strlen(script) as i32
+        let scriptLen = strlen(script) as i32
 
         let tc2 = v8c_try_catch_new(iso)
         var result: i32 = -1
-        if script_file as i64 != 0 {
-            result = v8c_script_compile_run(ctx, script, script_len, script_file)
+        if scriptFile as i64 != 0 {
+            result = v8c_script_compile_run(ctx, script, scriptLen, scriptFile)
         } else {
-            result = v8c_script_compile_run(ctx, script, script_len, "[eval]")
+            result = v8c_script_compile_run(ctx, script, scriptLen, "[eval]")
         }
 
         if result < 0 || v8c_try_catch_has_caught(tc2) != 0 {
@@ -691,19 +691,19 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
                     write(2, "\n", 1)
                 }
             } else {
-                print_err("error: script execution failed\n")
+                printErr("error: script execution failed\n")
             }
         } else {
-            if print_result && result >= 0 {
-                print_val(iso, result)
+            if printResult && result >= 0 {
+                printVal(iso, result)
             }
         }
 
         v8c_try_catch_delete(tc2)
 
         // Cleanup
-        if file_buf as i64 != 0 {
-            free(file_buf)
+        if fileBuf as i64 != 0 {
+            free(fileBuf)
         }
         v8c_context_exit(ctx)
         v8c_handle_scope_delete(hs)
@@ -720,8 +720,8 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
 // _console binding init — provides write/writeError for bootstrap's console
 fn nm_init_console(iso: *u8, ctx: *u8, exports: i32): void {
     unsafe {
-        let w_fn = v8c_function_new(ctx, console_write as *u8, 0 as *u8)
-        let we_fn = v8c_function_new(ctx, console_write_error as *u8, 0 as *u8)
+        let w_fn = v8c_function_new(ctx, consoleWrite as *u8, 0 as *u8)
+        let we_fn = v8c_function_new(ctx, consoleWriteError as *u8, 0 as *u8)
         v8c_object_set(ctx, exports, "write", w_fn)
         v8c_object_set(ctx, exports, "writeError", we_fn)
     }

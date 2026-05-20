@@ -43,8 +43,9 @@ LOCALIZE_FLAGS=(
   --localize-symbol=_strToLower --localize-symbol=_strToUpper
   --localize-symbol=_strTrim --localize-symbol=_strTrimEnd
   --localize-symbol=_strTrimStart --localize-symbol=_trim
-  --localize-symbol=_vecJoin --localize-symbol=_set_method
-  --localize-symbol=_arg_i32
+  --localize-symbol=_vecJoin
+  --localize-symbol=_set_method --localize-symbol=_setMethod
+  --localize-symbol=_arg_i32 --localize-symbol=_argI32
 )
 for f in "$OUT"/milo_binding_registry.o "$OUT"/milo_os.o "$OUT"/milo_env.o "$OUT"/milo_process.o; do
   "$OBJCOPY" "${LOCALIZE_FLAGS[@]}" "$f"

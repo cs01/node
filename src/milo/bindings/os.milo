@@ -47,12 +47,12 @@ extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
 extern fn v8c_function_new(ctx: *u8, cb: *u8, data: *u8): i32
 extern fn v8c_context_global(ctx: *u8): i32
 
-fn arg_i32(info: *u8, idx: i32, default_val: i32): i32 {
+fn argI32(info: *u8, idx: i32, defaultVal: i32): i32 {
     unsafe {
-        if idx >= v8c_fci_length(info) { return default_val }
+        if idx >= v8c_fci_length(info) { return defaultVal }
         let arg = v8c_fci_arg(info, idx)
         let iso = v8c_fci_isolate(info)
-        var out: i32 = default_val
+        var out: i32 = defaultVal
         v8c_to_int32(iso, arg, &out)
         return out
     }
@@ -60,7 +60,7 @@ fn arg_i32(info: *u8, idx: i32, default_val: i32): i32 {
 
 // --- V8 callback handlers ---
 
-fn os_get_hostname(info: *u8, _ud: *u8): void {
+fn osGetHostname(info: *u8, _ud: *u8): void {
     var buf: [u8; 256] = [0; 256]
     unsafe {
         if gethostname(buf as *u8, 256) == 0 {
@@ -69,7 +69,7 @@ fn os_get_hostname(info: *u8, _ud: *u8): void {
     }
 }
 
-fn os_get_cpus(info: *u8, _ud: *u8): void {
+fn osGetCpus(info: *u8, _ud: *u8): void {
     unsafe {
         var n = sysconf(58) as i32
         if n < 1 { n = 1 }
@@ -77,15 +77,15 @@ fn os_get_cpus(info: *u8, _ud: *u8): void {
     }
 }
 
-fn os_get_pid(info: *u8, _ud: *u8): void {
+fn osGetPid(info: *u8, _ud: *u8): void {
     unsafe { v8c_fci_return_int32(info, getpid()) }
 }
 
-fn os_get_ppid(info: *u8, _ud: *u8): void {
+fn osGetPpid(info: *u8, _ud: *u8): void {
     unsafe { v8c_fci_return_int32(info, getppid()) }
 }
 
-fn os_get_cpu_model(info: *u8, _ud: *u8): void {
+fn osGetCpuModel(info: *u8, _ud: *u8): void {
     var buf: [u8; 256] = [0; 256]
     unsafe {
         var len: [i64; 1] = [256]
@@ -94,7 +94,7 @@ fn os_get_cpu_model(info: *u8, _ud: *u8): void {
     }
 }
 
-fn os_get_freemem(info: *u8, _ud: *u8): void {
+fn osGetFreemem(info: *u8, _ud: *u8): void {
     // HOST_VM_INFO64 = 4, HOST_VM_INFO64_COUNT = 38
     var stats: [u8; 512] = [0; 512]
     var count: [u32; 1] = [38]
@@ -111,7 +111,7 @@ fn os_get_freemem(info: *u8, _ud: *u8): void {
     }
 }
 
-fn os_get_totalmem(info: *u8, _ud: *u8): void {
+fn osGetTotalmem(info: *u8, _ud: *u8): void {
     var mem: [i64; 1] = [0]
     var len: [i64; 1] = [8]
     unsafe {
@@ -120,7 +120,7 @@ fn os_get_totalmem(info: *u8, _ud: *u8): void {
     }
 }
 
-fn os_get_uptime(info: *u8, _ud: *u8): void {
+fn osGetUptime(info: *u8, _ud: *u8): void {
     // sysctl CTL_KERN=1, KERN_BOOTTIME=21
     var mib: [i32; 2] = [1, 21]
     var boottime: [i64; 2] = [0, 0]
@@ -137,7 +137,7 @@ fn os_get_uptime(info: *u8, _ud: *u8): void {
     }
 }
 
-fn os_get_loadavg1(info: *u8, _ud: *u8): void {
+fn osGetLoadavg1(info: *u8, _ud: *u8): void {
     var avg: [f64; 3] = [0.0; 3]
     unsafe {
         getloadavg(avg as *f64, 3)
@@ -145,7 +145,7 @@ fn os_get_loadavg1(info: *u8, _ud: *u8): void {
     }
 }
 
-fn os_get_loadavg5(info: *u8, _ud: *u8): void {
+fn osGetLoadavg5(info: *u8, _ud: *u8): void {
     var avg: [f64; 3] = [0.0; 3]
     unsafe {
         getloadavg(avg as *f64, 3)
@@ -153,7 +153,7 @@ fn os_get_loadavg5(info: *u8, _ud: *u8): void {
     }
 }
 
-fn os_get_loadavg15(info: *u8, _ud: *u8): void {
+fn osGetLoadavg15(info: *u8, _ud: *u8): void {
     var avg: [f64; 3] = [0.0; 3]
     unsafe {
         getloadavg(avg as *f64, 3)
@@ -161,7 +161,7 @@ fn os_get_loadavg15(info: *u8, _ud: *u8): void {
     }
 }
 
-fn os_get_os_release(info: *u8, _ud: *u8): void {
+fn osGetOsRelease(info: *u8, _ud: *u8): void {
     var buf: [u8; 256] = [0; 256]
     unsafe {
         var len: [i64; 1] = [256]
@@ -170,27 +170,27 @@ fn os_get_os_release(info: *u8, _ud: *u8): void {
     }
 }
 
-fn os_set_priority(info: *u8, _ud: *u8): void {
+fn osSetPriority(info: *u8, _ud: *u8): void {
     unsafe {
-        let pid = arg_i32(info, 0, 0)
-        let prio = arg_i32(info, 1, 0)
+        let pid = argI32(info, 0, 0)
+        let prio = argI32(info, 1, 0)
         let r = setpriority(0, pid, prio)
         v8c_fci_return_int32(info, r)
     }
 }
 
-fn os_get_priority(info: *u8, _ud: *u8): void {
+fn osGetPriority(info: *u8, _ud: *u8): void {
     unsafe {
-        let pid = arg_i32(info, 0, 0)
+        let pid = argI32(info, 0, 0)
         let p = getpriority(0, pid)
         v8c_fci_return_int32(info, p)
     }
 }
 
-fn os_umask(info: *u8, _ud: *u8): void {
+fn osUmask(info: *u8, _ud: *u8): void {
     unsafe {
         if v8c_fci_length(info) > 0 {
-            let new_mask = arg_i32(info, 0, -1)
+            let new_mask = argI32(info, 0, -1)
             if new_mask >= 0 {
                 let old = umask(new_mask as u32)
                 v8c_fci_return_uint32(info, old)
@@ -205,31 +205,31 @@ fn os_umask(info: *u8, _ud: *u8): void {
 
 // --- setup ---
 
-fn set_method(ctx: *u8, obj: i32, name: *u8, cb: *u8): void {
+fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void {
     unsafe {
-        let fn_val = v8c_function_new(ctx, cb, 0 as *u8)
-        v8c_object_set(ctx, obj, name, fn_val)
+        let fnVal = v8c_function_new(ctx, cb, 0 as *u8)
+        v8c_object_set(ctx, obj, name, fnVal)
     }
 }
 
 // Binding init — populates exports object for internalBinding('os')
 fn nm_init_os(iso: *u8, ctx: *u8, exports: i32): void {
     unsafe {
-        set_method(ctx, exports, "getHostname", os_get_hostname as *u8)
-        set_method(ctx, exports, "getAvailableParallelism", os_get_cpus as *u8)
-        set_method(ctx, exports, "getPid", os_get_pid as *u8)
-        set_method(ctx, exports, "getPpid", os_get_ppid as *u8)
-        set_method(ctx, exports, "umask", os_umask as *u8)
-        set_method(ctx, exports, "getCpuModel", os_get_cpu_model as *u8)
-        set_method(ctx, exports, "getFreeMem", os_get_freemem as *u8)
-        set_method(ctx, exports, "getTotalMem", os_get_totalmem as *u8)
-        set_method(ctx, exports, "getUptime", os_get_uptime as *u8)
-        set_method(ctx, exports, "getOsRelease", os_get_os_release as *u8)
-        set_method(ctx, exports, "getLoadAvg1", os_get_loadavg1 as *u8)
-        set_method(ctx, exports, "getLoadAvg5", os_get_loadavg5 as *u8)
-        set_method(ctx, exports, "getLoadAvg15", os_get_loadavg15 as *u8)
-        set_method(ctx, exports, "setPriority", os_set_priority as *u8)
-        set_method(ctx, exports, "getPriority", os_get_priority as *u8)
+        setMethod(ctx, exports, "getHostname", osGetHostname as *u8)
+        setMethod(ctx, exports, "getAvailableParallelism", osGetCpus as *u8)
+        setMethod(ctx, exports, "getPid", osGetPid as *u8)
+        setMethod(ctx, exports, "getPpid", osGetPpid as *u8)
+        setMethod(ctx, exports, "umask", osUmask as *u8)
+        setMethod(ctx, exports, "getCpuModel", osGetCpuModel as *u8)
+        setMethod(ctx, exports, "getFreeMem", osGetFreemem as *u8)
+        setMethod(ctx, exports, "getTotalMem", osGetTotalmem as *u8)
+        setMethod(ctx, exports, "getUptime", osGetUptime as *u8)
+        setMethod(ctx, exports, "getOsRelease", osGetOsRelease as *u8)
+        setMethod(ctx, exports, "getLoadAvg1", osGetLoadavg1 as *u8)
+        setMethod(ctx, exports, "getLoadAvg5", osGetLoadavg5 as *u8)
+        setMethod(ctx, exports, "getLoadAvg15", osGetLoadavg15 as *u8)
+        setMethod(ctx, exports, "setPriority", osSetPriority as *u8)
+        setMethod(ctx, exports, "getPriority", osGetPriority as *u8)
     }
 }
 

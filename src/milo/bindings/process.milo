@@ -51,12 +51,12 @@ extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
 extern fn v8c_function_new(ctx: *u8, cb: *u8, data: *u8): i32
 extern fn v8c_context_global(ctx: *u8): i32
 
-fn arg_i32(info: *u8, idx: i32, default_val: i32): i32 {
+fn argI32(info: *u8, idx: i32, defaultVal: i32): i32 {
     unsafe {
-        if idx >= v8c_fci_length(info) { return default_val }
+        if idx >= v8c_fci_length(info) { return defaultVal }
         let arg = v8c_fci_arg(info, idx)
         let iso = v8c_fci_isolate(info)
-        var out: i32 = default_val
+        var out: i32 = defaultVal
         v8c_to_int32(iso, arg, &out)
         return out
     }
@@ -64,7 +64,7 @@ fn arg_i32(info: *u8, idx: i32, default_val: i32): i32 {
 
 // --- hrtime ---
 
-fn process_hrtime(info: *u8, _ud: *u8): void {
+fn processHrtime(info: *u8, _ud: *u8): void {
     var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
     unsafe {
         let clk = 6
@@ -82,7 +82,7 @@ fn process_hrtime(info: *u8, _ud: *u8): void {
     }
 }
 
-fn process_hrtime_bigint(info: *u8, _ud: *u8): void {
+fn processHrtimeBigint(info: *u8, _ud: *u8): void {
     var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
     unsafe {
         let clk = 6
@@ -97,17 +97,17 @@ fn process_hrtime_bigint(info: *u8, _ud: *u8): void {
 
 // --- kill ---
 
-fn process_kill(info: *u8, _ud: *u8): void {
+fn processKill(info: *u8, _ud: *u8): void {
     unsafe {
-        let pid = arg_i32(info, 0, 0)
-        let sig = arg_i32(info, 1, 15)
+        let pid = argI32(info, 0, 0)
+        let sig = argI32(info, 1, 15)
         v8c_fci_return_int32(info, kill(pid, sig))
     }
 }
 
 // --- cpuUsage: returns [user_usec, system_usec] ---
 
-fn process_cpu_usage(info: *u8, _ud: *u8): void {
+fn processCpuUsage(info: *u8, _ud: *u8): void {
     var ru = Rusage {
         ru_utime: Timeval { tv_sec: 0, tv_usec: 0 },
         ru_stime: Timeval { tv_sec: 0, tv_usec: 0 },
@@ -135,7 +135,7 @@ fn process_cpu_usage(info: *u8, _ud: *u8): void {
 
 // --- utimes/futimes (called from C, not V8 callbacks) ---
 
-fn nm_fs_utimes(path: *u8, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime_usec: i64): i32 {
+fn nmFsUtimes(path: *u8, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime_usec: i64): i32 {
     var tv: [Timeval; 2] = [
         Timeval { tv_sec: atime_sec, tv_usec: atime_usec as i32 },
         Timeval { tv_sec: mtime_sec, tv_usec: mtime_usec as i32 },
@@ -143,7 +143,7 @@ fn nm_fs_utimes(path: *u8, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtim
     unsafe { return utimes(path, tv as *Timeval) }
 }
 
-fn nm_fs_futimes(fd: i32, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime_usec: i64): i32 {
+fn nmFsFutimes(fd: i32, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime_usec: i64): i32 {
     var tv: [Timeval; 2] = [
         Timeval { tv_sec: atime_sec, tv_usec: atime_usec as i32 },
         Timeval { tv_sec: mtime_sec, tv_usec: mtime_usec as i32 },
@@ -153,19 +153,19 @@ fn nm_fs_futimes(fd: i32, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime
 
 // --- setup ---
 
-fn set_method(ctx: *u8, obj: i32, name: *u8, cb: *u8): void {
+fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void {
     unsafe {
-        let fn_val = v8c_function_new(ctx, cb, 0 as *u8)
-        v8c_object_set(ctx, obj, name, fn_val)
+        let fnVal = v8c_function_new(ctx, cb, 0 as *u8)
+        v8c_object_set(ctx, obj, name, fnVal)
     }
 }
 
 // Binding init — populates exports object for internalBinding('process_methods')
 fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
     unsafe {
-        set_method(ctx, exports, "hrtime", process_hrtime as *u8)
-        set_method(ctx, exports, "hrtimeBigint", process_hrtime_bigint as *u8)
-        set_method(ctx, exports, "kill", process_kill as *u8)
-        set_method(ctx, exports, "cpuUsage", process_cpu_usage as *u8)
+        setMethod(ctx, exports, "hrtime", processHrtime as *u8)
+        setMethod(ctx, exports, "hrtimeBigint", processHrtimeBigint as *u8)
+        setMethod(ctx, exports, "kill", processKill as *u8)
+        setMethod(ctx, exports, "cpuUsage", processCpuUsage as *u8)
     }
 }

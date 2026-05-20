@@ -16,7 +16,7 @@ extern fn v8c_isolate_throw(iso: *u8, exc: i32): void
 extern fn v8c_exception_error(iso: *u8, msg: *u8): i32
 
 // Wrapper so C can call v8c_object_new via function pointer
-fn make_object(iso: *u8): i32 {
+fn makeObject(iso: *u8): i32 {
     unsafe { return v8c_object_new(iso) }
 }
 
@@ -37,14 +37,14 @@ fn nm_internal_binding(info: *u8, _ud: *u8): void {
         let ctx = v8c_fci_context(info)
         let arg = v8c_fci_arg(info, 0)
 
-        var name_buf: [u8; 256] = [0; 256]
-        let len = v8c_string_write_utf8(iso, arg, name_buf as *u8, 255)
+        var nameBuf: [u8; 256] = [0; 256]
+        let len = v8c_string_write_utf8(iso, arg, nameBuf as *u8, 255)
         if len <= 0 {
             v8c_fci_return_undefined(info)
             return
         }
 
-        let exports = nm_registry_get(iso, ctx, name_buf as *u8, make_object as *u8)
+        let exports = nm_registry_get(iso, ctx, nameBuf as *u8, makeObject as *u8)
         if exports < 0 {
             let err = v8c_exception_error(iso, "No such binding")
             v8c_isolate_throw(iso, err)
