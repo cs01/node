@@ -34,8 +34,6 @@ extern fn futimes(fd: i32, times: *Timeval): i32
 
 // CLOCK_MONOTONIC: macOS = 6
 
-// --- hrtime ---
-
 fn processHrtime(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let iso = ci.isolate()
@@ -67,14 +65,12 @@ fn processHrtimeBigint(info: *u8, _ud: *u8): void {
     }
 }
 
-// --- kill ---
-
 fn processKill(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe { ci.retI32(kill(ci.i32Arg(0, 0), ci.i32Arg(1, 15))) }
+    let pid = ci.i32Arg(0, 0)
+    let sig = ci.i32Arg(1, 15)
+    unsafe { ci.retI32(kill(pid, sig)) }
 }
-
-// --- cpuUsage: returns [user_usec, system_usec] ---
 
 fn processCpuUsage(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
@@ -103,8 +99,6 @@ fn processCpuUsage(info: *u8, _ud: *u8): void {
     ci.ret(arr)
 }
 
-// --- utimes/futimes (called from C, not V8 callbacks) ---
-
 fn nmFsUtimes(path: *u8, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime_usec: i64): i32 {
     var tv: [Timeval; 2] = [
         Timeval { tv_sec: atime_sec, tv_usec: atime_usec as i32 },
@@ -121,8 +115,6 @@ fn nmFsFutimes(fd: i32, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime_u
     unsafe { return futimes(fd, tv as *Timeval) }
 }
 
-// --- setup ---
-
 fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
     let i = Isolate { ptr: iso }
     let c = Context { ptr: ctx }
@@ -133,7 +125,6 @@ fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "kill" as *u8, processKill as *u8)
         c.setMethod(exp, "cpuUsage" as *u8, processCpuUsage as *u8)
 
-        // hrtimeBuffer: Uint32Array(5) backed by ArrayBuffer(20)
         let ab = i.arraybufferNew(20)
         let u32arr = i.uint32arrayNew(ab, 0, 5)
         c.objectSet(exp, "hrtimeBuffer" as *u8, u32arr)

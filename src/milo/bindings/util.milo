@@ -18,16 +18,18 @@ fn utilGetOwnNonIndexProperties(info: *u8, _ud: *u8): void {
 
 fn utilGetConstructorName(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    if ci.length() < 1 {
-        unsafe { ci.retStr("" as *u8) }
-        return
+    unsafe {
+        if ci.length() < 1 {
+            ci.retStr("" as *u8)
+            return
+        }
+        let iso = ci.isolate()
+        if ci.arg(0).isObject(iso) == 0 {
+            ci.retStr("" as *u8)
+            return
+        }
+        ci.retStr("Object" as *u8)
     }
-    let iso = ci.isolate()
-    if ci.arg(0).isObject(iso) == 0 {
-        unsafe { ci.retStr("" as *u8) }
-        return
-    }
-    unsafe { ci.retStr("Object" as *u8) }
 }
 
 fn utilGetPromiseDetails(info: *u8, _ud: *u8): void {
@@ -71,10 +73,8 @@ fn nm_init_util(iso: *u8, ctx: *u8, exports: i32): void {
     let i = Isolate { ptr: iso }
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
-
-    // constants sub-object
-    let consts = i.object()
     unsafe {
+        let consts = i.object()
         c.objectSet(consts, "ALL_PROPERTIES" as *u8, i.int32(0))
         c.objectSet(consts, "ONLY_ENUMERABLE" as *u8, i.int32(2))
         c.objectSet(consts, "kPending" as *u8, i.int32(0))
@@ -82,7 +82,6 @@ fn nm_init_util(iso: *u8, ctx: *u8, exports: i32): void {
         c.objectSet(consts, "kRejected" as *u8, i.int32(2))
         c.objectSet(exp, "constants" as *u8, consts)
 
-        // privateSymbols sub-object
         let privSyms = i.object()
         c.objectSet(privSyms, "arrow_message_private_symbol" as *u8,
             i.symbolNew("node:arrowMessage" as *u8))
@@ -94,7 +93,6 @@ fn nm_init_util(iso: *u8, ctx: *u8, exports: i32): void {
             i.symbolNew("node:untransferable" as *u8))
         c.objectSet(exp, "privateSymbols" as *u8, privSyms)
 
-        // methods
         c.setMethod(exp, "getOwnNonIndexProperties" as *u8, utilGetOwnNonIndexProperties as *u8)
         c.setMethod(exp, "getConstructorName" as *u8, utilGetConstructorName as *u8)
         c.setMethod(exp, "getPromiseDetails" as *u8, utilGetPromiseDetails as *u8)

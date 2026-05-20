@@ -202,8 +202,6 @@ fn nm_init_os(_iso: *u8, ctx: *u8, exports: i32): void {
     }
 }
 
-// --- exported for other bindings ---
-
 fn nm_os_getuid(): u32 { unsafe { return getuid() } }
 fn nm_os_getgid(): u32 { unsafe { return getgid() } }
 fn nm_os_geteuid(): u32 { unsafe { return geteuid() } }
