@@ -82,6 +82,8 @@
   process.version = 'v24.0.0'; process.release = { name: 'node' };
   if (!process.cwd) process.cwd = () => internalBinding('env').get('PWD') || '/';
   if (!process.chdir) process.chdir = () => {};
+  if (!process.umask) process.umask = (mask) => { if (mask !== undefined) return 0o22; return 0o22; };
+  if (!process.hrtime) { const b = _nativeBinding('process_methods'); process.hrtime = (...a) => { const r = b.hrtime(); if (a.length && a[0]) { r[0] -= a[0][0]; r[1] -= a[0][1]; if (r[1] < 0) { r[0]--; r[1] += 1e9; } } return r; }; process.hrtime.bigint = b.hrtimeBigint; }
   if (!process.nextTick) process.nextTick = (fn, ...args) => Promise.resolve().then(() => fn(...args));
   if (!process.on) { const _h = {}; process.on = (ev, fn) => { (_h[ev] ??= []).push(fn); return process; }; process.once = (ev, fn) => { const w = (...a) => { process.removeListener(ev, w); fn(...a); }; return process.on(ev, w); }; process.removeListener = (ev, fn) => { const h = _h[ev]; if (h) { const i = h.indexOf(fn); if (i >= 0) h.splice(i, 1); } return process; }; process.emit = (ev, ...args) => { for (const fn of (_h[ev] || [])) fn(...args); return true; }; process.listeners = (ev) => _h[ev] || []; process.listenerCount = (ev) => (_h[ev] || []).length; process.removeAllListeners = (ev) => { if (ev) delete _h[ev]; else for (const k of Object.keys(_h)) delete _h[k]; return process; }; process.prependListener = process.on; process.prependOnceListener = process.once; process.off = process.removeListener; }
 
@@ -117,6 +119,7 @@
   const moduleCache = { path: _path };
   const _moduleWrappers = {};
   const _requireStack = [];
+  globalThis._requireStack = _requireStack;
 
   function _resolve(id, parentDir) {
     if (!id.startsWith('./') && !id.startsWith('../') && !id.startsWith('/')) return null;

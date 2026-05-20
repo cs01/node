@@ -46,6 +46,7 @@ extern fn v8c_try_catch_new(iso: *u8): *u8
 extern fn v8c_try_catch_delete(tc: *u8): void
 extern fn v8c_try_catch_has_caught(tc: *u8): i32
 extern fn v8c_try_catch_message(tc: *u8): i32
+extern fn v8c_isolate_run_microtasks(iso: *u8): void
 
 extern fn nm_set_lib_dir(dir: *u8): void
 extern fn nm_get_lib_dir(): *u8
@@ -518,6 +519,9 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         }
 
         v8c_try_catch_delete(tc2)
+
+        // Drain microtask queue so promises/async callbacks fire
+        v8c_isolate_run_microtasks(isoPtr)
 
         if fileBuf as i64 != 0 {
             free(fileBuf)
