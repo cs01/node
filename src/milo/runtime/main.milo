@@ -1,8 +1,6 @@
 // Milo runtime spine — V8 bootstrap with binding registry + file loading
 // Phase 3b: internalBinding(), require() shim, file execution
 
-from "std/argparse" import { newParser }
-
 // POSIX — declared directly (Milo stdlib duplicate symbol issue, needs linkonce_odr)
 extern fn write(fd: i32, buf: *u8, len: i64): i64
 extern fn read(fd: i32, buf: *u8, len: i64): i64
@@ -488,63 +486,54 @@ fn console_write_error(info: *u8, _ud: *u8): void {
     }
 }
 
-// Convert C argc/argv to Vec<string> for argparse
-fn cArgs(argc: i32, argv: *i64): Vec<string> {
-    var result: Vec<string> = Vec.new()
-    unsafe {
-        var i: i32 = 0
-        while i < argc {
-            result.push(_cstrToString(argv[i as i64] as *u8))
-            i = i + 1
-        }
-    }
-    return result
-}
+extern fn strcmp(a: *u8, b: *u8): i32
 
 fn milo_node_main(argc: i32, argv: *i64): i32 {
     unsafe {
-        // Parse CLI args with argparse
-        var parser = newParser("milo-node", "Node.js runtime powered by Milo")
-        parser.addString("eval", "e", "evaluate script", "")
-        parser.addString("print", "p", "evaluate script and print result", "")
-        parser.addOptionalPositional("script", "script file to run")
-        let args = parser.parseFrom(cArgs(argc, argv))
-
-        let hasEval = args.has("eval")
-        let hasPrint = args.has("print")
-        let hasScript = args.has("script")
-
-        if !hasEval && !hasPrint && !hasScript {
-            print(parser.helpText())
-            return 1
+        var script: *u8 = 0 as *u8
+        var script_file: *u8 = 0 as *u8
+        var is_eval = false
+        var print_result = false
+        var i: i64 = 1
+        let ac = argc as i64
+        while i < ac {
+            let arg = argv[i] as *u8
+            if strcmp(arg, "-e") == 0 || strcmp(arg, "--eval") == 0 {
+                if i + 1 < ac {
+                    script = argv[i + 1] as *u8
+                    is_eval = true
+                }
+                break
+            }
+            if strcmp(arg, "-p") == 0 || strcmp(arg, "--print") == 0 {
+                if i + 1 < ac {
+                    script = argv[i + 1] as *u8
+                    is_eval = true
+                    print_result = true
+                }
+                break
+            }
+            if arg[0] != 45 {
+                script_file = arg
+                break
+            }
+            i = i + 1
         }
 
-        var script: *u8 = 0 as *u8
-        var print_result = false
-        var script_file: *u8 = 0 as *u8
-
-        // Keep strings alive so _strDataPtr pointers remain valid
-        var evalStr: string = ""
-        var scriptPath: string = ""
-
-        if hasEval {
-            evalStr = args.getString("eval")
-            script = _strDataPtr(evalStr)
-        } else if hasPrint {
-            evalStr = args.getString("print")
-            script = _strDataPtr(evalStr)
-            print_result = true
+        if script as i64 == 0 && script_file as i64 == 0 {
+            print_str("usage: milo-node [-e '<script>' | -p '<expr>' | <file.js>]\n")
+            return 1
         }
 
         // Read file if needed
         var file_buf: *u8 = 0 as *u8
         var file_len: [i64; 1] = [0]
-        if hasScript && script as i64 == 0 {
-            scriptPath = args.getString("script")
-            script_file = _strDataPtr(scriptPath)
+        if script_file as i64 != 0 {
             file_buf = read_file(script_file, file_len as *i64)
             if file_buf as i64 == 0 {
-                eprint($"error: cannot read file: {scriptPath}")
+                print_err("error: cannot read file: ")
+                print_err(script_file)
+                print_err("\n")
                 return 1
             }
             script = file_buf
