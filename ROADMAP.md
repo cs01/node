@@ -43,28 +43,18 @@ No libuv compat layer. Each Milo binding uses std/runtime directly (kqueue/epoll
 - [ ] Run baseline test suite (`python tools/test.py`) — regression oracle
 - [ ] Baseline benchmark (`benchmark/`)
 
-## Phase 1 — Milo compiler hardening (../milo repo)
+## Phase 1 — Milo compiler hardening (../milo repo) ✅ DONE
 
-FFI audit found 4 blocking gaps:
+All 4 FFI gaps resolved:
 
-1. **C-ABI export** — `@export`/`export fn`: C calling convention, no mangling
-   - Files: parser.ts, checker.ts, lower.ts, codegen.ts, tokens.ts
-   - Status: NOT STARTED
+1. **C-ABI export** — `export fn` already emits unmangled LLVM IR (`define i32 @fn_name(...)`) ✅
+2. **Object/static-lib emission** — `emit-obj` and `build-lib` CLI commands implemented ✅
+   - `--no-entry` flag renames main to internal linkage
+   - Known: duplicate stdlib symbols in build-lib (needs `linkonce_odr`), not blocking
+3. **Bare C function pointers** — `fn as *u8` cast works for V8 callbacks ✅
+4. **repr(C) layout** — extern struct provides guaranteed C-compatible layout ✅
 
-2. **Object/static-lib emission** — `emit-obj`, `build-lib` CLI
-   - main.ts already runs `llc -filetype=obj`; stop before link, add `ar`
-   - Status: NOT STARTED
-
-3. **Bare C function pointers** — non-capturing fn → raw code pointer
-   - Needed for V8 callbacks. Previous node-milo used `fn as *u8` cast — may already work
-   - Files: types.ts, codegen.ts, checker.ts
-   - Status: PARTIALLY WORKING (needs verification)
-
-4. **repr(C) layout** — guaranteed field order/padding/align for extern struct
-   - codegen.ts struct layout. Previous node-milo used extern struct (Timespec, Rusage) successfully
-   - Status: PARTIALLY WORKING
-
-**Gate**: Milo .o linked into C program; C calls Milo; Milo passes callback to C; round-trip test passes.
+**Gate PASSED**: `milo_add(30,12) = 42` — C↔Milo round-trip proven. fs.milo compiles to .o with all symbols exported.
 
 ## Phase 2 — v8capi C++ shim ⬅️ IN PROGRESS
 
@@ -77,14 +67,15 @@ Hand-written C++ static lib. Flattens V8 API subset Node uses → C ABI.
 - [x] Smoke test: 7/7 tests pass (eval, callbacks, strings, objects, arrays, exceptions, type checks)
 
 **TODO:**
-- [ ] Internal field ops (need isolate threading through API)
-- [ ] ArrayBuffer/TypedArray data access (need isolate param)
+- [x] Internal field ops — isolate threaded through API ✅
+- [x] ArrayBuffer/TypedArray data access — isolate param added ✅
+- [x] Template instance/prototype template accessors ✅
+- [x] FunctionTemplate::Inherit ✅
+- [x] ObjectTemplate::SetInternalFieldCount ✅
 - [ ] Fast-API CFunction registration
-- [ ] Template instance/prototype template accessors
-- [ ] FunctionTemplate::Inherit
-- [ ] ObjectTemplate::SetInternalFieldCount
-- [ ] Integrate into GYP build (node.gyp)
 - [ ] PropertyCallbackInfo (accessor get/set)
+- [ ] Integrate into GYP build (node.gyp)
+- [ ] Re-verify smoke tests against V8 12.4 (Node 27 build in progress)
 
 **Handle model**: Milo holds `v8c_value { slot: i32 }` handles. Never dereferences V8 pointers. Lifetime managed by Global<> in handle table. HandleScope wrapping via struct embedding (V8 forbids heap-allocated HandleScope).
 

@@ -16,6 +16,8 @@
 // ---------------------------------------------------------------------------
 
 static constexpr int kHandleTableSlot = 0;
+// slot 1 = TemplateTable (used implicitly as kHandleTableSlot + 1)
+static constexpr int kActiveContextSlot = 2;
 static constexpr int kMaxSlots = 65536;
 
 struct HandleTable {
@@ -247,6 +249,7 @@ extern "C" void v8c_context_enter(v8c_context* ctx) {
     auto* cw = reinterpret_cast<ContextWrapper*>(ctx);
     v8::HandleScope scope(cw->isolate);
     cw->context.Get(cw->isolate)->Enter();
+    cw->isolate->SetData(kActiveContextSlot, cw);
 }
 
 extern "C" void v8c_context_exit(v8c_context* ctx) {
@@ -823,6 +826,11 @@ extern "C" int v8c_fci_is_construct_call(void* info) {
 extern "C" v8c_isolate* v8c_fci_isolate(void* info) {
     return reinterpret_cast<v8c_isolate*>(
         static_cast<FCI*>(info)->GetIsolate());
+}
+
+extern "C" v8c_context* v8c_fci_context(void* info) {
+    auto* iso = static_cast<FCI*>(info)->GetIsolate();
+    return reinterpret_cast<v8c_context*>(iso->GetData(kActiveContextSlot));
 }
 
 extern "C" void v8c_fci_return(void* info, v8c_value val) {

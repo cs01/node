@@ -33,17 +33,34 @@ extern fn futimes(fd: i32, times: *Timeval): i32
 // macOS CLOCK_MONOTONIC = 6, Linux = 1
 extern fn nm_clock_monotonic_id(): i32
 
-// --- V8 C API ---
+// v8capi FFI — v8c_value is struct { i32 slot }, ABI-equivalent to i32
+extern fn v8c_fci_length(info: *u8): i32
+extern fn v8c_fci_arg(info: *u8, idx: i32): i32
+extern fn v8c_fci_isolate(info: *u8): *u8
+extern fn v8c_fci_context(info: *u8): *u8
+extern fn v8c_fci_return(info: *u8, val: i32): void
+extern fn v8c_fci_return_int32(info: *u8, val: i32): void
+extern fn v8c_fci_return_double(info: *u8, val: f64): void
+extern fn v8c_to_int32(iso: *u8, val: i32, out: *i32): i32
+extern fn v8c_bigint_i64(iso: *u8, val: i64): i32
+extern fn v8c_array_new(iso: *u8, length: i32): i32
+extern fn v8c_object_set_index(ctx: *u8, obj: i32, idx: u32, val: i32): i32
+extern fn v8c_number(iso: *u8, val: f64): i32
+extern fn v8c_object_new(iso: *u8): i32
+extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
+extern fn v8c_function_new(ctx: *u8, cb: *u8, data: *u8): i32
+extern fn v8c_context_global(ctx: *u8): i32
 
-extern fn v8c_args_count(info: *u8): i32
-extern fn v8c_arg_int32(info: *u8, idx: i32, default_val: i32): i32
-extern fn v8c_return_int32(info: *u8, val: i32): void
-extern fn v8c_return_double(info: *u8, val: f64): void
-extern fn v8c_return_bigint_i64(info: *u8, val: i64): void
-extern fn v8c_return_array_double2(info: *u8, a: f64, b: f64): void
-extern fn v8c_obj_new(rt: *u8): i32
-extern fn v8c_obj_set_fn(rt: *u8, obj: i32, name: *u8, cb: *u8, user_data: *u8): void
-extern fn v8c_set_global(rt: *u8, name: *u8, obj: i32): void
+fn arg_i32(info: *u8, idx: i32, default_val: i32): i32 {
+    unsafe {
+        if idx >= v8c_fci_length(info) { return default_val }
+        let arg = v8c_fci_arg(info, idx)
+        let iso = v8c_fci_isolate(info)
+        var out: i32 = default_val
+        v8c_to_int32(iso, arg, &out)
+        return out
+    }
+}
 
 // --- hrtime ---
 
@@ -51,11 +68,17 @@ fn process_hrtime(info: *u8, _ud: *u8): void {
     var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
     unsafe {
         let clk = nm_clock_monotonic_id()
+        let iso = v8c_fci_isolate(info)
+        let ctx = v8c_fci_context(info)
+        let arr = v8c_array_new(iso, 2)
         if clock_gettime(clk, &ts) != 0 {
-            v8c_return_array_double2(info, 0.0, 0.0)
-            return
+            v8c_object_set_index(ctx, arr, 0, v8c_number(iso, 0.0))
+            v8c_object_set_index(ctx, arr, 1, v8c_number(iso, 0.0))
+        } else {
+            v8c_object_set_index(ctx, arr, 0, v8c_number(iso, ts.tv_sec as f64))
+            v8c_object_set_index(ctx, arr, 1, v8c_number(iso, ts.tv_nsec as f64))
         }
-        v8c_return_array_double2(info, ts.tv_sec as f64, ts.tv_nsec as f64)
+        v8c_fci_return(info, arr)
     }
 }
 
@@ -63,11 +86,12 @@ fn process_hrtime_bigint(info: *u8, _ud: *u8): void {
     var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
     unsafe {
         let clk = nm_clock_monotonic_id()
+        let iso = v8c_fci_isolate(info)
         if clock_gettime(clk, &ts) != 0 {
-            v8c_return_bigint_i64(info, 0)
+            v8c_fci_return(info, v8c_bigint_i64(iso, 0))
             return
         }
-        v8c_return_bigint_i64(info, ts.tv_sec * 1000000000 + ts.tv_nsec)
+        v8c_fci_return(info, v8c_bigint_i64(iso, ts.tv_sec * 1000000000 + ts.tv_nsec))
     }
 }
 
@@ -75,9 +99,9 @@ fn process_hrtime_bigint(info: *u8, _ud: *u8): void {
 
 fn process_kill(info: *u8, _ud: *u8): void {
     unsafe {
-        let pid = v8c_arg_int32(info, 0, 0)
-        let sig = v8c_arg_int32(info, 1, 15)
-        v8c_return_int32(info, kill(pid, sig))
+        let pid = arg_i32(info, 0, 0)
+        let sig = arg_i32(info, 1, 15)
+        v8c_fci_return_int32(info, kill(pid, sig))
     }
 }
 
@@ -93,17 +117,23 @@ fn process_cpu_usage(info: *u8, _ud: *u8): void {
         _pC: 0, _pD: 0,
     }
     unsafe {
+        let iso = v8c_fci_isolate(info)
+        let ctx = v8c_fci_context(info)
+        let arr = v8c_array_new(iso, 2)
         if getrusage(0, &ru) != 0 {
-            v8c_return_array_double2(info, 0.0, 0.0)
-            return
+            v8c_object_set_index(ctx, arr, 0, v8c_number(iso, 0.0))
+            v8c_object_set_index(ctx, arr, 1, v8c_number(iso, 0.0))
+        } else {
+            let user_us = ru.ru_utime.tv_sec * 1000000 + ru.ru_utime.tv_usec as i64
+            let sys_us = ru.ru_stime.tv_sec * 1000000 + ru.ru_stime.tv_usec as i64
+            v8c_object_set_index(ctx, arr, 0, v8c_number(iso, user_us as f64))
+            v8c_object_set_index(ctx, arr, 1, v8c_number(iso, sys_us as f64))
         }
-        let user_us = ru.ru_utime.tv_sec * 1000000 + ru.ru_utime.tv_usec as i64
-        let sys_us = ru.ru_stime.tv_sec * 1000000 + ru.ru_stime.tv_usec as i64
-        v8c_return_array_double2(info, user_us as f64, sys_us as f64)
+        v8c_fci_return(info, arr)
     }
 }
 
-// --- utimes/futimes ---
+// --- utimes/futimes (called from C, not V8 callbacks) ---
 
 fn nm_fs_utimes(path: *u8, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime_usec: i64): i32 {
     var tv: [Timeval; 2] = [
@@ -123,13 +153,21 @@ fn nm_fs_futimes(fd: i32, atime_sec: i64, atime_usec: i64, mtime_sec: i64, mtime
 
 // --- setup ---
 
-fn nm_setup_process(rt: *u8): void {
+fn set_method(ctx: *u8, obj: i32, name: *u8, cb: *u8): void {
     unsafe {
-        let obj = v8c_obj_new(rt)
-        v8c_obj_set_fn(rt, obj, "hrtime", process_hrtime as *u8, 0 as *u8)
-        v8c_obj_set_fn(rt, obj, "hrtimeBigint", process_hrtime_bigint as *u8, 0 as *u8)
-        v8c_obj_set_fn(rt, obj, "kill", process_kill as *u8, 0 as *u8)
-        v8c_obj_set_fn(rt, obj, "cpuUsage", process_cpu_usage as *u8, 0 as *u8)
-        v8c_set_global(rt, "__nm_process", obj)
+        let fn_val = v8c_function_new(ctx, cb, 0 as *u8)
+        v8c_object_set(ctx, obj, name, fn_val)
+    }
+}
+
+fn nm_register_process(iso: *u8, ctx: *u8): void {
+    unsafe {
+        let obj = v8c_object_new(iso)
+        set_method(ctx, obj, "hrtime", process_hrtime as *u8)
+        set_method(ctx, obj, "hrtimeBigint", process_hrtime_bigint as *u8)
+        set_method(ctx, obj, "kill", process_kill as *u8)
+        set_method(ctx, obj, "cpuUsage", process_cpu_usage as *u8)
+        let global = v8c_context_global(ctx)
+        v8c_object_set(ctx, global, "__nm_process", obj)
     }
 }

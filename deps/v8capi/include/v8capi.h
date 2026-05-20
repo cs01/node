@@ -240,6 +240,7 @@ v8c_value v8c_fci_data(void* info);
 v8c_value v8c_fci_new_target(void* info);
 int       v8c_fci_is_construct_call(void* info);
 v8c_isolate* v8c_fci_isolate(void* info);
+v8c_context* v8c_fci_context(void* info);
 
 // Return value
 void v8c_fci_return(void* info, v8c_value val);
