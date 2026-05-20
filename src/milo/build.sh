@@ -14,6 +14,7 @@ bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/runtime/binding_registry
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/os.milo" -o "$OUT/milo_os.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/env.milo" -o "$OUT/milo_env.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/process.milo" -o "$OUT/milo_process.o"
+bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/fs.milo" -o "$OUT/milo_fs.o"
 cd "$NODE_DIR"
 
 echo "=== compiling c helpers ==="
@@ -46,8 +47,9 @@ LOCALIZE_FLAGS=(
   --localize-symbol=_vecJoin
   --localize-symbol=_set_method --localize-symbol=_setMethod
   --localize-symbol=_arg_i32 --localize-symbol=_argI32
+  --localize-symbol=_getStringArg --localize-symbol=_getIntArg
 )
-for f in "$OUT"/milo_binding_registry.o "$OUT"/milo_os.o "$OUT"/milo_env.o "$OUT"/milo_process.o; do
+for f in "$OUT"/milo_binding_registry.o "$OUT"/milo_os.o "$OUT"/milo_env.o "$OUT"/milo_process.o "$OUT"/milo_fs.o; do
   "$OBJCOPY" "${LOCALIZE_FLAGS[@]}" "$f"
 done
 
@@ -60,6 +62,7 @@ clang++ -o "$OUT/milo-node" \
   "$OUT/milo_os.o" \
   "$OUT/milo_env.o" \
   "$OUT/milo_process.o" \
+  "$OUT/milo_fs.o" \
   "$OUT/v8capi.o" \
   -L"$OUT" -L"$OUT/gen/release" \
   -lv8_base_without_compiler -lv8_compiler -lv8_libplatform -lv8_libbase \

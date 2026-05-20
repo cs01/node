@@ -1,275 +1,362 @@
-// fs bindings — native filesystem operations for node-milo.
-// C++ glue extracts V8 args, calls these fns, returns V8 results.
+// fs bindings — POSIX filesystem ops exposed as V8 callbacks
 
-from "std/os" import {
-    open, close, read, write, lseek, stat, fstat, access,
-    lstat, link, truncate, unlink, mkdir, rmdir, rename,
-    chmod, fchmod, chown, fchown, lchown, ftruncate,
-    symlink, readlink, realpath, mkdtemp, getcwd, chdir,
-    fsync, fdatasync, opendir, readdir, closedir, strerror, strlen
-}
-from "std/platform" import { direntNameOffset, getErrno, statBufSize }
+// nm_fs_open wraps variadic open() — ARM64 variadic ABI differs from regular args
+extern fn nm_fs_open(path: *u8, flags: i32, mode: i32): i32
+extern fn close(fd: i32): i32
+extern fn read(fd: i32, buf: *u8, len: i64): i64
+extern fn write(fd: i32, buf: *u8, len: i64): i64
+extern fn lseek(fd: i32, offset: i64, whence: i32): i64
+extern fn unlink(path: *u8): i32
+extern fn mkdir(path: *u8, mode: u32): i32
+extern fn rmdir(path: *u8): i32
+extern fn rename(old: *u8, new: *u8): i32
+extern fn stat(path: *u8, buf: *u8): i32
+extern fn lstat(path: *u8, buf: *u8): i32
+extern fn access(path: *u8, mode: i32): i32
+extern fn chmod(path: *u8, mode: u32): i32
+extern fn readlink(path: *u8, buf: *u8, bufsize: i64): i64
+extern fn realpath(path: *u8, resolved: *u8): *u8
+extern fn opendir(path: *u8): *u8
+extern fn readdir(dir: *u8): *u8
+extern fn closedir(dir: *u8): i32
+extern fn malloc(size: i64): *u8
+extern fn free(ptr: *u8): void
+extern fn strlen(s: *u8): i64
 
-// macOS-specific; not in std/os
-extern fn copyfile(src: *u8, dst: *u8, flags: u32): i32
+// v8capi FFI
+extern fn v8c_fci_length(info: *u8): i32
+extern fn v8c_fci_arg(info: *u8, idx: i32): i32
+extern fn v8c_fci_isolate(info: *u8): *u8
+extern fn v8c_fci_context(info: *u8): *u8
+extern fn v8c_fci_return(info: *u8, val: i32): void
+extern fn v8c_fci_return_int32(info: *u8, val: i32): void
+extern fn v8c_fci_return_string(info: *u8, str: *u8): void
+extern fn v8c_fci_return_string_len(info: *u8, str: *u8, len: i32): void
+extern fn v8c_string_write_utf8(iso: *u8, val: i32, buf: *u8, bufsize: i32): i32
+extern fn v8c_string_utf8_len(iso: *u8, data: *u8, len: i32): i32
+extern fn v8c_array_new(iso: *u8, length: i32): i32
+extern fn v8c_object_set_index(ctx: *u8, obj: i32, idx: u32, val: i32): i32
+extern fn v8c_object_new(iso: *u8): i32
+extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
+extern fn v8c_function_new(ctx: *u8, cb: *u8, data: *u8): i32
+extern fn v8c_number(iso: *u8, val: f64): i32
+extern fn v8c_to_int32(iso: *u8, val: i32, out: *i32): i32
 
-// C helper that unpacks struct stat using the C compiler's struct knowledge
-extern fn nm_stat_unpack(raw: *u8, out: *f64): void
-extern fn nm_stat_bufsize(): i32
-
-// --- stat: fill a f64[14] buffer with stat fields ---
-// Layout: [dev, mode, nlink, uid, gid, rdev, blksize, ino, size, blocks,
-//          atimeMs, mtimeMs, ctimeMs, birthtimeMs]
-
-fn nm_fs_stat(path: *u8, result_buf: *f64): i32 {
+// Helper: extract string arg to buffer, return length (0-terminated). -1 on failure.
+fn getStringArg(info: *u8, idx: i32, buf: *u8, bufsize: i32): i32 {
     unsafe {
-        var buf: [u8; 256] = [0; 256]
-        let rc = stat(path, buf as *u8)
-        if rc != 0 { return -1 }
-        nm_stat_unpack(buf as *u8, result_buf)
-        return 0
+        if idx >= v8c_fci_length(info) { return -1 }
+        let iso = v8c_fci_isolate(info)
+        let arg = v8c_fci_arg(info, idx)
+        let len = v8c_string_write_utf8(iso, arg, buf, bufsize)
+        if len <= 0 { return -1 }
+        // null-terminate (WriteUtf8V2 includes null in count)
+        return len
     }
 }
 
-fn nm_fs_lstat(path: *u8, result_buf: *f64): i32 {
+fn getIntArg(info: *u8, idx: i32, defaultVal: i32): i32 {
     unsafe {
-        var buf: [u8; 256] = [0; 256]
-        let rc = lstat(path, buf as *u8)
-        if rc != 0 { return -1 }
-        nm_stat_unpack(buf as *u8, result_buf)
-        return 0
+        if idx >= v8c_fci_length(info) { return defaultVal }
+        let iso = v8c_fci_isolate(info)
+        let arg = v8c_fci_arg(info, idx)
+        var out: i32 = defaultVal
+        v8c_to_int32(iso, arg, &out)
+        return out
     }
 }
 
-fn nm_fs_fstat(fd: i32, result_buf: *f64): i32 {
+// readFileSync(path) → returns file contents as string
+fn fsReadFile(info: *u8, _ud: *u8): void {
+    var pathBuf: [u8; 4096] = [0; 4096]
     unsafe {
-        var buf: [u8; 256] = [0; 256]
-        let rc = fstat(fd, buf as *u8)
-        if rc != 0 { return -1 }
-        nm_stat_unpack(buf as *u8, result_buf)
-        return 0
-    }
-}
+        let plen = getStringArg(info, 0, pathBuf as *u8, 4096)
+        if plen < 0 { return }
 
-// --- basic fs ops ---
-
-fn nm_fs_open(path: *u8, flags: i32, mode: i32): i32 {
-    unsafe { return open(path, flags, mode) }
-}
-
-fn nm_fs_close(fd: i32): i32 {
-    unsafe { return close(fd) }
-}
-
-fn nm_fs_read(fd: i32, buf: *u8, len: i32, offset: i64): i32 {
-    unsafe {
-        if offset >= 0 { lseek(fd, offset, 0) }
-        return read(fd, buf, len as i64) as i32
-    }
-}
-
-fn nm_fs_write(fd: i32, buf: *u8, len: i32, offset: i64): i32 {
-    unsafe {
-        if offset >= 0 { lseek(fd, offset, 0) }
-        return write(fd, buf, len as i64) as i32
-    }
-}
-
-fn nm_fs_unlink(path: *u8): i32 {
-    unsafe { return unlink(path) }
-}
-
-fn nm_fs_mkdir(path: *u8, mode: i32): i32 {
-    unsafe { return mkdir(path, mode as u32) }
-}
-
-fn nm_fs_rmdir(path: *u8): i32 {
-    unsafe { return rmdir(path) }
-}
-
-fn nm_fs_rename(old_path: *u8, new_path: *u8): i32 {
-    unsafe { return rename(old_path, new_path) }
-}
-
-fn nm_fs_chmod(path: *u8, mode: i32): i32 {
-    unsafe { return chmod(path, mode as u32) }
-}
-
-fn nm_fs_fchmod(fd: i32, mode: i32): i32 {
-    unsafe { return fchmod(fd, mode as u32) }
-}
-
-fn nm_fs_chown(path: *u8, uid: i32, gid: i32): i32 {
-    unsafe { return chown(path, uid as u32, gid as u32) }
-}
-
-fn nm_fs_fchown(fd: i32, uid: i32, gid: i32): i32 {
-    unsafe { return fchown(fd, uid as u32, gid as u32) }
-}
-
-fn nm_fs_lchown(path: *u8, uid: i32, gid: i32): i32 {
-    unsafe { return lchown(path, uid as u32, gid as u32) }
-}
-
-fn nm_fs_ftruncate(fd: i32, length: i64): i32 {
-    unsafe { return ftruncate(fd, length) }
-}
-
-fn nm_fs_access(path: *u8, mode: i32): i32 {
-    unsafe { return access(path, mode) }
-}
-
-fn nm_fs_link(existing: *u8, new_path: *u8): i32 {
-    unsafe { return link(existing, new_path) }
-}
-
-fn nm_fs_symlink(target: *u8, path: *u8): i32 {
-    unsafe { return symlink(target, path) }
-}
-
-fn nm_fs_truncate(path: *u8, length: i64): i32 {
-    unsafe { return truncate(path, length) }
-}
-
-fn nm_fs_readlink(path: *u8, buf: *u8, bufsize: i32): i32 {
-    unsafe { return readlink(path, buf, bufsize as i64) as i32 }
-}
-
-fn nm_fs_realpath(path: *u8, resolved: *u8): i32 {
-    unsafe {
-        let r = realpath(path, resolved)
-        if r as i64 == 0 as i64 { return -1 }
-        return 0
-    }
-}
-
-fn nm_fs_mkdtemp(template: *u8): *u8 {
-    unsafe { return mkdtemp(template) }
-}
-
-fn nm_fs_getcwd(buf: *u8, size: i32): i32 {
-    unsafe {
-        let r = getcwd(buf, size as i64)
-        if r as i64 == 0 as i64 { return -1 }
-        return 0
-    }
-}
-
-fn nm_fs_chdir(path: *u8): i32 {
-    unsafe { return chdir(path) }
-}
-
-fn nm_fs_fsync(fd: i32): i32 {
-    unsafe { return fsync(fd) }
-}
-
-fn nm_fs_fdatasync(fd: i32): i32 {
-    unsafe { return fdatasync(fd) }
-}
-
-fn nm_fs_copyfile(src: *u8, dst: *u8, flags: i32): i32 {
-    unsafe { return copyfile(src, dst, flags as u32) }
-}
-
-fn nm_fs_readdir_bufsize(path: *u8): i32 {
-    unsafe {
-        let dir = opendir(path)
-        if dir as i64 == 0 as i64 {
-            return -1
+        let fd = nm_fs_open(pathBuf as *u8, 0, 0)
+        if fd < 0 {
+            v8c_fci_return_int32(info, -1)
+            return
         }
 
-        let nameOff = direntNameOffset()
+        let size = lseek(fd, 0, 2)
+        lseek(fd, 0, 0)
+        if size < 0 || size > 104857600 {
+            close(fd)
+            v8c_fci_return_int32(info, -1)
+            return
+        }
+
+        let buf = malloc(size + 1)
+        if buf as i64 == 0 {
+            close(fd)
+            v8c_fci_return_int32(info, -1)
+            return
+        }
+
         var total: i64 = 0
+        while total < size {
+            let ptr = (buf as i64 + total) as *u8
+            let n = read(fd, ptr, size - total)
+            if n <= 0 { break }
+            total = total + n
+        }
+        close(fd)
 
+        let iso = v8c_fci_isolate(info)
+        let str = v8c_string_utf8_len(iso, buf, total as i32)
+        free(buf)
+        if str >= 0 {
+            v8c_fci_return(info, str)
+        }
+    }
+}
+
+// writeFileSync(path, data) → returns bytes written or -1
+fn fsWriteFile(info: *u8, _ud: *u8): void {
+    var pathBuf: [u8; 4096] = [0; 4096]
+    unsafe {
+        let plen = getStringArg(info, 0, pathBuf as *u8, 4096)
+        if plen < 0 { return }
+
+        if v8c_fci_length(info) < 2 { return }
+        let iso = v8c_fci_isolate(info)
+        let dataArg = v8c_fci_arg(info, 1)
+
+        // Get UTF-8 length first (pass null buf)
+        let dataLen = v8c_string_write_utf8(iso, dataArg, 0 as *u8, 0)
+        if dataLen <= 0 { return }
+
+        let dataBuf = malloc(dataLen as i64 + 1)
+        if dataBuf as i64 == 0 { return }
+        v8c_string_write_utf8(iso, dataArg, dataBuf, dataLen + 1)
+
+        // dataLen from null-buf query is content length (no null)
+        let writeLen = dataLen
+
+        // O_WRONLY | O_CREAT | O_TRUNC = 1 | 512 | 1024 = 1537 on macOS
+        let fd = nm_fs_open(pathBuf as *u8, 1537, 438)  // 0666
+        if fd < 0 {
+            free(dataBuf)
+            v8c_fci_return_int32(info, -1)
+            return
+        }
+
+        var written: i64 = 0
+        while written < writeLen as i64 {
+            let ptr = (dataBuf as i64 + written) as *u8
+            let n = write(fd, ptr, writeLen as i64 - written)
+            if n <= 0 { break }
+            written = written + n
+        }
+        close(fd)
+        free(dataBuf)
+        v8c_fci_return_int32(info, written as i32)
+    }
+}
+
+// statSync(path) → returns object with mode, size, mtime or -1
+fn fsStat(info: *u8, _ud: *u8): void {
+    var pathBuf: [u8; 4096] = [0; 4096]
+    unsafe {
+        let plen = getStringArg(info, 0, pathBuf as *u8, 4096)
+        if plen < 0 { return }
+
+        // struct stat on macOS arm64 is 144 bytes
+        var statBuf: [u8; 256] = [0; 256]
+        let rc = stat(pathBuf as *u8, statBuf as *u8)
+        if rc != 0 {
+            v8c_fci_return_int32(info, -1)
+            return
+        }
+
+        let iso = v8c_fci_isolate(info)
+        let ctx = v8c_fci_context(info)
+        let obj = v8c_object_new(iso)
+
+        // macOS arm64 struct stat offsets:
+        // st_mode: offset 4 (u16), st_size: offset 96 (i64)
+        // st_atimespec: offset 32 (16 bytes), st_mtimespec: offset 48, st_ctimespec: offset 64
+        let mode = (statBuf as *i32)[1] & 65535  // offset 4, mask to u16
+        let size = (statBuf as *i64)[12]  // offset 96
+
+        // mtimespec at offset 48: tv_sec (i64) + tv_nsec (i64)
+        let mtimeSec = (statBuf as *i64)[6]   // offset 48
+        let mtimeNs = (statBuf as *i64)[7]    // offset 56
+        let mtimeMs = mtimeSec as f64 * 1000.0 + mtimeNs as f64 / 1000000.0
+
+        v8c_object_set(ctx, obj, "mode", v8c_number(iso, mode as f64))
+        v8c_object_set(ctx, obj, "size", v8c_number(iso, size as f64))
+        v8c_object_set(ctx, obj, "mtimeMs", v8c_number(iso, mtimeMs))
+
+        // isFile / isDirectory helpers based on mode
+        // S_IFMT=0170000=61440, S_IFREG=0100000=32768, S_IFDIR=0040000=16384
+        let fmt = mode & 61440
+        let isFile = fmt == 32768
+        let isDir = fmt == 16384
+
+        v8c_object_set(ctx, obj, "isFile", v8c_number(iso, isFile as i32 as f64))
+        v8c_object_set(ctx, obj, "isDirectory", v8c_number(iso, isDir as i32 as f64))
+
+        v8c_fci_return(info, obj)
+    }
+}
+
+// existsSync(path) → returns 1 or 0
+fn fsExists(info: *u8, _ud: *u8): void {
+    var pathBuf: [u8; 4096] = [0; 4096]
+    unsafe {
+        let plen = getStringArg(info, 0, pathBuf as *u8, 4096)
+        if plen < 0 {
+            v8c_fci_return_int32(info, 0)
+            return
+        }
+        let rc = access(pathBuf as *u8, 0)  // F_OK = 0
+        v8c_fci_return_int32(info, (rc == 0) as i32)
+    }
+}
+
+// mkdirSync(path, mode?)
+fn fsMkdir(info: *u8, _ud: *u8): void {
+    var pathBuf: [u8; 4096] = [0; 4096]
+    unsafe {
+        let plen = getStringArg(info, 0, pathBuf as *u8, 4096)
+        if plen < 0 { return }
+        let mode = getIntArg(info, 1, 511)  // 0777
+        v8c_fci_return_int32(info, mkdir(pathBuf as *u8, mode as u32))
+    }
+}
+
+// unlinkSync(path)
+fn fsUnlink(info: *u8, _ud: *u8): void {
+    var pathBuf: [u8; 4096] = [0; 4096]
+    unsafe {
+        let plen = getStringArg(info, 0, pathBuf as *u8, 4096)
+        if plen < 0 { return }
+        v8c_fci_return_int32(info, unlink(pathBuf as *u8))
+    }
+}
+
+// rmdirSync(path)
+fn fsRmdir(info: *u8, _ud: *u8): void {
+    var pathBuf: [u8; 4096] = [0; 4096]
+    unsafe {
+        let plen = getStringArg(info, 0, pathBuf as *u8, 4096)
+        if plen < 0 { return }
+        v8c_fci_return_int32(info, rmdir(pathBuf as *u8))
+    }
+}
+
+// renameSync(oldPath, newPath)
+fn fsRename(info: *u8, _ud: *u8): void {
+    var oldBuf: [u8; 4096] = [0; 4096]
+    var newBuf: [u8; 4096] = [0; 4096]
+    unsafe {
+        let olen = getStringArg(info, 0, oldBuf as *u8, 4096)
+        let nlen = getStringArg(info, 1, newBuf as *u8, 4096)
+        if olen < 0 || nlen < 0 { return }
+        v8c_fci_return_int32(info, rename(oldBuf as *u8, newBuf as *u8))
+    }
+}
+
+// readdirSync(path) → returns array of filenames
+fn fsReaddir(info: *u8, _ud: *u8): void {
+    var pathBuf: [u8; 4096] = [0; 4096]
+    unsafe {
+        let plen = getStringArg(info, 0, pathBuf as *u8, 4096)
+        if plen < 0 { return }
+
+        let dir = opendir(pathBuf as *u8)
+        if dir as i64 == 0 { return }
+
+        let iso = v8c_fci_isolate(info)
+        let ctx = v8c_fci_context(info)
+
+        // First pass: count entries
+        var count: i32 = 0
         while true {
             let ent = readdir(dir)
-            if ent as i64 == 0 as i64 {
-                break
+            if ent as i64 == 0 { break }
+            // d_name at offset 21 on macOS arm64 (after d_ino(8) + d_seekoff(8) + d_reclen(2) + d_namlen(2) + d_type(1))
+            let name = (ent as i64 + 21) as *u8
+            if name[0] == 46 {
+                if name[1] == 0 { continue }
+                if name[1] == 46 && name[2] == 0 { continue }
             }
-
-            let namePtr = (ent as i64 + nameOff) as *u8
-            if !_isDotEntry(namePtr) {
-                total = total + strlen(namePtr) + 1
-            }
+            count = count + 1
         }
-
         closedir(dir)
-        return total as i32
-    }
-}
 
-fn nm_fs_readdir(path: *u8, buf: *u8, bufsize: i32): i32 {
-    unsafe {
-        let dir = opendir(path)
-        if dir as i64 == 0 as i64 {
-            return -1
-        }
+        // Second pass: build array
+        let dir2 = opendir(pathBuf as *u8)
+        if dir2 as i64 == 0 { return }
 
-        let nameOff = direntNameOffset()
-        var used: i64 = 0
-        let limit = bufsize as i64
-
+        let arr = v8c_array_new(iso, count)
+        var idx: u32 = 0
         while true {
-            let ent = readdir(dir)
-            if ent as i64 == 0 as i64 {
-                break
+            let ent = readdir(dir2)
+            if ent as i64 == 0 { break }
+            let name = (ent as i64 + 21) as *u8
+            if name[0] == 46 {
+                if name[1] == 0 { continue }
+                if name[1] == 46 && name[2] == 0 { continue }
             }
-
-            let namePtr = (ent as i64 + nameOff) as *u8
-            if _isDotEntry(namePtr) {
-                continue
-            }
-
-            let nameLen = strlen(namePtr)
-            if used + nameLen + 1 > limit {
-                closedir(dir)
-                return -1
-            }
-
-            var i: i64 = 0
-            while i < nameLen {
-                buf[used + i] = namePtr[i]
-                i = i + 1
-            }
-            buf[used + nameLen] = 0
-            used = used + nameLen + 1
+            let nameLen = strlen(name) as i32
+            let str = v8c_string_utf8_len(iso, name, nameLen)
+            v8c_object_set_index(ctx, arr, idx, str)
+            idx = idx + 1
         }
-
-        closedir(dir)
-        return used as i32
+        closedir(dir2)
+        v8c_fci_return(info, arr)
     }
 }
 
-fn nm_fs_errno(): i32 {
-    return getErrno()
-}
-
-fn nm_fs_strerror(errnum: i32, buf: *u8, bufsize: i32) {
+// realpathSync(path) → resolved path string
+fn fsRealpath(info: *u8, _ud: *u8): void {
+    var pathBuf: [u8; 4096] = [0; 4096]
     unsafe {
-        let msg = strerror(errnum)
-        let len = strlen(msg)
-        var n = len
-        let limit = (bufsize - 1) as i64
-        if n >= limit { n = limit }
-        var i: i64 = 0
-        while i < n {
-            buf[i] = msg[i]
-            i = i + 1
+        let plen = getStringArg(info, 0, pathBuf as *u8, 4096)
+        if plen < 0 { return }
+
+        var resolved: [u8; 4096] = [0; 4096]
+        let r = realpath(pathBuf as *u8, resolved as *u8)
+        if r as i64 != 0 {
+            v8c_fci_return_string(info, resolved as *u8)
         }
-        buf[n] = 0
     }
 }
 
-fn _isDotEntry(name: *u8): bool {
+// chmodSync(path, mode)
+fn fsChmod(info: *u8, _ud: *u8): void {
+    var pathBuf: [u8; 4096] = [0; 4096]
     unsafe {
-        if name[0] == 46 {
-            if name[1] == 0 {
-                return true
-            }
-            if name[1] == 46 && name[2] == 0 {
-                return true
-            }
-        }
-        return false
+        let plen = getStringArg(info, 0, pathBuf as *u8, 4096)
+        if plen < 0 { return }
+        let mode = getIntArg(info, 1, 0)
+        v8c_fci_return_int32(info, chmod(pathBuf as *u8, mode as u32))
+    }
+}
+
+fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void {
+    unsafe {
+        let fnVal = v8c_function_new(ctx, cb, 0 as *u8)
+        v8c_object_set(ctx, obj, name, fnVal)
+    }
+}
+
+// Binding init — populates exports for internalBinding('fs')
+fn nm_init_fs(iso: *u8, ctx: *u8, exports: i32): void {
+    unsafe {
+        setMethod(ctx, exports, "readFile", fsReadFile as *u8)
+        setMethod(ctx, exports, "writeFile", fsWriteFile as *u8)
+        setMethod(ctx, exports, "stat", fsStat as *u8)
+        setMethod(ctx, exports, "exists", fsExists as *u8)
+        setMethod(ctx, exports, "mkdir", fsMkdir as *u8)
+        setMethod(ctx, exports, "unlink", fsUnlink as *u8)
+        setMethod(ctx, exports, "rmdir", fsRmdir as *u8)
+        setMethod(ctx, exports, "rename", fsRename as *u8)
+        setMethod(ctx, exports, "readdir", fsReaddir as *u8)
+        setMethod(ctx, exports, "realpath", fsRealpath as *u8)
+        setMethod(ctx, exports, "chmod", fsChmod as *u8)
     }
 }

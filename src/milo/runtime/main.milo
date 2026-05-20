@@ -22,6 +22,7 @@ extern fn nm_internal_binding(info: *u8, ud: *u8): void
 // --- Binding init functions ---
 extern fn nm_init_os(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_env(iso: *u8, ctx: *u8, exports: i32): void
+extern fn nm_init_fs(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void
 
 // --- v8capi FFI ---
@@ -250,6 +251,7 @@ fn registerBuiltinBindings(): void {
     unsafe {
         nm_binding_register("os", nm_init_os as *u8)
         nm_binding_register("env", nm_init_env as *u8)
+        nm_binding_register("fs", nm_init_fs as *u8)
         nm_binding_register("process_methods", nm_init_process_methods as *u8)
     }
 }
@@ -468,6 +470,38 @@ fn runBootstrap(iso: *u8, ctx: *u8): i32 {
       };
     },
     process() { return internalBinding('process_methods'); },
+    fs() {
+      const b = internalBinding('fs');
+      return {
+        readFileSync(path, opts) {
+          const enc = typeof opts === 'string' ? opts : (opts && opts.encoding);
+          const r = b.readFile(String(path));
+          if (r === -1) throw new Error('ENOENT: no such file: ' + path);
+          return r;
+        },
+        writeFileSync(path, data) {
+          const r = b.writeFile(String(path), String(data));
+          if (r === -1) throw new Error('EIO: write failed: ' + path);
+        },
+        statSync(path) {
+          const s = b.stat(String(path));
+          if (s === -1) throw new Error('ENOENT: no such file: ' + path);
+          return { ...s, isFile: () => !!s.isFile, isDirectory: () => !!s.isDirectory };
+        },
+        existsSync(path) { return !!b.exists(String(path)); },
+        mkdirSync(path, opts) {
+          const mode = (opts && opts.mode) || 0o777;
+          const r = b.mkdir(String(path), mode);
+          if (r !== 0) throw new Error('EEXIST: mkdir failed: ' + path);
+        },
+        unlinkSync(path) { b.unlink(String(path)); },
+        rmdirSync(path) { b.rmdir(String(path)); },
+        renameSync(old, n) { b.rename(String(old), String(n)); },
+        readdirSync(path) { return b.readdir(String(path)) || []; },
+        realpathSync(path) { return b.realpath(String(path)); },
+        chmodSync(path, mode) { b.chmod(String(path), mode); },
+      };
+    },
   };
   globalThis.require = function require(id) {
     if (moduleCache[id]) return moduleCache[id];

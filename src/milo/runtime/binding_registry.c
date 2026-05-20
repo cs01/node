@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 typedef void (*binding_init_fn)(void* iso, void* ctx, int32_t exports);
 
@@ -48,4 +50,9 @@ void nm_set_lib_dir(const char* dir) {
 
 const char* nm_get_lib_dir(void) {
     return lib_dir;
+}
+
+// Wrapper for variadic open() — ARM64 variadic ABI differs from regular fn ABI
+int nm_fs_open(const char* path, int flags, int mode) {
+    return open(path, flags, mode);
 }
