@@ -111,7 +111,7 @@ fn i64_to_str(val: i64, buf: *u8, _bufsize: i32): i32 {
     }
 }
 
-fn main(argc: i32, argv: *i64): i32 {
+fn milo_node_main(argc: i32, argv: *i64): i32 {
     unsafe {
         // argv is char** — on 64-bit, each element is a pointer (i64)
         var script: *u8 = 0 as *u8
