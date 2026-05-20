@@ -1,0 +1,182 @@
+// Milo runtime spine — minimal V8 bootstrap via v8capi
+// Phase 3 gate: boot V8, eval script from -e flag, print result
+
+// --- POSIX ---
+extern fn write(fd: i32, buf: *u8, len: i64): i64
+extern fn exit(code: i32): void
+extern fn strcmp(a: *u8, b: *u8): i32
+extern fn strlen(s: *u8): i64
+
+// --- v8capi FFI ---
+extern fn v8c_platform_init(exec_path: *u8): i32
+extern fn v8c_platform_shutdown(): void
+extern fn v8c_isolate_new(): *u8
+extern fn v8c_isolate_dispose(iso: *u8): void
+extern fn v8c_isolate_enter(iso: *u8): void
+extern fn v8c_isolate_exit(iso: *u8): void
+extern fn v8c_handle_scope_new(iso: *u8): *u8
+extern fn v8c_handle_scope_delete(hs: *u8): void
+extern fn v8c_context_new(iso: *u8): *u8
+extern fn v8c_context_dispose(ctx: *u8): void
+extern fn v8c_context_enter(ctx: *u8): void
+extern fn v8c_context_exit(ctx: *u8): void
+extern fn v8c_script_compile_run(ctx: *u8, source: *u8, source_len: i32, filename: *u8): i32
+extern fn v8c_string_write_utf8(iso: *u8, val: i32, buf: *u8, bufsize: i32): i32
+extern fn v8c_to_double(iso: *u8, val: i32, out: *f64): i32
+extern fn v8c_value_is_string(iso: *u8, val: i32): i32
+extern fn v8c_value_is_number(iso: *u8, val: i32): i32
+extern fn v8c_value_is_null_or_undefined(iso: *u8, val: i32): i32
+
+fn print_str(s: *u8): void {
+    unsafe {
+        let len = strlen(s)
+        write(1, s, len)
+    }
+}
+
+fn print_val(iso: *u8, val: i32): void {
+    unsafe {
+        if v8c_value_is_null_or_undefined(iso, val) != 0 {
+            print_str("undefined\n")
+            return
+        }
+
+        if v8c_value_is_string(iso, val) != 0 {
+            var buf: [u8; 4096] = [0; 4096]
+            let len = v8c_string_write_utf8(iso, val, buf as *u8, 4096)
+            if len > 0 {
+                write(1, buf as *u8, len as i64)
+                write(1, "\n", 1)
+            }
+            return
+        }
+
+        if v8c_value_is_number(iso, val) != 0 {
+            var d: f64 = 0.0
+            v8c_to_double(iso, val, &d)
+            // Simple integer check — if it's a whole number, print as int
+            let i = d as i64
+            if i as f64 == d {
+                var nbuf: [u8; 32] = [0; 32]
+                let len = i64_to_str(i, nbuf as *u8, 32)
+                write(1, nbuf as *u8, len as i64)
+                write(1, "\n", 1)
+            } else {
+                // For non-integer, just show "number"
+                print_str("<number>\n")
+            }
+            return
+        }
+
+        print_str("[object]\n")
+    }
+}
+
+fn i64_to_str(val: i64, buf: *u8, _bufsize: i32): i32 {
+    unsafe {
+        var n = val
+        if n == 0 {
+            buf[0] = 48
+            return 1
+        }
+
+        var neg = false
+        if n < 0 {
+            neg = true
+            n = 0 - n
+        }
+
+        var tmp: [u8; 32] = [0; 32]
+        var i: i64 = 0
+        while n > 0 {
+            tmp[i] = (48 + (n % 10) as i32) as u8
+            n = n / 10
+            i = i + 1
+        }
+
+        var pos: i64 = 0
+        if neg {
+            buf[0] = 45
+            pos = 1
+        }
+
+        var j = i - 1
+        while j >= 0 {
+            buf[pos] = tmp[j]
+            pos = pos + 1
+            j = j - 1
+        }
+
+        return pos as i32
+    }
+}
+
+fn main(argc: i32, argv: *i64): i32 {
+    unsafe {
+        // argv is char** — on 64-bit, each element is a pointer (i64)
+        var script: *u8 = 0 as *u8
+        var i: i64 = 1
+        let ac = argc as i64
+        while i < ac {
+            let arg = argv[i] as *u8
+            if strcmp(arg, "-e") == 0 {
+                if i + 1 < ac {
+                    script = argv[i + 1] as *u8
+                }
+                break
+            }
+            if strcmp(arg, "--eval") == 0 {
+                if i + 1 < ac {
+                    script = argv[i + 1] as *u8
+                }
+                break
+            }
+            i = i + 1
+        }
+
+        if script as i64 == 0 {
+            print_str("usage: milo-node -e '<script>'\n")
+            return 1
+        }
+
+        // Boot V8
+        let exec_path = argv[0] as *u8
+        if v8c_platform_init(exec_path) != 0 {
+            print_str("error: v8c_platform_init failed\n")
+            return 1
+        }
+
+        let iso = v8c_isolate_new()
+        if iso as i64 == 0 {
+            print_str("error: v8c_isolate_new failed\n")
+            return 1
+        }
+
+        v8c_isolate_enter(iso)
+        let hs = v8c_handle_scope_new(iso)
+        let ctx = v8c_context_new(iso)
+        v8c_context_enter(ctx)
+
+        // Compile and run
+        let script_len = strlen(script) as i32
+        let result = v8c_script_compile_run(ctx, script, script_len, "[eval]")
+
+        // Print result
+        if result >= 0 {
+            print_val(iso, result)
+        } else {
+            print_str("error: script compilation/execution failed\n")
+        }
+
+        // Cleanup
+        v8c_context_exit(ctx)
+        v8c_handle_scope_delete(hs)
+        v8c_context_dispose(ctx)
+        v8c_isolate_exit(iso)
+        v8c_isolate_dispose(iso)
+        v8c_platform_shutdown()
+
+        if result >= 0 { return 0 }
+        return 1
+    }
+}
