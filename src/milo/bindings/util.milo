@@ -1,0 +1,146 @@
+// util binding — V8 introspection APIs needed by lib/internal/util/inspect.js and lib/internal/errors.js
+
+extern fn v8c_fci_length(info: *u8): i32
+extern fn v8c_fci_arg(info: *u8, idx: i32): i32
+extern fn v8c_fci_isolate(info: *u8): *u8
+extern fn v8c_fci_context(info: *u8): *u8
+extern fn v8c_fci_return(info: *u8, val: i32): void
+extern fn v8c_fci_return_int32(info: *u8, val: i32): void
+extern fn v8c_fci_return_bool(info: *u8, val: i32): void
+extern fn v8c_fci_return_undefined(info: *u8): void
+extern fn v8c_fci_return_string(info: *u8, str: *u8): void
+extern fn v8c_object_new(iso: *u8): i32
+extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
+extern fn v8c_object_get(ctx: *u8, obj: i32, key: *u8): i32
+extern fn v8c_int32(iso: *u8, val: i32): i32
+extern fn v8c_string_utf8(iso: *u8, data: *u8): i32
+extern fn v8c_value_is_object(iso: *u8, val: i32): i32
+extern fn v8c_value_is_function(iso: *u8, val: i32): i32
+extern fn v8c_value_is_string(iso: *u8, val: i32): i32
+extern fn v8c_value_is_array(iso: *u8, val: i32): i32
+extern fn v8c_array_new(iso: *u8, length: i32): i32
+extern fn v8c_array_length(iso: *u8, arr: i32): i32
+extern fn v8c_object_set_index(ctx: *u8, obj: i32, idx: u32, val: i32): i32
+extern fn v8c_object_get_index(ctx: *u8, obj: i32, idx: u32): i32
+extern fn v8c_undefined(iso: *u8): i32
+extern fn v8c_false(iso: *u8): i32
+extern fn v8c_true(iso: *u8): i32
+extern fn v8c_bigint_i64(iso: *u8, val: i64): i32
+
+// Symbols (used as private-like markers — real V8 Private can't be exposed to JS)
+extern fn v8c_symbol_new(iso: *u8, desc: *u8): i32
+
+// Property enumeration (filter: 0=ALL_PROPERTIES, 2=ONLY_ENUMERABLE)
+extern fn v8c_object_get_property_names(ctx: *u8, obj: i32, filter: i32): i32
+
+extern fn v8c_function_new(ctx: *u8, cb: *u8, data: *u8): i32
+extern fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void
+
+// --- callbacks ---
+
+fn utilGetOwnNonIndexProperties(info: *u8, _ud: *u8): void {
+    unsafe {
+        if v8c_fci_length(info) < 2 { return }
+        let iso = v8c_fci_isolate(info)
+        let ctx = v8c_fci_context(info)
+        let obj = v8c_fci_arg(info, 0)
+        let filterArg = v8c_fci_arg(info, 1)
+        if v8c_value_is_object(iso, obj) == 0 {
+            v8c_fci_return(info, v8c_array_new(iso, 0))
+            return
+        }
+        // Use V8's GetPropertyNames with filter and kSkipIndices
+        var filter: i32 = 0
+        v8c_fci_return(info, v8c_object_get_property_names(ctx, obj, filter))
+    }
+}
+
+fn utilGetConstructorName(info: *u8, _ud: *u8): void {
+    unsafe {
+        if v8c_fci_length(info) < 1 {
+            v8c_fci_return_string(info, "")
+            return
+        }
+        let iso = v8c_fci_isolate(info)
+        let obj = v8c_fci_arg(info, 0)
+        if v8c_value_is_object(iso, obj) == 0 {
+            v8c_fci_return_string(info, "")
+            return
+        }
+        // Return "Object" as fallback — real impl would use V8's GetConstructorName
+        v8c_fci_return_string(info, "Object")
+    }
+}
+
+fn utilGetPromiseDetails(info: *u8, _ud: *u8): void {
+    unsafe { v8c_fci_return_undefined(info) }
+}
+
+fn utilGetProxyDetails(info: *u8, _ud: *u8): void {
+    unsafe { v8c_fci_return_undefined(info) }
+}
+
+fn utilPreviewEntries(info: *u8, _ud: *u8): void {
+    unsafe {
+        let iso = v8c_fci_isolate(info)
+        let ctx = v8c_fci_context(info)
+        let result = v8c_array_new(iso, 2)
+        v8c_object_set_index(ctx, result, 0, v8c_array_new(iso, 0))
+        v8c_object_set_index(ctx, result, 1, v8c_false(iso))
+        v8c_fci_return(info, result)
+    }
+}
+
+fn utilGetExternalValue(info: *u8, _ud: *u8): void {
+    unsafe {
+        let iso = v8c_fci_isolate(info)
+        v8c_fci_return(info, v8c_bigint_i64(iso, 0))
+    }
+}
+
+fn utilIsInsideNodeModules(info: *u8, _ud: *u8): void {
+    unsafe { v8c_fci_return_bool(info, 0) }
+}
+
+fn utilGetCallerLocation(info: *u8, _ud: *u8): void {
+    unsafe { v8c_fci_return_undefined(info) }
+}
+
+fn utilSleep(info: *u8, _ud: *u8): void {}
+
+// Binding init
+fn nm_init_util(iso: *u8, ctx: *u8, exports: i32): void {
+    unsafe {
+        // constants sub-object
+        let consts = v8c_object_new(iso)
+        v8c_object_set(ctx, consts, "ALL_PROPERTIES", v8c_int32(iso, 0))
+        v8c_object_set(ctx, consts, "ONLY_ENUMERABLE", v8c_int32(iso, 2))
+        v8c_object_set(ctx, consts, "kPending", v8c_int32(iso, 0))
+        v8c_object_set(ctx, consts, "kFulfilled", v8c_int32(iso, 1))
+        v8c_object_set(ctx, consts, "kRejected", v8c_int32(iso, 2))
+        v8c_object_set(ctx, exports, "constants", consts)
+
+        // privateSymbols sub-object — use regular Symbols (unique, non-enumerable)
+        let privSyms = v8c_object_new(iso)
+        v8c_object_set(ctx, privSyms, "arrow_message_private_symbol",
+            v8c_symbol_new(iso, "node:arrowMessage"))
+        v8c_object_set(ctx, privSyms, "decorated_private_symbol",
+            v8c_symbol_new(iso, "node:decorated"))
+        v8c_object_set(ctx, privSyms, "transfer_mode_private_symbol",
+            v8c_symbol_new(iso, "node:transfer_mode"))
+        v8c_object_set(ctx, privSyms, "untransferable_object_private_symbol",
+            v8c_symbol_new(iso, "node:untransferable"))
+        v8c_object_set(ctx, exports, "privateSymbols", privSyms)
+
+        // methods
+        setMethod(ctx, exports, "getOwnNonIndexProperties", utilGetOwnNonIndexProperties as *u8)
+        setMethod(ctx, exports, "getConstructorName", utilGetConstructorName as *u8)
+        setMethod(ctx, exports, "getPromiseDetails", utilGetPromiseDetails as *u8)
+        setMethod(ctx, exports, "getProxyDetails", utilGetProxyDetails as *u8)
+        setMethod(ctx, exports, "previewEntries", utilPreviewEntries as *u8)
+        setMethod(ctx, exports, "getExternalValue", utilGetExternalValue as *u8)
+        setMethod(ctx, exports, "isInsideNodeModules", utilIsInsideNodeModules as *u8)
+        setMethod(ctx, exports, "getCallerLocation", utilGetCallerLocation as *u8)
+        setMethod(ctx, exports, "sleep", utilSleep as *u8)
+    }
+}

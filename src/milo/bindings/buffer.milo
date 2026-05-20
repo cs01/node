@@ -1,0 +1,56 @@
+// buffer binding — ArrayBuffer allocation for Node's Buffer implementation
+
+extern fn v8c_fci_length(info: *u8): i32
+extern fn v8c_fci_arg(info: *u8, idx: i32): i32
+extern fn v8c_fci_isolate(info: *u8): *u8
+extern fn v8c_fci_context(info: *u8): *u8
+extern fn v8c_fci_return(info: *u8, val: i32): void
+extern fn v8c_fci_return_undefined(info: *u8): void
+extern fn v8c_to_int32(iso: *u8, val: i32, out: *i32): i32
+extern fn v8c_arraybuffer_new(iso: *u8, size: i64): i32
+extern fn v8c_object_new(iso: *u8): i32
+extern fn v8c_object_set(ctx: *u8, obj: i32, key: *u8, val: i32): i32
+extern fn v8c_int32(iso: *u8, val: i32): i32
+extern fn v8c_function_new(ctx: *u8, cb: *u8, data: *u8): i32
+extern fn setMethod(ctx: *u8, obj: i32, name: *u8, cb: *u8): void
+
+// createUnsafeArrayBuffer(size) — allocates uninitialized ArrayBuffer
+fn bufCreateUnsafeArrayBuffer(info: *u8, _ud: *u8): void {
+    unsafe {
+        if v8c_fci_length(info) < 1 { return }
+        let iso = v8c_fci_isolate(info)
+        let arg = v8c_fci_arg(info, 0)
+        var size: i32 = 0
+        v8c_to_int32(iso, arg, &size)
+        if size < 0 { size = 0 }
+        let ab = v8c_arraybuffer_new(iso, size as i64)
+        v8c_fci_return(info, ab)
+    }
+}
+
+// setDetachKey — stub (used for transfer semantics we don't support yet)
+fn bufSetDetachKey(info: *u8, _ud: *u8): void {
+    unsafe { v8c_fci_return_undefined(info) }
+}
+
+// Stubs for encoding functions — return 0 bytes written
+fn bufNoopWrite(info: *u8, _ud: *u8): void {
+    unsafe { v8c_fci_return(info, v8c_int32(v8c_fci_isolate(info), 0)) }
+}
+
+fn nm_init_buffer(iso: *u8, ctx: *u8, exports: i32): void {
+    unsafe {
+        setMethod(ctx, exports, "createUnsafeArrayBuffer", bufCreateUnsafeArrayBuffer as *u8)
+        setMethod(ctx, exports, "setDetachKey", bufSetDetachKey as *u8)
+        // Encoding write stubs — Buffer needs these but we stub for now
+        setMethod(ctx, exports, "utf8Write", bufNoopWrite as *u8)
+        setMethod(ctx, exports, "utf8WriteStatic", bufNoopWrite as *u8)
+        setMethod(ctx, exports, "latin1Write", bufNoopWrite as *u8)
+        setMethod(ctx, exports, "latin1WriteStatic", bufNoopWrite as *u8)
+        setMethod(ctx, exports, "asciiWrite", bufNoopWrite as *u8)
+        setMethod(ctx, exports, "hexWrite", bufNoopWrite as *u8)
+        setMethod(ctx, exports, "ucs2Write", bufNoopWrite as *u8)
+        setMethod(ctx, exports, "base64Write", bufNoopWrite as *u8)
+        setMethod(ctx, exports, "base64urlWrite", bufNoopWrite as *u8)
+    }
+}

@@ -18,6 +18,7 @@
 static constexpr int kHandleTableSlot = 0;
 // slot 1 = TemplateTable (used implicitly as kHandleTableSlot + 1)
 static constexpr int kActiveContextSlot = 2;
+static constexpr int kPrivateTableSlot = 3;
 static constexpr int kMaxSlots = 65536;
 
 struct HandleTable {
@@ -83,6 +84,24 @@ struct TemplateTable {
     }
 };
 
+// Private symbol table — separate from Value handles since Private extends Data, not Value
+struct PrivateTable {
+    v8::Isolate* isolate;
+    std::vector<v8::Global<v8::Private>> privates;
+
+    explicit PrivateTable(v8::Isolate* iso) : isolate(iso) {}
+
+    int32_t store(v8::Local<v8::Private> p) {
+        int32_t id = static_cast<int32_t>(privates.size());
+        privates.emplace_back(isolate, p);
+        return id;
+    }
+
+    v8::Local<v8::Private> get(int32_t slot) {
+        return privates[slot].Get(isolate);
+    }
+};
+
 static HandleTable* get_ht(v8c_isolate* iso) {
     auto* i = reinterpret_cast<v8::Isolate*>(iso);
     return static_cast<HandleTable*>(i->GetData(kHandleTableSlot));
@@ -95,6 +114,15 @@ static TemplateTable* get_tt(v8c_isolate* iso) {
 
 static HandleTable* get_ht_from_v8(v8::Isolate* iso) {
     return static_cast<HandleTable*>(iso->GetData(kHandleTableSlot));
+}
+
+static PrivateTable* get_pt(v8c_isolate* iso) {
+    auto* i = reinterpret_cast<v8::Isolate*>(iso);
+    return static_cast<PrivateTable*>(i->GetData(kPrivateTableSlot));
+}
+
+static PrivateTable* get_pt_from_v8(v8::Isolate* iso) {
+    return static_cast<PrivateTable*>(iso->GetData(kPrivateTableSlot));
 }
 
 #define ISO(x) (reinterpret_cast<v8::Isolate*>(x))
@@ -146,8 +174,10 @@ extern "C" v8c_isolate* v8c_isolate_new(void) {
 
     auto* ht = new HandleTable(iso);
     auto* tt = new TemplateTable(iso);
+    auto* pt = new PrivateTable(iso);
     iso->SetData(kHandleTableSlot, ht);
     iso->SetData(kHandleTableSlot + 1, tt);
+    iso->SetData(kPrivateTableSlot, pt);
 
     return reinterpret_cast<v8c_isolate*>(iso);
 }
@@ -156,9 +186,11 @@ extern "C" void v8c_isolate_dispose(v8c_isolate* iso) {
     auto* i = ISO(iso);
     auto* ht = get_ht(iso);
     auto* tt = get_tt(iso);
+    auto* pt = get_pt(iso);
     auto* alloc = i->GetArrayBufferAllocator();
     delete ht;
     delete tt;
+    delete pt;
     i->Dispose();
     delete alloc;
 }
@@ -1283,6 +1315,83 @@ extern "C" v8c_value v8c_symbol_for(v8c_isolate* iso, const char* key) {
     auto* i = ISO(iso);
     auto k = v8::String::NewFromUtf8(i, key).ToLocalChecked();
     return wrap(i, v8::Symbol::For(i, k));
+}
+
+// ---------------------------------------------------------------------------
+// Private symbols — stored in separate PrivateTable, slots offset by 0x40000000
+// ---------------------------------------------------------------------------
+
+static constexpr int32_t kPrivateSlotOffset = 0x40000000;
+
+extern "C" v8c_value v8c_private_new(v8c_isolate* iso, const char* description) {
+    auto* i = ISO(iso);
+    auto* pt = get_pt(iso);
+    v8::Local<v8::Private> priv;
+    if (description) {
+        auto desc = v8::String::NewFromUtf8(i, description).ToLocalChecked();
+        priv = v8::Private::New(i, desc);
+    } else {
+        priv = v8::Private::New(i);
+    }
+    int32_t slot = pt->store(priv);
+    return {slot + kPrivateSlotOffset};
+}
+
+extern "C" int v8c_private_set(v8c_context* ctx, v8c_value obj,
+                                v8c_value priv, v8c_value val) {
+    auto* i = ctx_isolate(ctx);
+    auto context = ctx_local(ctx);
+    auto lo = unwrap(i, obj);
+    auto lv = unwrap(i, val);
+    if (lo.IsEmpty() || !lo->IsObject()) return -1;
+    auto* pt = get_pt_from_v8(i);
+    auto p = pt->get(priv.slot - kPrivateSlotOffset);
+    auto result = lo.As<v8::Object>()->SetPrivate(context, p, lv);
+    return result.IsJust() ? 0 : -1;
+}
+
+extern "C" v8c_value v8c_private_get(v8c_context* ctx, v8c_value obj,
+                                      v8c_value priv) {
+    auto* i = ctx_isolate(ctx);
+    auto context = ctx_local(ctx);
+    auto lo = unwrap(i, obj);
+    if (lo.IsEmpty() || !lo->IsObject()) return V8C_VALUE_INVALID;
+    auto* pt = get_pt_from_v8(i);
+    auto p = pt->get(priv.slot - kPrivateSlotOffset);
+    v8::MaybeLocal<v8::Value> result = lo.As<v8::Object>()->GetPrivate(context, p);
+    if (result.IsEmpty()) return V8C_VALUE_INVALID;
+    return wrap(i, result.ToLocalChecked());
+}
+
+extern "C" int v8c_private_has(v8c_context* ctx, v8c_value obj, v8c_value priv) {
+    auto* i = ctx_isolate(ctx);
+    auto context = ctx_local(ctx);
+    auto lo = unwrap(i, obj);
+    if (lo.IsEmpty() || !lo->IsObject()) return 0;
+    auto* pt = get_pt_from_v8(i);
+    auto p = pt->get(priv.slot - kPrivateSlotOffset);
+    auto result = lo.As<v8::Object>()->HasPrivate(context, p);
+    return result.IsJust() && result.FromJust() ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// Object property enumeration
+// ---------------------------------------------------------------------------
+
+extern "C" v8c_value v8c_object_get_property_names(v8c_context* ctx,
+                                                     v8c_value obj,
+                                                     int filter) {
+    auto* i = ctx_isolate(ctx);
+    auto context = ctx_local(ctx);
+    auto lo = unwrap(i, obj);
+    if (lo.IsEmpty() || !lo->IsObject()) return V8C_VALUE_INVALID;
+
+    v8::PropertyFilter pf = static_cast<v8::PropertyFilter>(filter);
+    v8::MaybeLocal<v8::Array> names = lo.As<v8::Object>()->GetPropertyNames(
+        context, v8::KeyCollectionMode::kOwnOnly, pf,
+        v8::IndexFilter::kSkipIndices);
+    if (names.IsEmpty()) return V8C_VALUE_INVALID;
+    return wrap(i, names.ToLocalChecked());
 }
 
 // ---------------------------------------------------------------------------

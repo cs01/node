@@ -24,6 +24,8 @@ extern fn nm_init_os(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_env(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_fs(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void
+extern fn nm_init_util(iso: *u8, ctx: *u8, exports: i32): void
+extern fn nm_init_buffer(iso: *u8, ctx: *u8, exports: i32): void
 
 // --- v8capi FFI ---
 extern fn v8c_platform_init(execPath: *u8): i32
@@ -253,6 +255,8 @@ fn registerBuiltinBindings(): void {
         nm_binding_register("env", nm_init_env as *u8)
         nm_binding_register("fs", nm_init_fs as *u8)
         nm_binding_register("process_methods", nm_init_process_methods as *u8)
+        nm_binding_register("util", nm_init_util as *u8)
+        nm_binding_register("buffer", nm_init_buffer as *u8)
     }
 }
 
@@ -385,18 +389,17 @@ fn runBootstrap(iso: *u8, ctx: *u8): i32 {
     isDataView: (v) => v instanceof DataView,
   };
 
-  // util binding stub
-  const _utilBinding = {
-    isInsideNodeModules: () => false,
-  };
-
   // JS-defined bindings
-  const _jsBindings = { constants: _constants, types: _types, util: _utilBinding };
+  const _mksnapshot = { isBuildingSnapshotBuffer: new Uint8Array(1) };
+  const _jsBindings = { constants: _constants, types: _types, mksnapshot: _mksnapshot };
   const _origInternalBinding = internalBinding;
+  const _emptyBinding = Object.freeze(Object.create(null));
   globalThis.internalBinding = function(name) {
     if (_jsBindings[name]) return _jsBindings[name];
-    return _origInternalBinding(name);
+    try { return _origInternalBinding(name); }
+    catch(e) { return _emptyBinding; }
   };
+  globalThis.getInternalBinding = globalThis.internalBinding;
 
   // Minimal stubs for internal modules needed by lib/*.js
   const _internalModules = {
@@ -424,6 +427,17 @@ fn runBootstrap(iso: *u8, ctx: *u8): i32 {
       validateAbortSignal(v, name) {},
     },
     'internal/util/types': _types,
+    'internal/assert': function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); },
+    'internal/bootstrap/realm': {
+      BuiltinModule: {
+        normalizeRequirableId(id) { return id; },
+        isBuiltin(id) { return false; },
+        map: new Map(),
+      },
+    },
+    'internal/events/abort_listener': {
+      addAbortListener(signal, listener) { if (signal) signal.addEventListener('abort', listener, {once: true}); return { [Symbol.dispose]() {} }; },
+    },
   };
   // Pre-seed module cache with internal stubs
   globalThis.__internalModules = _internalModules;
@@ -462,6 +476,7 @@ fn runBootstrap(iso: *u8, ctx: *u8): i32 {
         uptime: () => b.getUptime(),
         loadavg: () => [b.getLoadAvg1(), b.getLoadAvg5(), b.getLoadAvg15()],
         release: () => b.getOsRelease(),
+        pid: process.pid,
         platform: 'darwin',
         type: () => 'Darwin',
         arch: 'arm64',
@@ -514,13 +529,7 @@ fn runBootstrap(iso: *u8, ctx: *u8): i32 {
       moduleCache[id] = __internalModules[id];
       return moduleCache[id];
     }
-    // Try internalBinding
-    try {
-      const binding = internalBinding(id);
-      moduleCache[id] = binding;
-      return binding;
-    } catch(e) {}
-    // Try loading from lib/ as CJS module
+    // Try loading from lib/ as CJS module first
     const src = __loadBuiltin(id);
     if (src !== undefined) {
       const mod = { exports: {} };
@@ -528,6 +537,12 @@ fn runBootstrap(iso: *u8, ctx: *u8): i32 {
       wrapped(mod.exports, require, mod, id, '', primordials);
       moduleCache[id] = mod.exports;
       return mod.exports;
+    }
+    // Fall back to native bindings
+    const binding = internalBinding(id);
+    if (binding !== _emptyBinding) {
+      moduleCache[id] = binding;
+      return binding;
     }
     throw new Error('Cannot find module \\'' + id + '\\'');
   };

@@ -368,6 +368,24 @@ v8c_value v8c_symbol_new(v8c_isolate* iso, const char* description);
 v8c_value v8c_symbol_for(v8c_isolate* iso, const char* key);
 
 // ---------------------------------------------------------------------------
+// Private (V8 Private symbols — invisible to JS, used for internal metadata)
+// ---------------------------------------------------------------------------
+
+v8c_value v8c_private_new(v8c_isolate* iso, const char* description);
+int       v8c_private_set(v8c_context* ctx, v8c_value obj,
+                           v8c_value priv, v8c_value val);
+v8c_value v8c_private_get(v8c_context* ctx, v8c_value obj, v8c_value priv);
+int       v8c_private_has(v8c_context* ctx, v8c_value obj, v8c_value priv);
+
+// ---------------------------------------------------------------------------
+// Object property enumeration
+// ---------------------------------------------------------------------------
+
+// filter: 0 = ALL_PROPERTIES, 2 = ONLY_ENUMERABLE (matches V8 PropertyFilter)
+v8c_value v8c_object_get_property_names(v8c_context* ctx, v8c_value obj,
+                                         int filter);
+
+// ---------------------------------------------------------------------------
 // Property attributes
 // ---------------------------------------------------------------------------
 
