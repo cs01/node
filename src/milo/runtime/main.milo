@@ -298,7 +298,7 @@ fn setup_process_object(iso: *u8, ctx: *u8, argc: i32, argv: *i64): i32 {
         }
         v8c_object_set(ctx, proc, "argv", arr)
 
-        // process.cwd() / process.exit()
+        // process.cwd() / process.exit() / process.env proxy
         let cwd_fn = v8c_function_new(ctx, process_cwd as *u8, 0 as *u8)
         v8c_object_set(ctx, proc, "cwd", cwd_fn)
         let exit_fn = v8c_function_new(ctx, process_exit as *u8, 0 as *u8)
@@ -364,8 +364,32 @@ fn run_bootstrap(iso: *u8, ctx: *u8): i32 {
       COPYFILE_EXCL:1, COPYFILE_FICLONE:2,
     },
   };
+  // types binding — V8 type checks via JS
+  const _types = {
+    isDate: (v) => v instanceof Date,
+    isMap: (v) => v instanceof Map,
+    isSet: (v) => v instanceof Set,
+    isWeakMap: (v) => v instanceof WeakMap,
+    isWeakSet: (v) => v instanceof WeakSet,
+    isRegExp: (v) => v instanceof RegExp,
+    isPromise: (v) => v instanceof Promise,
+    isNativeError: (v) => v instanceof Error,
+    isArrayBuffer: (v) => v instanceof ArrayBuffer,
+    isSharedArrayBuffer: (v) => typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer,
+    isProxy: (v) => false,
+    isExternal: (v) => false,
+    isAnyArrayBuffer: (v) => v instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer),
+    isTypedArray: (v) => ArrayBuffer.isView(v) && !(v instanceof DataView),
+    isDataView: (v) => v instanceof DataView,
+  };
+
+  // util binding stub
+  const _utilBinding = {
+    isInsideNodeModules: () => false,
+  };
+
   // JS-defined bindings
-  const _jsBindings = { constants: _constants };
+  const _jsBindings = { constants: _constants, types: _types, util: _utilBinding };
   const _origInternalBinding = internalBinding;
   globalThis.internalBinding = function(name) {
     if (_jsBindings[name]) return _jsBindings[name];
@@ -378,15 +402,36 @@ fn run_bootstrap(iso: *u8, ctx: *u8): i32 {
       isWindows: process.platform === 'win32',
       isMacOS: process.platform === 'darwin',
       getLazy(init) { let v; return () => (v ??= init()); },
+      spliceOne(list, idx) { for (let i=idx; i<list.length-1; i++) list[i]=list[i+1]; list.pop(); },
+      kEmptyObject: Object.freeze(Object.create(null)),
+      normalizeEncoding(enc) {
+        if (!enc || enc === 'utf8' || enc === 'utf-8') return 'utf8';
+        return enc.toLowerCase();
+      },
+      isError(e) { return e instanceof Error; },
+      setOwnProperty(obj, key, val) { Object.defineProperty(obj, key, {value:val, writable:true, enumerable:true, configurable:true}); },
     },
     'internal/validators': {
-      validateString(v, name) { if (typeof v !== 'string') throw new TypeError(name + ' must be string'); },
-      validateObject(v, name) { if (typeof v !== 'object' || v === null) throw new TypeError(name + ' must be object'); },
-      validateInt32(v, name) { if (typeof v !== 'number' || v !== (v|0)) throw new TypeError(name + ' must be int32'); },
+      validateString(v, name) { if (typeof v !== 'string') throw new TypeError(name + ' must be a string'); },
+      validateObject(v, name, opts) { if (typeof v !== 'object' || v === null) throw new TypeError(name + ' must be an object'); },
+      validateInt32(v, name) { if (typeof v !== 'number' || v !== (v|0)) throw new RangeError(name + ' must be a 32-bit integer'); },
+      validateFunction(v, name) { if (typeof v !== 'function') throw new TypeError(name + ' must be a function'); },
+      validateBoolean(v, name) { if (typeof v !== 'boolean') throw new TypeError(name + ' must be a boolean'); },
+      validateNumber(v, name) { if (typeof v !== 'number') throw new TypeError(name + ' must be a number'); },
+      validateOneOf(v, name, oneOf) { if (!oneOf.includes(v)) throw new TypeError(name + ' must be one of: ' + oneOf.join(', ')); },
+      validateAbortSignal(v, name) {},
     },
+    'internal/util/types': _types,
   };
   // Pre-seed module cache with internal stubs
   globalThis.__internalModules = _internalModules;
+
+  // process stubs that need JS-level implementation
+  process.emitWarning = function(msg) { console.error('Warning:', msg); };
+  process.env = new Proxy({}, {
+    get(_, key) { return internalBinding('env').get(String(key)); },
+    has(_, key) { return internalBinding('env').get(String(key)) !== undefined; },
+  });
 
   // console.log/error/warn
   globalThis.console = {
