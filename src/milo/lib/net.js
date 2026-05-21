@@ -274,6 +274,12 @@ function _pollOnce(timeout) {
       continue;
     }
 
+    // TLS handshake needs both read and write events
+    if (filter === EVFILT_WRITE && (sock._pendingTlsConnect || sock._pendingTlsAccept)) {
+      sock._onReadable();
+      continue;
+    }
+
     if (filter === EVFILT_READ) {
       sock._onReadable();
     }

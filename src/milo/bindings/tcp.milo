@@ -33,10 +33,17 @@ extern fn nm_fs_open(path: *u8, flags: i32, mode: i32): i32
 
 // TLS via OpenSSL (helpers in entry.c)
 extern fn nm_ssl_connect(fd: i32, hostname: *u8): i64
+extern fn nm_ssl_connect_start(fd: i32, hostname: *u8): i64
+extern fn nm_ssl_connect_continue(ssl: i64): i32
 extern fn nm_ssl_read(ssl: i64, buf: *u8, len: i32): i32
 extern fn nm_ssl_write(ssl: i64, data: *u8, len: i32): i32
 extern fn nm_ssl_pending(ssl: i64): i32
 extern fn nm_ssl_shutdown(ssl: i64): void
+extern fn nm_ssl_server_ctx_new(cert: *u8, certLen: i32, key: *u8, keyLen: i32): i64
+extern fn nm_ssl_accept(ctx: i64, fd: i32): i64
+extern fn nm_ssl_accept_new(ctx: i64, fd: i32): i64
+extern fn nm_ssl_accept_continue(ssl: i64): i32
+extern fn nm_ssl_ctx_free(ctx: i64): void
 
 // macOS constants
 // AF_INET=2, SOCK_STREAM=1, SOL_SOCKET=0xffff, SO_REUSEADDR=4
@@ -489,6 +496,34 @@ fn sslConnect(info: *u8, _ud: *u8): void {
     }
 }
 
+// sslConnectStart(fd, hostname) → ssl handle or -1 on error
+fn sslConnectStart(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 2 { return }
+    let iso = ci.isolate()
+    unsafe {
+        let fd = ci.i32Arg(0, -1)
+        var hostBuf: [u8; 256] = [0; 256]
+        ci.arg(1).writeUtf8(iso, hostBuf as *u8, 255)
+        let ssl = nm_ssl_connect_start(fd, hostBuf as *u8)
+        ci.retF64(ssl as f64)
+    }
+}
+
+// sslConnectContinue(sslHandle) → 1=done, 0=want_read/write, -1=error
+fn sslConnectContinueOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    unsafe {
+        let sslArg = ci.arg(0)
+        var sslVal: [f64; 1] = [0.0]
+        sslArg.toF64(iso, sslVal as *f64)
+        let ssl = sslVal[0] as i64
+        let result = nm_ssl_connect_continue(ssl)
+        ci.retI32(result)
+    }
+}
+
 // sslRead(sslHandle) → string or undefined (closed) or empty string (EAGAIN)
 fn sslRead(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
@@ -564,6 +599,82 @@ fn sslShutdown(info: *u8, _ud: *u8): void {
     }
 }
 
+// sslServerCtxNew(certStr, keyStr) → ctx handle (f64), or 0 on failure
+fn sslServerCtxNew(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 2 { return }
+    let iso = ci.isolate()
+    unsafe {
+        var certBuf: [u8; 16384] = [0; 16384]
+        let certLen = ci.arg(0).writeUtf8(iso, certBuf as *u8, 16383)
+        var keyBuf: [u8; 16384] = [0; 16384]
+        let keyLen = ci.arg(1).writeUtf8(iso, keyBuf as *u8, 16383)
+
+        let ctx = nm_ssl_server_ctx_new(certBuf as *u8, certLen, keyBuf as *u8, keyLen)
+        ci.retF64(ctx as f64)
+    }
+}
+
+// sslAccept(ctxHandle, fd) → ssl handle (f64), or 0 on failure
+fn sslAcceptOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 2 { return }
+    let iso = ci.isolate()
+    unsafe {
+        let ctxArg = ci.arg(0)
+        var ctxVal: [f64; 1] = [0.0]
+        ctxArg.toF64(iso, ctxVal as *f64)
+        let ctx = ctxVal[0] as i64
+
+        let fd = ci.i32Arg(1, -1)
+        let ssl = nm_ssl_accept(ctx, fd)
+        ci.retF64(ssl as f64)
+    }
+}
+
+// sslAcceptNew(ctxHandle, fd) → ssl handle for non-blocking accept
+fn sslAcceptNewOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 2 { return }
+    let iso = ci.isolate()
+    unsafe {
+        let ctxArg = ci.arg(0)
+        var ctxVal: [f64; 1] = [0.0]
+        ctxArg.toF64(iso, ctxVal as *f64)
+        let ctx = ctxVal[0] as i64
+        let fd = ci.i32Arg(1, -1)
+        let ssl = nm_ssl_accept_new(ctx, fd)
+        ci.retF64(ssl as f64)
+    }
+}
+
+// sslAcceptContinue(sslHandle) → 1=done, 0=want_read/write, -1=error
+fn sslAcceptContinueOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    unsafe {
+        let sslArg = ci.arg(0)
+        var sslVal: [f64; 1] = [0.0]
+        sslArg.toF64(iso, sslVal as *f64)
+        let ssl = sslVal[0] as i64
+        let result = nm_ssl_accept_continue(ssl)
+        ci.retI32(result)
+    }
+}
+
+// sslCtxFree(ctxHandle)
+fn sslCtxFree(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    unsafe {
+        let ctxArg = ci.arg(0)
+        var ctxVal: [f64; 1] = [0.0]
+        ctxArg.toF64(iso, ctxVal as *f64)
+        let ctx = ctxVal[0] as i64
+        nm_ssl_ctx_free(ctx)
+    }
+}
+
 fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
@@ -587,10 +698,17 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "watchFile" as *u8, tcpWatchFile as *u8)
         c.setMethod(exp, "unwatchFile" as *u8, tcpUnwatchFile as *u8)
         c.setMethod(exp, "sslConnect" as *u8, sslConnect as *u8)
+        c.setMethod(exp, "sslConnectStart" as *u8, sslConnectStart as *u8)
+        c.setMethod(exp, "sslConnectContinue" as *u8, sslConnectContinueOp as *u8)
         c.setMethod(exp, "sslRead" as *u8, sslRead as *u8)
         c.setMethod(exp, "sslWrite" as *u8, sslWrite as *u8)
         c.setMethod(exp, "sslPending" as *u8, sslPending as *u8)
         c.setMethod(exp, "sslShutdown" as *u8, sslShutdown as *u8)
+        c.setMethod(exp, "sslServerCtxNew" as *u8, sslServerCtxNew as *u8)
+        c.setMethod(exp, "sslAccept" as *u8, sslAcceptOp as *u8)
+        c.setMethod(exp, "sslAcceptNew" as *u8, sslAcceptNewOp as *u8)
+        c.setMethod(exp, "sslAcceptContinue" as *u8, sslAcceptContinueOp as *u8)
+        c.setMethod(exp, "sslCtxFree" as *u8, sslCtxFree as *u8)
 
         // constants
         let i = Isolate { ptr: _iso }

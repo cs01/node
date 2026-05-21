@@ -323,6 +323,41 @@ long long nm_ssl_connect(int fd, const char* hostname) {
     return (long long)ssl;
 }
 
+// Non-blocking SSL_connect: create SSL, set fd, attempt connect.
+// Returns: SSL* if handshake complete, 0 if want_read/want_write (call nm_ssl_connect_continue), -1 on error
+long long nm_ssl_connect_start(int fd, const char* hostname) {
+    nm_ssl_ensure_init();
+
+    // Verify socket is non-blocking
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (!(flags & O_NONBLOCK)) {
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    SSL* ssl = SSL_new(g_ssl_client_ctx);
+    SSL_set_fd(ssl, fd);
+    if (hostname && hostname[0]) SSL_set_tlsext_host_name(ssl, hostname);
+
+    // Set connect state and attempt handshake
+    SSL_set_connect_state(ssl);
+    int ret = SSL_do_handshake(ssl);
+    if (ret == 1) return (long long)ssl;
+    int err = SSL_get_error(ssl, ret);
+    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) return (long long)ssl;
+    SSL_free(ssl);
+    return -1;
+}
+
+// Continue non-blocking SSL handshake. Returns: 1=done, 0=want_read/write, -1=error
+int nm_ssl_connect_continue(long long ssl_ptr) {
+    SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
+    int ret = SSL_do_handshake(ssl);
+    if (ret == 1) return 1;
+    int err = SSL_get_error(ssl, ret);
+    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) return 0;
+    return -1;
+}
+
 int nm_ssl_read(long long ssl_ptr, char* buf, int len) {
     SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
     int n = SSL_read(ssl, buf, len);
@@ -355,6 +390,86 @@ void nm_ssl_shutdown(long long ssl_ptr) {
     SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
     SSL_shutdown(ssl);
     SSL_free(ssl);
+}
+
+// TLS server — create server SSL_CTX with cert+key, accept connections
+// Returns SSL_CTX* as i64, or 0 on failure
+long long nm_ssl_server_ctx_new(const char* cert_pem, int cert_len,
+                                 const char* key_pem, int key_len) {
+    SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx) return 0;
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+
+    // Load cert from PEM string
+    BIO* cert_bio = BIO_new_mem_buf(cert_pem, cert_len);
+    X509* cert = PEM_read_bio_X509(cert_bio, NULL, NULL, NULL);
+    BIO_free(cert_bio);
+    if (!cert) { SSL_CTX_free(ctx); return 0; }
+    if (SSL_CTX_use_certificate(ctx, cert) != 1) { X509_free(cert); SSL_CTX_free(ctx); return 0; }
+    X509_free(cert);
+
+    // Load private key from PEM string
+    BIO* key_bio = BIO_new_mem_buf(key_pem, key_len);
+    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(key_bio, NULL, NULL, NULL);
+    BIO_free(key_bio);
+    if (!pkey) { SSL_CTX_free(ctx); return 0; }
+    if (SSL_CTX_use_PrivateKey(ctx, pkey) != 1) { EVP_PKEY_free(pkey); SSL_CTX_free(ctx); return 0; }
+    EVP_PKEY_free(pkey);
+
+    return (long long)ctx;
+}
+
+// Accept TLS on an already-accepted fd. Blocks briefly during handshake.
+// Returns SSL* as i64, or 0 on failure.
+long long nm_ssl_accept(long long ctx_ptr, int fd) {
+    SSL_CTX* ctx = (SSL_CTX*)(intptr_t)ctx_ptr;
+
+    // Temporarily set blocking for handshake
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+
+    SSL* ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, fd);
+    int ret = SSL_accept(ssl);
+
+    // Restore non-blocking
+    fcntl(fd, F_SETFL, flags);
+
+    if (ret != 1) {
+        SSL_free(ssl);
+        return 0;
+    }
+    return (long long)ssl;
+}
+
+// Create SSL object for deferred accept (non-blocking first step)
+// Returns SSL* as i64. Caller should poll for readability and call nm_ssl_accept_continue.
+long long nm_ssl_accept_new(long long ctx_ptr, int fd) {
+    SSL_CTX* ctx = (SSL_CTX*)(intptr_t)ctx_ptr;
+    // Ensure non-blocking
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (!(flags & O_NONBLOCK)) {
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+    SSL* ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, fd);
+    SSL_set_accept_state(ssl);
+    return (long long)ssl;
+}
+
+// Continue SSL handshake (accept side). Returns: 1=done, 0=want_read/want_write, -1=error
+int nm_ssl_accept_continue(long long ssl_ptr) {
+    SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
+    int ret = SSL_do_handshake(ssl);
+    if (ret == 1) return 1;
+    int err = SSL_get_error(ssl, ret);
+    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) return 0;
+    return -1;
+}
+
+void nm_ssl_ctx_free(long long ctx_ptr) {
+    SSL_CTX* ctx = (SSL_CTX*)(intptr_t)ctx_ptr;
+    if (ctx) SSL_CTX_free(ctx);
 }
 
 // RSA/ECDSA signing/verification via OpenSSL EVP

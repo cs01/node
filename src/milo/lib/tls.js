@@ -21,16 +21,56 @@ class TLSSocket extends net.Socket {
 
   _startTLS() {
     const hostname = this._tlsOptions.servername || this._tlsOptions.host || '';
-    this._ssl = tcp.sslConnect(this._fd, hostname);
-    if (!this._ssl) {
-      process.nextTick(() => this.emit('error', new Error('TLS handshake failed')));
+    this._ssl = tcp.sslConnectStart(this._fd, hostname);
+    if (!this._ssl || this._ssl < 0) {
+      this._ssl = 0;
+      process.nextTick(() => this.emit('error', new Error('TLS handshake init failed')));
       return false;
     }
-    this.authorized = true;
+    // Non-blocking: handshake will complete via _onReadable
+    this._pendingTlsConnect = true;
     return true;
   }
 
   _onReadable() {
+    // Non-blocking TLS handshake for server-accepted sockets
+    if (this._pendingTlsAccept) {
+      if (!this._ssl) {
+        // First call: create SSL object
+        this._ssl = tcp.sslAcceptNew(this._sslCtx, this._fd);
+        if (!this._ssl) {
+          this.destroy(new Error('TLS accept init failed'));
+          return;
+        }
+      }
+      const result = tcp.sslAcceptContinue(this._ssl);
+      if (result === 1) {
+        this._pendingTlsAccept = false;
+        this.authorized = true;
+        this.encrypted = true;
+        tcp.pollRemove(this._fd, tcp.EVFILT_WRITE);
+        if (this._tlsServer) this._tlsServer.emit('secureConnection', this);
+      } else if (result === -1) {
+        this.destroy(new Error('TLS handshake failed'));
+      }
+      // result === 0 means WANT_READ/WANT_WRITE — wait for next event
+      return;
+    }
+
+    // Non-blocking client TLS handshake continuation
+    if (this._pendingTlsConnect) {
+      const result = tcp.sslConnectContinue(this._ssl);
+      if (result === 1) {
+        this._pendingTlsConnect = false;
+        this.authorized = true;
+        tcp.pollRemove(this._fd, tcp.EVFILT_WRITE);
+        this.emit('secureConnect');
+      } else if (result === -1) {
+        this.destroy(new Error('TLS client handshake failed'));
+      }
+      return;
+    }
+
     if (!this._ssl) return;
     for (;;) {
       const data = tcp.sslRead(this._ssl);
@@ -42,10 +82,8 @@ class TLSSocket extends net.Socket {
         this.destroy();
         return;
       }
-      if (data.length > 0) {
-        this.emit('data', Buffer.from(data));
-      }
-      if (!tcp.sslPending(this._ssl)) break;
+      if (data.length === 0) break;
+      this.emit('data', Buffer.from(data));
     }
   }
 
@@ -65,6 +103,8 @@ class TLSSocket extends net.Socket {
     this.writable = false;
     if (cb) this.once('finish', cb);
     this.emit('finish');
+    // Delay destroy to let kqueue deliver pending data to the peer
+    setTimeout(() => this.destroy(), 50);
     return this;
   }
 
@@ -125,8 +165,9 @@ function connect(options, cb) {
     this._connecting = false;
     tcp.pollRemove(this._fd, tcp.EVFILT_WRITE);
     if (!this._startTLS()) return;
+    // Register for both read and write events — SSL handshake may need either
     tcp.pollAdd(this._fd, tcp.EVFILT_READ);
-    this.emit('secureConnect');
+    tcp.pollAdd(this._fd, tcp.EVFILT_WRITE);
   };
 
   if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host === 'localhost') {
@@ -144,7 +185,64 @@ function connect(options, cb) {
 class Server extends net.Server {
   constructor(options, listener) {
     if (typeof options === 'function') { listener = options; options = {}; }
-    super(options, listener);
+    super(options);
+    this._tlsOptions = options;
+    this._sslCtx = 0;
+    if (listener) this.on('secureConnection', listener);
+  }
+
+  listen(port, host, backlog, cb) {
+    // Initialize SSL context with cert/key before listening
+    const cert = this._tlsOptions.cert;
+    const key = this._tlsOptions.key;
+    if (!cert || !key) {
+      process.nextTick(() => this.emit('error', new Error('cert and key required for TLS server')));
+      return this;
+    }
+    const certStr = typeof cert === 'string' ? cert : cert.toString();
+    const keyStr = typeof key === 'string' ? key : key.toString();
+    this._sslCtx = tcp.sslServerCtxNew(certStr, keyStr);
+    if (!this._sslCtx) {
+      process.nextTick(() => this.emit('error', new Error('Failed to create SSL context')));
+      return this;
+    }
+
+    const sslCtx = this._sslCtx;
+    const tlsServer = this;
+
+    // Override _onAcceptable: accept TCP, register for read, do TLS on first data
+    this._onAcceptable = () => {
+      const clientFd = tcp.accept(this._fd);
+      if (clientFd < 0) return;
+
+      // Create a pending TLS socket — handshake deferred until data arrives
+      const sock = new TLSSocket(null, {});
+      sock._fd = clientFd;
+      sock._ssl = 0;
+      sock._pendingTlsAccept = true;
+      sock._tlsServer = tlsServer;
+      sock._sslCtx = sslCtx;
+      sock.readable = true;
+      sock.writable = true;
+
+      net._ensurePoll();
+      tcp.pollAdd(clientFd, tcp.EVFILT_READ);
+      tcp.pollAdd(clientFd, tcp.EVFILT_WRITE);
+      net.Socket._sockets.set(clientFd, sock);
+
+      tlsServer._connections++;
+      sock.on('close', () => tlsServer._connections--);
+    };
+
+    return net.Server.prototype.listen.call(this, port, host, backlog, cb);
+  }
+
+  close(cb) {
+    if (this._sslCtx) {
+      tcp.sslCtxFree(this._sslCtx);
+      this._sslCtx = 0;
+    }
+    return net.Server.prototype.close.call(this, cb);
   }
 }
 

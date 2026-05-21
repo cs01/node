@@ -6,14 +6,8 @@ Full build: `bash src/milo/build.sh`
 
 ## high — npm packages depend on these
 
-### http / https
-- [ ] `https.createServer()` — TLS server (client done)
-
 ### fs
 - [ ] `fs.watch()` recursive option — watch entire directory trees
-
-### tls
-- [ ] `tls.createServer()` — TLS server (client done)
 
 ## medium
 

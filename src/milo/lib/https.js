@@ -1,6 +1,7 @@
 // https module — HTTPS client over TLS + HTTP parsing
 'use strict';
 
+const EventEmitter = require('events');
 const http = require('http');
 const tls = require('tls');
 const { Readable } = require('stream');
@@ -173,13 +174,105 @@ function get(url, options, cb) {
 
 const globalAgent = new Agent();
 
+class Server extends EventEmitter {
+  constructor(opts, handler) {
+    super();
+    if (typeof opts === 'function') { handler = opts; opts = {}; }
+    this._tlsOptions = opts;
+    if (handler) this.on('request', handler);
+    this._server = null;
+    this._listening = false;
+  }
+
+  listen(...args) {
+    const cb = typeof args[args.length - 1] === 'function' ? args.pop() : null;
+    const port = args[0] || 0;
+    const host = args[1] || '0.0.0.0';
+    this._sockets = new Set();
+    this._closing = false;
+
+    this._server = tls.createServer(this._tlsOptions, (socket) => {
+      this._sockets.add(socket);
+      socket._httpActive = false;
+      socket.on('close', () => {
+        this._sockets.delete(socket);
+        if (this._closing && this._sockets.size === 0) {
+          process.nextTick(() => this.emit('close'));
+        }
+      });
+
+      let buf = '';
+      socket.on('data', (chunk) => {
+        buf += chunk.toString();
+        const headerEnd = buf.indexOf('\r\n\r\n');
+        if (headerEnd === -1) return;
+        const headerPart = buf.substring(0, headerEnd);
+        const body = buf.substring(headerEnd + 4);
+        const lines = headerPart.split('\r\n');
+        const [method, url, version] = lines[0].split(' ');
+        const req = new http.IncomingMessage();
+        req.method = method;
+        req.url = url;
+        req.httpVersion = (version || '').replace('HTTP/', '');
+        for (let i = 1; i < lines.length; i++) {
+          const idx = lines[i].indexOf(':');
+          if (idx > 0) {
+            const key = lines[i].substring(0, idx).trim().toLowerCase();
+            const val = lines[i].substring(idx + 1).trim();
+            req.headers[key] = val;
+            req.rawHeaders.push(lines[i].substring(0, idx).trim(), val);
+          }
+        }
+        if (body) req.push(Buffer.from(body));
+        req.push(null);
+        req.complete = true;
+        socket._httpActive = true;
+        const res = new http.ServerResponse(socket);
+        res.on('finish', () => {
+          socket._httpActive = false;
+          if (this._closing) socket.destroy();
+        });
+        this.emit('request', req, res);
+      });
+    });
+
+    this._server.listen(port, host, cb);
+    this._listening = true;
+    return this;
+  }
+
+  close(cb) {
+    if (cb) this.once('close', cb);
+    this._listening = false;
+    this._closing = true;
+    if (this._server) this._server.close();
+    if (!this._sockets || this._sockets.size === 0) {
+      process.nextTick(() => this.emit('close'));
+      return this;
+    }
+    for (const socket of this._sockets) {
+      if (!socket._httpActive) socket.destroy();
+    }
+    if (this._sockets.size === 0) {
+      process.nextTick(() => this.emit('close'));
+    }
+    return this;
+  }
+
+  address() { return this._server ? this._server.address() : null; }
+}
+
+function httpsCreateServer(options, listener) {
+  return new Server(options, listener);
+}
+
 module.exports = {
   request,
   get,
   Agent,
   globalAgent,
-  Server: http.Server,
-  createServer: http.createServer,
+  Server,
+  createServer: httpsCreateServer,
   STATUS_CODES: http.STATUS_CODES,
   METHODS: http.METHODS,
 };
