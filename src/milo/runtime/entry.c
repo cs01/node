@@ -347,6 +347,40 @@ int nm_generate_rsa_keypair(int bits, char* pub_out, int pub_len, int* pub_writt
     return 0;
 }
 
+// ECDSA key generation — curve is NID name string (e.g. "prime256v1", "secp384r1", "secp521r1")
+#include <openssl/ec.h>
+#include <openssl/obj_mac.h>
+int nm_generate_ec_keypair(const char* curve_name,
+                           char* pub_out, int pub_len, int* pub_written,
+                           char* priv_out, int priv_len, int* priv_written) {
+    int nid = OBJ_txt2nid(curve_name);
+    if (nid == NID_undef) return -1;
+
+    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL);
+    if (!pctx) return -1;
+    if (EVP_PKEY_keygen_init(pctx) != 1) { EVP_PKEY_CTX_free(pctx); return -1; }
+    if (EVP_PKEY_CTX_set_ec_paramgen_curve_nid(pctx, nid) != 1) { EVP_PKEY_CTX_free(pctx); return -1; }
+
+    EVP_PKEY* pkey = NULL;
+    if (EVP_PKEY_keygen(pctx, &pkey) != 1) { EVP_PKEY_CTX_free(pctx); return -1; }
+    EVP_PKEY_CTX_free(pctx);
+
+    BIO* pub_bio = BIO_new(BIO_s_mem());
+    PEM_write_bio_PUBKEY(pub_bio, pkey);
+    int plen = BIO_read(pub_bio, pub_out, pub_len);
+    *pub_written = plen > 0 ? plen : 0;
+    BIO_free(pub_bio);
+
+    BIO* priv_bio = BIO_new(BIO_s_mem());
+    PEM_write_bio_PrivateKey(priv_bio, pkey, NULL, NULL, 0, NULL, NULL);
+    int klen = BIO_read(priv_bio, priv_out, priv_len);
+    *priv_written = klen > 0 ? klen : 0;
+    BIO_free(priv_bio);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
 // AES-GCM via OpenSSL EVP
 
 int nm_aes_gcm_crypt(int encrypt,

@@ -21,6 +21,7 @@ extern fn nm_aes_gcm_crypt(encrypt: i32, key: *u8, keyLen: i32, iv: *u8, ivLen: 
 extern fn nm_sign(algo: *u8, pemKey: *u8, pemLen: i32, data: *u8, dataLen: i32, sigOut: *u8, sigOutLen: i32): i32
 extern fn nm_verify(algo: *u8, pemKey: *u8, pemLen: i32, data: *u8, dataLen: i32, sig: *u8, sigLen: i32): i32
 extern fn nm_generate_rsa_keypair(bits: i32, pubOut: *u8, pubLen: i32, pubWritten: *i32, privOut: *u8, privLen: i32, privWritten: *i32): i32
+extern fn nm_generate_ec_keypair(curveName: *u8, pubOut: *u8, pubLen: i32, pubWritten: *i32, privOut: *u8, privLen: i32, privWritten: *i32): i32
 
 extern fn malloc(size: i64): *u8
 extern fn free(ptr: *u8): void
@@ -337,6 +338,46 @@ fn generateKeyPair(info: *u8, _ud: *u8): void {
     }
 }
 
+// generateEcKeyPair(curveName) → { publicKey: string, privateKey: string }
+fn generateEcKeyPair(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    unsafe {
+        var curveBuf: [u8; 64] = [0; 64]
+        let curveArg = ci.arg(0)
+        curveArg.writeUtf8(iso, curveBuf as *u8, 63)
+
+        let pubBuf = malloc(8192)
+        let privBuf = malloc(8192)
+        if pubBuf as i64 == 0 { return }
+        if privBuf as i64 == 0 {
+            free(pubBuf)
+            return
+        }
+
+        var pubLen: [i32; 1] = [0]
+        var privLen: [i32; 1] = [0]
+
+        let status = nm_generate_ec_keypair(curveBuf as *u8, pubBuf, 8192, pubLen as *i32, privBuf, 8192, privLen as *i32)
+        if status != 0 {
+            free(pubBuf)
+            free(privBuf)
+            ci.retI32(-1)
+            return
+        }
+
+        let result = iso.object()
+        let pubKey = iso.stringLen(pubBuf, pubLen[0])
+        let privKey = iso.stringLen(privBuf, privLen[0])
+        ctx.objectSet(result, "publicKey" as *u8, pubKey)
+        ctx.objectSet(result, "privateKey" as *u8, privKey)
+        free(pubBuf)
+        free(privBuf)
+        ci.ret(result)
+    }
+}
+
 fn nm_init_crypto(_iso: *u8, ctx: *u8, exports: i32): void {
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
@@ -349,5 +390,6 @@ fn nm_init_crypto(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "sign" as *u8, signOp as *u8)
         c.setMethod(exp, "verify" as *u8, verifyOp as *u8)
         c.setMethod(exp, "generateKeyPair" as *u8, generateKeyPair as *u8)
+        c.setMethod(exp, "generateEcKeyPair" as *u8, generateEcKeyPair as *u8)
     }
 }

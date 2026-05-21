@@ -300,28 +300,72 @@ function createVerify(algorithm) {
   };
 }
 
+class KeyObject {
+  constructor(type, data) {
+    this._type = type;
+    this._data = data;
+  }
+  get type() { return this._type; }
+  export(options) {
+    if (!options) return this._data;
+    if (options.format === 'buffer') return Buffer.from(this._data);
+    return this._data;
+  }
+  get symmetricKeySize() {
+    if (this._type !== 'secret') return undefined;
+    return Buffer.isBuffer(this._data) ? this._data.length : Buffer.from(this._data).length;
+  }
+}
+
+function generateKeySync(type, options) {
+  if (type === 'hmac' || type === 'aes') {
+    const bits = options && options.length;
+    if (!bits || bits % 8 !== 0) throw new Error('Invalid key length');
+    const key = randomBytes(bits / 8);
+    return new KeyObject('secret', key);
+  }
+  throw new Error(`Unsupported key type: ${type}`);
+}
+
+function createSecretKey(key, encoding) {
+  const buf = Buffer.isBuffer(key) ? key : Buffer.from(key, encoding);
+  return new KeyObject('secret', buf);
+}
+
+// Node name → OpenSSL NID name
+const EC_CURVE_MAP = {
+  'prime256v1': 'prime256v1', 'P-256': 'prime256v1', 'p256': 'prime256v1',
+  'secp384r1': 'secp384r1', 'P-384': 'secp384r1', 'p384': 'secp384r1',
+  'secp521r1': 'secp521r1', 'P-521': 'secp521r1', 'p521': 'secp521r1',
+  'secp256k1': 'secp256k1',
+};
+
 function generateKeyPairSync(type, options) {
-  if (type !== 'rsa') throw new Error('Only RSA key generation supported');
-  const bits = (options && options.modulusLength) || 2048;
-  const result = b.generateKeyPair(bits);
-  if (typeof result === 'number') throw new Error('Key generation failed');
-  const pubFormat = options && options.publicKeyEncoding;
-  const privFormat = options && options.privateKeyEncoding;
-  let publicKey = result.publicKey;
-  let privateKey = result.privateKey;
-  if (pubFormat && pubFormat.type === 'pkcs1') publicKey = result.publicKey;
-  if (privFormat && privFormat.type === 'pkcs8') privateKey = result.privateKey;
-  return { publicKey, privateKey };
+  if (type === 'rsa') {
+    const bits = (options && options.modulusLength) || 2048;
+    const result = b.generateKeyPair(bits);
+    if (typeof result === 'number') throw new Error('RSA key generation failed');
+    return { publicKey: result.publicKey, privateKey: result.privateKey };
+  }
+  if (type === 'ec') {
+    const curveName = options && options.namedCurve;
+    if (!curveName) throw new Error('namedCurve option required for EC key generation');
+    const nidName = EC_CURVE_MAP[curveName] || curveName;
+    const result = b.generateEcKeyPair(nidName);
+    if (typeof result === 'number') throw new Error('EC key generation failed for curve: ' + curveName);
+    return { publicKey: result.publicKey, privateKey: result.privateKey };
+  }
+  throw new Error(`Unsupported key type: ${type}`);
 }
 
 module.exports = {
   randomBytes, randomUUID, randomInt, createHash, createHmac, timingSafeEqual,
   createCipheriv, createDecipheriv,
   pbkdf2, pbkdf2Sync, scrypt, scryptSync,
-  createSign, createVerify, generateKeyPairSync,
-  generateKeySync: () => { throw new Error('crypto.generateKeySync not implemented'); },
+  createSign, createVerify, generateKeyPairSync, generateKeySync,
+  KeyObject, createSecretKey,
   constants: {},
   getHashes: () => ['md5', 'sha1', 'sha256', 'sha384', 'sha512'],
   getCiphers: () => [...Object.keys(CIPHER_MAP), ...Object.keys(GCM_MAP)],
-  getCurves: () => [],
+  getCurves: () => Object.keys(EC_CURVE_MAP),
 };
