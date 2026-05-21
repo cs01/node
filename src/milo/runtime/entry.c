@@ -167,6 +167,98 @@ int nm_dns_reverse(const char* ip, char* out_hostname, int out_len) {
     return getnameinfo(sa, sa_len, out_hostname, out_len, NULL, 0, 0);
 }
 
+// DNS record queries via libresolv
+#include <resolv.h>
+#include <arpa/nameser.h>
+
+// Parses a DNS name from wire format, advances *pos. Returns length written to out.
+static int _dns_read_name(const unsigned char* msg, int msglen, int* pos, char* out, int outlen) {
+    int n = dn_expand(msg, msg + msglen, msg + *pos, out, outlen);
+    if (n < 0) return -1;
+    *pos += n;
+    return (int)strlen(out);
+}
+
+// nm_dns_query(hostname, rrtype, out, outlen) → bytes written to out
+// rrtype: 15=MX, 16=TXT, 33=SRV, 2=NS, 5=CNAME, 12=PTR
+// Output format: one record per line, fields separated by spaces
+// MX: "priority exchange\n", TXT: "text\n", SRV: "priority weight port target\n"
+// NS/CNAME/PTR: "name\n"
+int nm_dns_query(const char* hostname, int rrtype, char* out, int out_len) {
+    unsigned char answer[4096];
+    int len = res_query(hostname, ns_c_in, rrtype, answer, sizeof(answer));
+    if (len < 0) return -1;
+
+    // Skip header (12 bytes) and question section
+    int pos = 12;
+    // Skip QDCOUNT questions
+    int qdcount = (answer[4] << 8) | answer[5];
+    int ancount = (answer[6] << 8) | answer[7];
+    for (int i = 0; i < qdcount; i++) {
+        char tmp[256];
+        int n = dn_expand(answer, answer + len, answer + pos, tmp, sizeof(tmp));
+        if (n < 0) return -1;
+        pos += n + 4; // skip name + QTYPE(2) + QCLASS(2)
+    }
+
+    int written = 0;
+    for (int i = 0; i < ancount && written < out_len - 256; i++) {
+        char name[256];
+        int n = dn_expand(answer, answer + len, answer + pos, name, sizeof(name));
+        if (n < 0) break;
+        pos += n;
+
+        if (pos + 10 > len) break;
+        int rtype = (answer[pos] << 8) | answer[pos+1];
+        int rdlength = (answer[pos+8] << 8) | answer[pos+9];
+        pos += 10; // TYPE(2) + CLASS(2) + TTL(4) + RDLENGTH(2)
+
+        if (rtype != rrtype) { pos += rdlength; continue; }
+
+        if (rtype == 15) { // MX
+            int priority = (answer[pos] << 8) | answer[pos+1];
+            int mxpos = pos + 2;
+            char exchange[256];
+            if (_dns_read_name(answer, len, &mxpos, exchange, sizeof(exchange)) >= 0) {
+                written += snprintf(out + written, out_len - written, "%d %s\n", priority, exchange);
+            }
+        } else if (rtype == 16) { // TXT
+            int tpos = pos;
+            int end = pos + rdlength;
+            while (tpos < end) {
+                int tlen = answer[tpos++];
+                if (tpos + tlen > end) break;
+                int w = tlen < (out_len - written - 2) ? tlen : (out_len - written - 2);
+                memcpy(out + written, answer + tpos, w);
+                written += w;
+                tpos += tlen;
+            }
+            out[written++] = '\n';
+        } else if (rtype == 33) { // SRV
+            int priority = (answer[pos] << 8) | answer[pos+1];
+            int weight = (answer[pos+2] << 8) | answer[pos+3];
+            int port = (answer[pos+4] << 8) | answer[pos+5];
+            int srvpos = pos + 6;
+            char target[256];
+            if (_dns_read_name(answer, len, &srvpos, target, sizeof(target)) >= 0) {
+                written += snprintf(out + written, out_len - written, "%d %d %d %s\n", priority, weight, port, target);
+            }
+        } else if (rtype == 2 || rtype == 5 || rtype == 12) { // NS, CNAME, PTR
+            int npos = pos;
+            char rname[256];
+            if (_dns_read_name(answer, len, &npos, rname, sizeof(rname)) >= 0) {
+                written += snprintf(out + written, out_len - written, "%s\n", rname);
+            }
+        }
+
+        pos += rdlength;
+    }
+
+    if (written > 0 && out[written-1] == '\n') written--;
+    out[written] = '\0';
+    return written;
+}
+
 // uname helper — machine architecture string
 #include <sys/utsname.h>
 

@@ -9,7 +9,6 @@ Full build: `bash src/milo/build.sh`
 ### http / https
 - [ ] `https.createServer()` — TLS server (client done)
 
-
 ### fs
 - [ ] `fs.watch()` recursive option — watch entire directory trees
 
@@ -21,10 +20,6 @@ Full build: `bash src/milo/build.sh`
 ### child_process
 - [ ] True async `spawn` (currently sync + nextTick emulation)
 - [ ] `fork()` with IPC messaging
-- [ ] stdio option: `pipe`, `inherit`, `ignore`
-
-### dns
-- [ ] MX, TXT, SRV, NS, CNAME, PTR record queries (need libresolv or manual DNS protocol)
 
 ### process
 - [ ] `process.send()` / IPC when forked

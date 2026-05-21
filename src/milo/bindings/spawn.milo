@@ -8,11 +8,13 @@ extern fn posix_spawn_file_actions_init(fa: *u8): i32
 extern fn posix_spawn_file_actions_destroy(fa: *u8): i32
 extern fn posix_spawn_file_actions_adddup2(fa: *u8, fd: i32, newfd: i32): i32
 extern fn posix_spawn_file_actions_addclose(fa: *u8, fd: i32): i32
+extern fn posix_spawn_file_actions_addopen(fa: *u8, fd: i32, path: *u8, flags: i32, mode: u32): i32
 extern fn waitpid(pid: i32, status: *i32, options: i32): i32
 extern fn pipe(fds: *i32): i32
 extern fn read(fd: i32, buf: *u8, len: i64): i64
 extern fn write(fd: i32, buf: *u8, len: i64): i64
 extern fn close(fd: i32): i32
+extern fn open(path: *u8, flags: i32): i32
 extern fn malloc(size: i64): *u8
 extern fn free(ptr: *u8): void
 extern fn strlen(s: *u8): i64
@@ -91,23 +93,51 @@ fn spawnSyncBinding(info: *u8, _ud: *u8): void {
         }
         argvArr[argc as i64] = 0
 
-        // Pipes for stdin/stdout/stderr
-        var stdoutPipe: [i32; 2] = [0; 2]
-        var stderrPipe: [i32; 2] = [0; 2]
-        var stdinPipe: [i32; 2] = [0; 2]
-        pipe(stdoutPipe as *i32)
-        pipe(stderrPipe as *i32)
-        pipe(stdinPipe as *i32)
+        // stdio modes: 0=pipe (default), 1=inherit, 2=ignore
+        var stdinMode: i32 = 0
+        var stdoutMode: i32 = 0
+        var stderrMode: i32 = 0
+        if ci.length() > 3 { stdinMode = ci.i32Arg(3, 0) }
+        if ci.length() > 4 { stdoutMode = ci.i32Arg(4, 0) }
+        if ci.length() > 5 { stderrMode = ci.i32Arg(5, 0) }
 
-        // File actions: redirect child fds to pipes
+        // Pipes for stdin/stdout/stderr (only created when mode=pipe)
+        var stdoutPipe: [i32; 2] = [-1; 2]
+        var stderrPipe: [i32; 2] = [-1; 2]
+        var stdinPipe: [i32; 2] = [-1; 2]
+        if stdinMode == 0 { pipe(stdinPipe as *i32) }
+        if stdoutMode == 0 { pipe(stdoutPipe as *i32) }
+        if stderrMode == 0 { pipe(stderrPipe as *i32) }
+
         var fileActions: [u8; 128] = [0; 128]
         posix_spawn_file_actions_init(fileActions as *u8)
-        posix_spawn_file_actions_adddup2(fileActions as *u8, stdinPipe[0], 0)
-        posix_spawn_file_actions_adddup2(fileActions as *u8, stdoutPipe[1], 1)
-        posix_spawn_file_actions_adddup2(fileActions as *u8, stderrPipe[1], 2)
-        posix_spawn_file_actions_addclose(fileActions as *u8, stdinPipe[1])
-        posix_spawn_file_actions_addclose(fileActions as *u8, stdoutPipe[0])
-        posix_spawn_file_actions_addclose(fileActions as *u8, stderrPipe[0])
+
+        // stdin setup
+        if stdinMode == 0 {
+            posix_spawn_file_actions_adddup2(fileActions as *u8, stdinPipe[0], 0)
+            posix_spawn_file_actions_addclose(fileActions as *u8, stdinPipe[1])
+        }
+        if stdinMode == 2 {
+            posix_spawn_file_actions_addopen(fileActions as *u8, 0, "/dev/null", 0, 0)
+        }
+
+        // stdout setup
+        if stdoutMode == 0 {
+            posix_spawn_file_actions_adddup2(fileActions as *u8, stdoutPipe[1], 1)
+            posix_spawn_file_actions_addclose(fileActions as *u8, stdoutPipe[0])
+        }
+        if stdoutMode == 2 {
+            posix_spawn_file_actions_addopen(fileActions as *u8, 1, "/dev/null", 1, 0)
+        }
+
+        // stderr setup
+        if stderrMode == 0 {
+            posix_spawn_file_actions_adddup2(fileActions as *u8, stderrPipe[1], 2)
+            posix_spawn_file_actions_addclose(fileActions as *u8, stderrPipe[0])
+        }
+        if stderrMode == 2 {
+            posix_spawn_file_actions_addopen(fileActions as *u8, 2, "/dev/null", 1, 0)
+        }
 
         // Spawn the process
         var pid: [i32; 1] = [0]
@@ -116,26 +146,28 @@ fn spawnSyncBinding(info: *u8, _ud: *u8): void {
         posix_spawn_file_actions_destroy(fileActions as *u8)
 
         // Close child ends in parent
-        close(stdinPipe[0])
-        close(stdoutPipe[1])
-        close(stderrPipe[1])
+        if stdinPipe[0] >= 0 { close(stdinPipe[0]) }
+        if stdoutPipe[1] >= 0 { close(stdoutPipe[1]) }
+        if stderrPipe[1] >= 0 { close(stderrPipe[1]) }
 
-        // Write stdin input if provided (arg2)
-        if ci.length() > 2 {
-            let inputArg = ci.arg(2)
-            if inputArg.isString(iso) != 0 {
-                var inputBuf: [u8; 65536] = [0; 65536]
-                let inputLen = inputArg.writeUtf8(iso, inputBuf as *u8, 65536)
-                if inputLen > 0 {
-                    write(stdinPipe[1], inputBuf as *u8, inputLen as i64)
+        // Write stdin input if provided (arg2) and piped
+        if stdinPipe[1] >= 0 {
+            if ci.length() > 2 {
+                let inputArg = ci.arg(2)
+                if inputArg.isString(iso) != 0 {
+                    var inputBuf: [u8; 65536] = [0; 65536]
+                    let inputLen = inputArg.writeUtf8(iso, inputBuf as *u8, 65536)
+                    if inputLen > 0 {
+                        write(stdinPipe[1], inputBuf as *u8, inputLen as i64)
+                    }
                 }
             }
+            close(stdinPipe[1])
         }
-        close(stdinPipe[1])
 
         if spawnResult != 0 {
-            close(stdoutPipe[0])
-            close(stderrPipe[0])
+            if stdoutPipe[0] >= 0 { close(stdoutPipe[0]) }
+            if stderrPipe[0] >= 0 { close(stderrPipe[0]) }
             // Free argv strings
             var fi: i32 = 0
             while fi < argc {
@@ -152,13 +184,19 @@ fn spawnSyncBinding(info: *u8, _ud: *u8): void {
             return
         }
 
-        // Read stdout and stderr
+        // Read stdout and stderr (only if piped)
         var stdoutLen: [i64; 1] = [0]
         var stderrLen: [i64; 1] = [0]
-        let stdoutData = readAllFromFd(stdoutPipe[0], stdoutLen as *i64)
-        let stderrData = readAllFromFd(stderrPipe[0], stderrLen as *i64)
-        close(stdoutPipe[0])
-        close(stderrPipe[0])
+        var stdoutData: *u8 = 0 as *u8
+        var stderrData: *u8 = 0 as *u8
+        if stdoutPipe[0] >= 0 {
+            stdoutData = readAllFromFd(stdoutPipe[0], stdoutLen as *i64)
+            close(stdoutPipe[0])
+        }
+        if stderrPipe[0] >= 0 {
+            stderrData = readAllFromFd(stderrPipe[0], stderrLen as *i64)
+            close(stderrPipe[0])
+        }
 
         // Wait for child
         var status: [i32; 1] = [0]

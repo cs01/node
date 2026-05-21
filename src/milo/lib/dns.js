@@ -23,6 +23,43 @@ function lookup(hostname, options, cb) {
   });
 }
 
+// DNS record type codes
+const RR_TYPES = { A: 1, AAAA: 28, MX: 15, TXT: 16, SRV: 33, NS: 2, CNAME: 5, PTR: 12 };
+
+function _queryRecords(hostname, rrtype, cb) {
+  const rrtypeNum = RR_TYPES[rrtype];
+  if (!rrtypeNum) return process.nextTick(() => cb(new Error('Unknown rrtype: ' + rrtype)));
+
+  process.nextTick(() => {
+    const raw = b.query(hostname, rrtypeNum);
+    if (typeof raw === 'number' || raw === -1) {
+      const err = new Error('queryRecords ENODATA ' + hostname);
+      err.code = 'ENODATA';
+      return cb(err);
+    }
+    if (!raw || raw.length === 0) return cb(null, []);
+
+    const lines = raw.split('\n').filter(l => l.length > 0);
+    let results;
+    if (rrtype === 'MX') {
+      results = lines.map(l => {
+        const parts = l.split(' ');
+        return { priority: parseInt(parts[0], 10), exchange: parts.slice(1).join(' ') };
+      });
+    } else if (rrtype === 'SRV') {
+      results = lines.map(l => {
+        const parts = l.split(' ');
+        return { priority: parseInt(parts[0], 10), weight: parseInt(parts[1], 10), port: parseInt(parts[2], 10), name: parts.slice(3).join(' ') };
+      });
+    } else if (rrtype === 'TXT') {
+      results = lines.map(l => [l]);
+    } else {
+      results = lines;
+    }
+    cb(null, results);
+  });
+}
+
 function resolve(hostname, rrtype, cb) {
   if (typeof rrtype === 'function') { cb = rrtype; rrtype = 'A'; }
   if (rrtype === 'A' || rrtype === 'AAAA') {
@@ -32,13 +69,19 @@ function resolve(hostname, rrtype, cb) {
       cb(null, [address]);
     });
   } else {
-    process.nextTick(() => cb(null, []));
+    _queryRecords(hostname, rrtype, cb);
   }
 }
 
 const NODATA = 'ENODATA', FORMERR = 'EFORMERR', SERVFAIL = 'ESERVFAIL',
       NOTFOUND = 'ENOTFOUND', NOTIMP = 'ENOTIMP', REFUSED = 'EREFUSED',
       BADQUERY = 'EBADQUERY', BADNAME = 'EBADNAME', BADFAMILY = 'EBADFAMILY';
+
+function _promisify(fn) {
+  return (...args) => new Promise((resolve, reject) => {
+    fn(...args, (err, result) => err ? reject(err) : resolve(result));
+  });
+}
 
 const promises = {
   lookup: (hostname, options) => new Promise((resolve, reject) => {
@@ -53,17 +96,26 @@ const promises = {
       else resolve(addresses);
     });
   }),
+  resolve4: _promisify((h, cb) => dns.resolve4(h, cb)),
+  resolve6: _promisify((h, cb) => dns.resolve6(h, cb)),
+  resolveMx: _promisify((h, cb) => dns.resolveMx(h, cb)),
+  resolveTxt: _promisify((h, cb) => dns.resolveTxt(h, cb)),
+  resolveSrv: _promisify((h, cb) => dns.resolveSrv(h, cb)),
+  resolveNs: _promisify((h, cb) => dns.resolveNs(h, cb)),
+  resolveCname: _promisify((h, cb) => dns.resolveCname(h, cb)),
+  resolvePtr: _promisify((h, cb) => dns.resolvePtr(h, cb)),
 };
 
 const dns = {
   lookup, resolve,
   resolve4: (h, cb) => resolve(h, 'A', cb),
   resolve6: (h, cb) => resolve(h, 'AAAA', cb),
-  resolveMx: (h, cb) => process.nextTick(() => cb(null, [])),
-  resolveTxt: (h, cb) => process.nextTick(() => cb(null, [])),
-  resolveSrv: (h, cb) => process.nextTick(() => cb(null, [])),
-  resolveNs: (h, cb) => process.nextTick(() => cb(null, [])),
-  resolveCname: (h, cb) => process.nextTick(() => cb(null, [])),
+  resolveMx: (h, cb) => _queryRecords(h, 'MX', cb),
+  resolveTxt: (h, cb) => _queryRecords(h, 'TXT', cb),
+  resolveSrv: (h, cb) => _queryRecords(h, 'SRV', cb),
+  resolveNs: (h, cb) => _queryRecords(h, 'NS', cb),
+  resolveCname: (h, cb) => _queryRecords(h, 'CNAME', cb),
+  resolvePtr: (h, cb) => _queryRecords(h, 'PTR', cb),
   reverse: (ip, cb) => process.nextTick(() => {
     const result = b.reverse(ip);
     if (result === -1 || typeof result !== 'string') {

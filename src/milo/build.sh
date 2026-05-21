@@ -63,7 +63,7 @@ clang++ -o "$OUT/milo-node" \
   -licuucx -licui18n -licudata \
   -framework CoreFoundation -framework Security \
   -L"$OPENSSL_PREFIX/lib" -lssl -lcrypto \
-  -lc++ -lpthread -ldl -lz
+  -lc++ -lpthread -ldl -lz -lresolv
 
 echo "=== done: $OUT/milo-node ==="
 "$OUT/milo-node" -e "console.log('milo-node ok:', require('path').join('a','b'))"

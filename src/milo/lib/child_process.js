@@ -9,11 +9,34 @@ function normalizeArgs(cmd, args, opts) {
   return { args: args || [], opts: opts || {} };
 }
 
+// 0=pipe, 1=inherit, 2=ignore
+function parseStdioMode(val) {
+  if (val === 'pipe' || val === undefined || val === null) return 0;
+  if (val === 'inherit') return 1;
+  if (val === 'ignore') return 2;
+  if (typeof val === 'number') return 1; // fd number = inherit-like
+  return 0;
+}
+
+function parseStdio(opts) {
+  const stdio = opts.stdio;
+  if (!stdio) return [0, 0, 0];
+  if (typeof stdio === 'string') {
+    const m = parseStdioMode(stdio);
+    return [m, m, m];
+  }
+  if (Array.isArray(stdio)) {
+    return [parseStdioMode(stdio[0]), parseStdioMode(stdio[1]), parseStdioMode(stdio[2])];
+  }
+  return [0, 0, 0];
+}
+
 function spawnSync(file, args, options) {
   const { args: a, opts } = normalizeArgs(file, args, options);
   const allArgs = a;
   const input = opts.input != null ? String(opts.input) : undefined;
-  const result = b.spawnSync(file, allArgs, input);
+  const [stdinMode, stdoutMode, stderrMode] = parseStdio(opts);
+  const result = b.spawnSync(file, allArgs, input, stdinMode, stdoutMode, stderrMode);
   if (result.error) {
     return { status: null, signal: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error: new Error('spawn ' + file + ' failed') };
   }
@@ -61,39 +84,41 @@ function execFileSync(file, args, options) {
 // True async would need the event loop to poll child — this is good enough for most uses
 function spawn(file, args, options) {
   const { args: a, opts } = normalizeArgs(file, args, options);
+  const [stdinMode, stdoutMode, stderrMode] = parseStdio(opts);
   const child = new EventEmitter();
   const { Readable, Writable } = require('stream');
 
-  child.stdin = new Writable({ write(chunk, enc, cb) { cb(); } });
-  child.stdout = new Readable({ read() {} });
-  child.stderr = new Readable({ read() {} });
+  child.stdin = stdinMode === 0 ? new Writable({ write(chunk, enc, cb) { cb(); } }) : null;
+  child.stdout = stdoutMode === 0 ? new Readable({ read() {} }) : null;
+  child.stderr = stderrMode === 0 ? new Readable({ read() {} }) : null;
   child.pid = 0;
   child.killed = false;
   child.kill = function() { child.killed = true; };
 
   process.nextTick(() => {
     const stdinChunks = [];
-    const origWrite = child.stdin._write;
-    child.stdin._write = function(chunk, enc, cb) { stdinChunks.push(chunk); cb(); };
+    if (child.stdin) {
+      child.stdin._write = function(chunk, enc, cb) { stdinChunks.push(chunk); cb(); };
+    }
 
     process.nextTick(() => {
       const input = stdinChunks.length > 0 ? Buffer.concat(stdinChunks).toString() : undefined;
-      const result = b.spawnSync(file, a, input);
+      const result = b.spawnSync(file, a, input, stdinMode, stdoutMode, stderrMode);
 
       if (result.error) {
         child.emit('error', new Error('spawn ' + file + ' failed'));
         return;
       }
 
-      if (result.stdout) {
-        child.stdout.push(Buffer.from(result.stdout));
+      if (child.stdout) {
+        if (result.stdout) child.stdout.push(Buffer.from(result.stdout));
+        child.stdout.push(null);
       }
-      child.stdout.push(null);
 
-      if (result.stderr) {
-        child.stderr.push(Buffer.from(result.stderr));
+      if (child.stderr) {
+        if (result.stderr) child.stderr.push(Buffer.from(result.stderr));
+        child.stderr.push(null);
       }
-      child.stderr.push(null);
 
       child.exitCode = result.status;
       child.emit('close', result.status, null);
