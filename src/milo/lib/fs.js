@@ -68,7 +68,14 @@ function mkdirSync(path, opts) {
 function unlinkSync(path) { b.unlink(String(path)); }
 function rmdirSync(path) { b.rmdir(String(path)); }
 function renameSync(old, n) { b.rename(String(old), String(n)); }
-function readdirSync(path) { return b.readdir(String(path)) || []; }
+function readdirSync(path, opts) {
+  const entries = b.readdir(String(path)) || [];
+  if (opts && opts.withFileTypes) {
+    const dir = String(path);
+    return entries.map(name => new Dirent(name, dir));
+  }
+  return entries;
+}
 function realpathSync(path) { return b.realpath(String(path)); }
 function chmodSync(path, mode) { b.chmod(String(path), mode); }
 function symlinkSync(target, path) { b.symlink(String(target), String(path)); }
@@ -233,7 +240,7 @@ function mkdir(path, opts, cb) {
 
 function readdir(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
-  _async(readdirSync, [path], cb);
+  _async(readdirSync, [path, opts], cb);
 }
 
 function unlink(path, cb) { _async(unlinkSync, [path], (err) => cb(err)); }
@@ -374,6 +381,30 @@ function unwatchFile(filename, listener) {
   if (timer) { clearInterval(timer); _watchFileTimers.delete(fname); }
 }
 
+class Dirent {
+  constructor(name, parentPath) {
+    this.name = name;
+    this.parentPath = parentPath;
+    this.path = parentPath;
+    this._stat = null;
+  }
+  _getStat() {
+    if (!this._stat) {
+      const p = require('path');
+      try { this._stat = lstatSync(p.join(this.parentPath, this.name)); }
+      catch { this._stat = { isFile: () => false, isDirectory: () => false, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false }; }
+    }
+    return this._stat;
+  }
+  isFile() { return this._getStat().isFile(); }
+  isDirectory() { return this._getStat().isDirectory(); }
+  isSymbolicLink() { return this._getStat().isSymbolicLink(); }
+  isBlockDevice() { return this._getStat().isBlockDevice ? this._getStat().isBlockDevice() : false; }
+  isCharacterDevice() { return this._getStat().isCharacterDevice ? this._getStat().isCharacterDevice() : false; }
+  isFIFO() { return this._getStat().isFIFO ? this._getStat().isFIFO() : false; }
+  isSocket() { return this._getStat().isSocket ? this._getStat().isSocket() : false; }
+}
+
 const promises = {
   readFile: (path, opts) => Promise.resolve(readFileSync(path, opts)),
   writeFile: (path, data) => Promise.resolve(writeFileSync(path, data)),
@@ -381,7 +412,7 @@ const promises = {
   unlink: (path) => Promise.resolve(unlinkSync(path)),
   mkdir: (path, opts) => Promise.resolve(mkdirSync(path, opts)),
   rmdir: (path) => Promise.resolve(rmdirSync(path)),
-  readdir: (path) => Promise.resolve(readdirSync(path)),
+  readdir: (path, opts) => Promise.resolve(readdirSync(path, opts)),
   access: (path, mode) => Promise.resolve(accessSync(path, mode)),
   rm: (path, opts) => Promise.resolve(rmSync(path, opts)),
 };
@@ -396,7 +427,7 @@ module.exports = {
   symlinkSync, lstatSync, readlinkSync,
   openSync, closeSync, fstatSync, writeSync, readSync,
   createReadStream, createWriteStream,
-  watch, watchFile, unwatchFile, FSWatcher,
+  watch, watchFile, unwatchFile, FSWatcher, Dirent,
   promises,
   constants: internalBinding('constants').fs,
 };

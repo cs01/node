@@ -31,7 +31,7 @@
   };
   const _jsBindings = {
     constants: _constants, types: _types,
-    config: { hasIntl: true, hasOpenSSL: false, hasCrypto: false, hasInspector: false },
+    config: { hasIntl: true, hasOpenSSL: true, hasCrypto: true, hasInspector: false },
     errors: { exitCodes: { kNoFailure: 0, kGenericUserError: 1, kUnfinishedTopLevelAwait: 13 }, noSideEffectsToString(v) { try { return ''+v; } catch { return 'Object'; } }, triggerUncaughtException(e) { throw e; } },
     util: {
       getCallerLocation() { return undefined; },
@@ -320,6 +320,14 @@
       const flatId = id.replace(/\//g, '_');
       if (_moduleWrappers[id]) return _moduleWrappers[id].exports;
       if (moduleCache[id]) return moduleCache[id];
+
+      // Handle builtin subpath requires like fs/promises, stream/promises
+      const _builtinSubpaths = { 'fs/promises': 'fs', 'stream/promises': 'stream', 'stream/consumers': 'stream', 'dns/promises': 'dns' };
+      if (_builtinSubpaths[id]) {
+        const parent = require(_builtinSubpaths[id]);
+        const sub = id.split('/')[1];
+        if (parent[sub]) { moduleCache[id] = parent[sub]; return parent[sub]; }
+      }
 
       const isRelative = id.startsWith('./') || id.startsWith('../') || id.startsWith('/');
       let src = isRelative ? undefined : (_tryMiloLib(id) || _tryMiloLib(flatId) || __loadBuiltin(id));

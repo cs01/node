@@ -71,6 +71,7 @@ function createHmac(algorithm, key) {
   // HMAC: hash(key XOR opad || hash(key XOR ipad || message))
   const hashLen = HASH_LEN[algorithm.toLowerCase()] || 32;
   const blockSize = algorithm.toLowerCase().includes('512') ? 128 : 64;
+  if (key instanceof KeyObject) key = key.export();
   let keyBuf = Buffer.isBuffer(key) ? key : Buffer.from(key);
   if (keyBuf.length > blockSize) keyBuf = createHash(algorithm).update(keyBuf).digest();
   if (keyBuf.length < blockSize) { const padded = Buffer.alloc(blockSize); keyBuf.copy(padded); keyBuf = padded; }
@@ -376,12 +377,28 @@ function generateKeyPairSync(type, options) {
   throw new Error(`Unsupported key type: ${type}`);
 }
 
+function createPublicKey(key) {
+  if (key instanceof KeyObject) return key;
+  const pem = typeof key === 'object' ? key.key : key;
+  const str = typeof pem === 'string' ? pem : pem.toString();
+  if (!str.includes('-----BEGIN')) throw new Error('Invalid public key');
+  return new KeyObject('public', str);
+}
+
+function createPrivateKey(key) {
+  if (key instanceof KeyObject) return key;
+  const pem = typeof key === 'object' ? key.key : key;
+  const str = typeof pem === 'string' ? pem : pem.toString();
+  if (!str.includes('-----BEGIN')) throw new Error('Invalid private key');
+  return new KeyObject('private', str);
+}
+
 module.exports = {
   randomBytes, randomFillSync, randomFill, randomUUID, randomInt, createHash, createHmac, timingSafeEqual,
   createCipheriv, createDecipheriv,
   pbkdf2, pbkdf2Sync, scrypt, scryptSync,
   createSign, createVerify, generateKeyPairSync, generateKeySync,
-  KeyObject, createSecretKey,
+  KeyObject, createSecretKey, createPublicKey, createPrivateKey,
   constants: {},
   getHashes: () => ['md5', 'sha1', 'sha256', 'sha384', 'sha512'],
   getCiphers: () => [...Object.keys(CIPHER_MAP), ...Object.keys(GCM_MAP)],

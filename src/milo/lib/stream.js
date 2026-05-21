@@ -3,21 +3,23 @@
 
 const EventEmitter = require('events');
 
-class Stream extends EventEmitter {
-  pipe(dest, opts) {
-    this.on('data', (chunk) => {
-      if (dest.writable !== false) {
-        const canContinue = dest.write(chunk);
-        if (canContinue === false && this.pause) this.pause();
-      }
-    });
-    this.on('end', () => { if (!opts || opts.end !== false) dest.end(); });
-    dest.on('drain', () => { if (this.resume) this.resume(); });
-    dest.emit('pipe', this);
-    if (this.resume) this.resume();
-    return dest;
-  }
-}
+// Function-based so old-style util.inherits + .call() works
+function Stream() { EventEmitter.call(this); }
+Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
+Object.setPrototypeOf(Stream, EventEmitter);
+Stream.prototype.pipe = function pipe(dest, opts) {
+  this.on('data', (chunk) => {
+    if (dest.writable !== false) {
+      const canContinue = dest.write(chunk);
+      if (canContinue === false && this.pause) this.pause();
+    }
+  });
+  this.on('end', () => { if (!opts || opts.end !== false) dest.end(); });
+  dest.on('drain', () => { if (this.resume) this.resume(); });
+  dest.emit('pipe', this);
+  if (this.resume) this.resume();
+  return dest;
+};
 
 class Readable extends Stream {
   constructor(opts) {
