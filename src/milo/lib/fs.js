@@ -272,26 +272,68 @@ const path = require('path');
 class FSWatcher extends EventEmitter {
   constructor(filename, options) {
     super();
-    this._filename = filename;
+    this._filename = path.resolve(filename);
+    this._recursive = !!(options && options.recursive);
+    this._fds = new Map();
     net._ensurePoll();
-    this._fd = tcp.watchFile(filename);
-    if (this._fd < 0) {
+
+    const fd = tcp.watchFile(this._filename);
+    if (fd < 0) {
+      this._fd = -1;
       process.nextTick(() => this.emit('error', new Error('watch ' + filename + ' failed')));
       return;
     }
-    net._fileWatchers.set(this._fd, this);
-  }
-  _onEvent(fflags) {
-    const isRename = !!(fflags & 32);
-    const eventType = isRename ? 'rename' : 'change';
-    this.emit('change', eventType, path.basename(this._filename));
-  }
-  close() {
-    if (this._fd >= 0) {
-      net._fileWatchers.delete(this._fd);
-      tcp.unwatchFile(this._fd);
-      this._fd = -1;
+    this._fd = fd;
+    this._fds.set(fd, this._filename);
+    net._fileWatchers.set(fd, this);
+
+    if (this._recursive) {
+      this._addSubdirs(this._filename);
     }
+  }
+
+  _addSubdirs(dir) {
+    let entries;
+    try { entries = readdirSync(dir); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry);
+      try {
+        const s = statSync(full);
+        if (s.isDirectory()) {
+          const fd = tcp.watchFile(full);
+          if (fd >= 0) {
+            this._fds.set(fd, full);
+            net._fileWatchers.set(fd, this);
+            this._addSubdirs(full);
+          }
+        }
+      } catch {}
+    }
+  }
+
+  _onEvent(fflags, eventFd) {
+    const isRename = !!(fflags & 32);
+    const isWrite = !!(fflags & 2);
+    const eventType = isRename ? 'rename' : 'change';
+    const watchedPath = this._fds.get(eventFd) || this._filename;
+    const relPath = watchedPath === this._filename
+      ? path.basename(this._filename)
+      : path.relative(this._filename, watchedPath);
+    this.emit('change', eventType, relPath);
+
+    // When a directory changes, scan for new subdirectories to watch
+    if (this._recursive && isWrite) {
+      this._addSubdirs(watchedPath);
+    }
+  }
+
+  close() {
+    for (const [fd] of this._fds) {
+      net._fileWatchers.delete(fd);
+      tcp.unwatchFile(fd);
+    }
+    this._fds.clear();
+    this._fd = -1;
     this.emit('close');
   }
   ref() { return this; }

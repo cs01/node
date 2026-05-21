@@ -80,50 +80,114 @@ function execFileSync(file, args, options) {
   return encoding === 'buffer' ? result.stdout : result.stdout.toString(encoding);
 }
 
-// Async spawn — runs spawnSync in current tick then emits events
-// True async would need the event loop to poll child — this is good enough for most uses
+// True async spawn — pipes registered with kqueue for non-blocking I/O
 function spawn(file, args, options) {
   const { args: a, opts } = normalizeArgs(file, args, options);
   const [stdinMode, stdoutMode, stderrMode] = parseStdio(opts);
   const child = new EventEmitter();
   const { Readable, Writable } = require('stream');
+  const net = require('net');
+  const tcp = internalBinding('tcp');
 
-  child.stdin = stdinMode === 0 ? new Writable({ write(chunk, enc, cb) { cb(); } }) : null;
-  child.stdout = stdoutMode === 0 ? new Readable({ read() {} }) : null;
-  child.stderr = stderrMode === 0 ? new Readable({ read() {} }) : null;
-  child.pid = 0;
+  child.exitCode = null;
+  child.signalCode = null;
   child.killed = false;
-  child.kill = function() { child.killed = true; };
+  child.connected = false;
 
-  process.nextTick(() => {
-    const stdinChunks = [];
-    if (child.stdin) {
-      child.stdin._write = function(chunk, enc, cb) { stdinChunks.push(chunk); cb(); };
-    }
+  const result = b.spawnAsync(file, a, stdinMode, stdoutMode, stderrMode);
+  if (!result || result === -1) {
+    child.pid = 0;
+    child.stdin = null;
+    child.stdout = null;
+    child.stderr = null;
+    process.nextTick(() => child.emit('error', new Error('spawn ' + file + ' ENOENT')));
+    return child;
+  }
 
-    process.nextTick(() => {
-      const input = stdinChunks.length > 0 ? Buffer.concat(stdinChunks).toString() : undefined;
-      const result = b.spawnSync(file, a, input, stdinMode, stdoutMode, stderrMode);
+  child.pid = result.pid;
+  let pipesOpen = 0;
 
-      if (result.error) {
-        child.emit('error', new Error('spawn ' + file + ' failed'));
+  // Writable stdin pipe
+  if (result.stdinFd >= 0) {
+    child.stdin = new Writable({
+      write(chunk, enc, cb) {
+        const str = typeof chunk === 'string' ? chunk : chunk.toString();
+        b.writePipe(result.stdinFd, str);
+        cb();
+      },
+      final(cb) {
+        b.closeFd(result.stdinFd);
+        cb();
+      }
+    });
+  } else {
+    child.stdin = null;
+  }
+
+  // Register pipe fds with kqueue for async reads
+  function setupReadPipe(fd) {
+    if (fd < 0) return null;
+    pipesOpen++;
+    const stream = new Readable({ read() {} });
+    net._ensurePoll();
+
+    const pipeObj = {
+      _fd: fd,
+      destroyed: false,
+      _onReadable() {
+        for (;;) {
+          const data = b.readPipe(fd);
+          if (data === undefined) {
+            stream.push(null);
+            net.Socket._sockets.delete(fd);
+            b.closeFd(fd);
+            this.destroyed = true;
+            pipesOpen--;
+            _checkExit();
+            return;
+          }
+          if (data.length === 0) break;
+          stream.push(Buffer.from(data));
+        }
+      }
+    };
+
+    net.Socket._sockets.set(fd, pipeObj);
+    tcp.pollAdd(fd, tcp.EVFILT_READ);
+    return stream;
+  }
+
+  child.stdout = setupReadPipe(result.stdoutFd);
+  child.stderr = setupReadPipe(result.stderrFd);
+
+  child.kill = function(signal) {
+    if (child.killed) return false;
+    const sig = typeof signal === 'string' ? { SIGTERM: 15, SIGKILL: 9, SIGINT: 2, SIGHUP: 1 }[signal] || 15 : (signal || 15);
+    b.killPid(child.pid, sig);
+    child.killed = true;
+    return true;
+  };
+
+  function _checkExit() {
+    if (pipesOpen > 0) return;
+    // All pipes closed — poll for exit status
+    const _poll = () => {
+      const status = b.waitpidNH(child.pid);
+      if (status === -1) {
+        setTimeout(_poll, 10);
         return;
       }
+      child.exitCode = status;
+      child.emit('exit', status, null);
+      child.emit('close', status, null);
+    };
+    _poll();
+  }
 
-      if (child.stdout) {
-        if (result.stdout) child.stdout.push(Buffer.from(result.stdout));
-        child.stdout.push(null);
-      }
-
-      if (child.stderr) {
-        if (result.stderr) child.stderr.push(Buffer.from(result.stderr));
-        child.stderr.push(null);
-      }
-
-      child.exitCode = result.status;
-      child.emit('close', result.status, null);
-    });
-  });
+  // No pipes to wait on — go straight to exit polling
+  if (pipesOpen === 0) {
+    process.nextTick(_checkExit);
+  }
 
   return child;
 }

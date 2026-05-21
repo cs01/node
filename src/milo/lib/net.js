@@ -255,7 +255,7 @@ function _pollOnce(timeout) {
     // file watcher vnode events
     if (filter === EVFILT_VNODE) {
       const watcher = _fileWatchers.get(fd);
-      if (watcher) watcher._onEvent(ev.fflags || 0);
+      if (watcher) watcher._onEvent(ev.fflags || 0, fd);
       continue;
     }
 
@@ -285,11 +285,16 @@ function _pollOnce(timeout) {
     }
 
     if ((flags & EV_EOF) && !sock.destroyed) {
-      if (sock.readable) {
-        sock.readable = false;
-        sock.emit('end');
+      if (typeof sock.emit === 'function') {
+        if (sock.readable) {
+          sock.readable = false;
+          sock.emit('end');
+        }
+        if (typeof sock.destroy === 'function') sock.destroy();
+      } else {
+        // Pipe fd — trigger _onReadable which handles EOF internally
+        sock._onReadable();
       }
-      sock.destroy();
     }
   }
   return events.length;

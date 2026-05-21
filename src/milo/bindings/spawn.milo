@@ -19,6 +19,8 @@ extern fn malloc(size: i64): *u8
 extern fn free(ptr: *u8): void
 extern fn strlen(s: *u8): i64
 extern fn memcpy(dst: *u8, src: *u8, len: i64): *u8
+extern fn fcntl(fd: i32, cmd: i32, arg: i32): i32
+extern fn kill(pid: i32, sig: i32): i32
 
 fn readAllFromFd(fd: i32, outLen: *i64): *u8 {
     unsafe {
@@ -233,10 +235,226 @@ fn spawnSyncBinding(info: *u8, _ud: *u8): void {
     }
 }
 
+// spawnAsync(file, args[]) → {pid, stdinFd, stdoutFd, stderrFd}
+// Launches child, sets pipe fds to O_NONBLOCK, returns immediately
+fn spawnAsyncBinding(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 1 { return }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+
+    unsafe {
+        var fileBuf: [u8; 4096] = [0; 4096]
+        let fileLen = ci.arg(0).writeUtf8(iso, fileBuf as *u8, 4096)
+        if fileLen <= 0 { return }
+
+        let argvBuf = malloc(1024 as i64)
+        let argvArr = argvBuf as *i64
+        var argc: i32 = 0
+
+        let fileCopy = malloc(fileLen as i64 + 1)
+        memcpy(fileCopy, fileBuf as *u8, fileLen as i64 + 1)
+        argvArr[0] = fileCopy as i64
+        argc = 1
+
+        if ci.length() > 1 {
+            let argsArr = ci.arg(1)
+            let arrLen = argsArr.arrayLength(iso)
+            var ai: i32 = 0
+            while ai < arrLen && argc < 126 {
+                let elem = ctx.objectGetIndex(argsArr, ai as u32)
+                var aBuf: [u8; 4096] = [0; 4096]
+                let aLen = elem.writeUtf8(iso, aBuf as *u8, 4096)
+                if aLen > 0 {
+                    let copy = malloc(aLen as i64 + 1)
+                    memcpy(copy, aBuf as *u8, aLen as i64 + 1)
+                    argvArr[argc as i64] = copy as i64
+                    argc = argc + 1
+                }
+                ai = ai + 1
+            }
+        }
+        argvArr[argc as i64] = 0
+
+        var stdinMode: i32 = 0
+        var stdoutMode: i32 = 0
+        var stderrMode: i32 = 0
+        if ci.length() > 2 { stdinMode = ci.i32Arg(2, 0) }
+        if ci.length() > 3 { stdoutMode = ci.i32Arg(3, 0) }
+        if ci.length() > 4 { stderrMode = ci.i32Arg(4, 0) }
+
+        var stdoutPipe: [i32; 2] = [-1; 2]
+        var stderrPipe: [i32; 2] = [-1; 2]
+        var stdinPipe: [i32; 2] = [-1; 2]
+        if stdinMode == 0 { pipe(stdinPipe as *i32) }
+        if stdoutMode == 0 { pipe(stdoutPipe as *i32) }
+        if stderrMode == 0 { pipe(stderrPipe as *i32) }
+
+        var fileActions: [u8; 128] = [0; 128]
+        posix_spawn_file_actions_init(fileActions as *u8)
+
+        if stdinMode == 0 {
+            posix_spawn_file_actions_adddup2(fileActions as *u8, stdinPipe[0], 0)
+            posix_spawn_file_actions_addclose(fileActions as *u8, stdinPipe[1])
+        }
+        if stdinMode == 1 {} // inherit — no action
+        if stdinMode == 2 {
+            posix_spawn_file_actions_addopen(fileActions as *u8, 0, "/dev/null", 0, 0)
+        }
+
+        if stdoutMode == 0 {
+            posix_spawn_file_actions_adddup2(fileActions as *u8, stdoutPipe[1], 1)
+            posix_spawn_file_actions_addclose(fileActions as *u8, stdoutPipe[0])
+        }
+        if stdoutMode == 2 {
+            posix_spawn_file_actions_addopen(fileActions as *u8, 1, "/dev/null", 1, 0)
+        }
+
+        if stderrMode == 0 {
+            posix_spawn_file_actions_adddup2(fileActions as *u8, stderrPipe[1], 2)
+            posix_spawn_file_actions_addclose(fileActions as *u8, stderrPipe[0])
+        }
+        if stderrMode == 2 {
+            posix_spawn_file_actions_addopen(fileActions as *u8, 2, "/dev/null", 1, 0)
+        }
+
+        var pid: [i32; 1] = [0]
+        let spawnResult = posix_spawnp(pid as *i32, fileBuf as *u8, fileActions as *u8, 0 as *u8, argvBuf, 0 as *u8)
+        posix_spawn_file_actions_destroy(fileActions as *u8)
+
+        // Close child-side pipe ends in parent
+        if stdinPipe[0] >= 0 { close(stdinPipe[0]) }
+        if stdoutPipe[1] >= 0 { close(stdoutPipe[1]) }
+        if stderrPipe[1] >= 0 { close(stderrPipe[1]) }
+
+        // Free argv
+        var fi: i32 = 0
+        while fi < argc {
+            free(argvArr[fi as i64] as *u8)
+            fi = fi + 1
+        }
+        free(argvBuf)
+
+        if spawnResult != 0 {
+            if stdinPipe[1] >= 0 { close(stdinPipe[1]) }
+            if stdoutPipe[0] >= 0 { close(stdoutPipe[0]) }
+            if stderrPipe[0] >= 0 { close(stderrPipe[0]) }
+            ci.retI32(-1)
+            return
+        }
+
+        // Set parent-side pipe fds to O_NONBLOCK
+        if stdinPipe[1] >= 0 {
+            let fl = fcntl(stdinPipe[1], 3, 0)
+            fcntl(stdinPipe[1], 4, fl | 4)
+        }
+        if stdoutPipe[0] >= 0 {
+            let fl = fcntl(stdoutPipe[0], 3, 0)
+            fcntl(stdoutPipe[0], 4, fl | 4)
+        }
+        if stderrPipe[0] >= 0 {
+            let fl = fcntl(stderrPipe[0], 3, 0)
+            fcntl(stderrPipe[0], 4, fl | 4)
+        }
+
+        let result = iso.object()
+        ctx.objectSet(result, "pid" as *u8, iso.int32(pid[0]))
+        ctx.objectSet(result, "stdinFd" as *u8, iso.int32(stdinPipe[1]))
+        ctx.objectSet(result, "stdoutFd" as *u8, iso.int32(stdoutPipe[0]))
+        ctx.objectSet(result, "stderrFd" as *u8, iso.int32(stderrPipe[0]))
+        ci.ret(result)
+    }
+}
+
+// readPipe(fd) → string data, empty string for EAGAIN, undefined for EOF
+fn readPipeBinding(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    if fd < 0 {
+        ci.retUndefined()
+        return
+    }
+    unsafe {
+        let buf = malloc(65536)
+        let n = read(fd, buf, 65535)
+        if n > 0 {
+            ci.retStrLen(buf, n as i32)
+        } else if n == 0 {
+            ci.retUndefined()
+        } else {
+            ci.retStr("" as *u8)
+        }
+        free(buf)
+    }
+}
+
+// writePipe(fd, data) → bytes written (-1 on error)
+fn writePipeBinding(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let fd = ci.i32Arg(0, -1)
+    if fd < 0 {
+        ci.retI32(-1)
+        return
+    }
+    unsafe {
+        var buf: [u8; 65536] = [0; 65536]
+        let len = ci.arg(1).writeUtf8(iso, buf as *u8, 65536)
+        if len <= 0 {
+            ci.retI32(0)
+            return
+        }
+        let n = write(fd, buf as *u8, len as i64)
+        ci.retI32(n as i32)
+    }
+}
+
+// closeFd(fd)
+fn closeFdBinding(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    if fd >= 0 { unsafe { close(fd) } }
+}
+
+// waitpidNH(pid) → -1 if still running, else exit status
+fn waitpidNHBinding(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let pid = ci.i32Arg(0, -1)
+    if pid <= 0 {
+        ci.retI32(-1)
+        return
+    }
+    unsafe {
+        var status: [i32; 1] = [0]
+        // WNOHANG = 1
+        let ret = waitpid(pid, status as *i32, 1)
+        if ret <= 0 {
+            ci.retI32(-1)
+        } else {
+            let exitCode = (status[0] >> 8) & 255
+            ci.retI32(exitCode)
+        }
+    }
+}
+
+// killPid(pid, signal)
+fn killPidBinding(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let pid = ci.i32Arg(0, -1)
+    let sig = ci.i32Arg(1, 15)
+    if pid > 0 { unsafe { kill(pid, sig) } }
+}
+
 fn nm_init_spawn(_iso: *u8, ctxPtr: *u8, exports: i32): void {
     let ctx = Context { ptr: ctxPtr }
     let exp = Value { slot: exports }
     unsafe {
         ctx.setMethod(exp, "spawnSync" as *u8, spawnSyncBinding as *u8)
+        ctx.setMethod(exp, "spawnAsync" as *u8, spawnAsyncBinding as *u8)
+        ctx.setMethod(exp, "readPipe" as *u8, readPipeBinding as *u8)
+        ctx.setMethod(exp, "writePipe" as *u8, writePipeBinding as *u8)
+        ctx.setMethod(exp, "closeFd" as *u8, closeFdBinding as *u8)
+        ctx.setMethod(exp, "waitpidNH" as *u8, waitpidNHBinding as *u8)
+        ctx.setMethod(exp, "killPid" as *u8, killPidBinding as *u8)
     }
 }
