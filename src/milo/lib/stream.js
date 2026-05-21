@@ -95,18 +95,23 @@ class Readable extends Stream {
   _flow() {
     const state = this._readableState;
     if (!state.flowing) return;
+    // Drain buffered data first, even if stream is already ended
+    while (state.buffer.length > 0 && state.flowing) {
+      const chunk = state.buffer.shift();
+      state.length -= chunk.length || 1;
+      this.emit('data', chunk);
+    }
     while (state.flowing && !state.ended) {
+      this._didPush = false;
+      this._read(state.highWaterMark);
+      if (!this._didPush) break;
       while (state.buffer.length > 0 && state.flowing) {
         const chunk = state.buffer.shift();
         state.length -= chunk.length || 1;
         this.emit('data', chunk);
       }
-      if (state.ended || !state.flowing) break;
-      this._didPush = false;
-      this._read(state.highWaterMark);
-      if (!this._didPush) break;
     }
-    if (state.ended && !state.endEmitted) { state.endEmitted = true; this.emit('end'); }
+    if (state.ended && state.buffer.length === 0 && !state.endEmitted) { state.endEmitted = true; this.emit('end'); }
   }
   pause() { this._readableState.flowing = false; return this; }
   isPaused() { return this._readableState.flowing === false; }
@@ -115,18 +120,27 @@ class Readable extends Stream {
 
   [Symbol.asyncIterator]() {
     const self = this;
+    let active = true;
+    if (globalThis.__ref) globalThis.__ref();
+    const done = (val) => {
+      if (active) { active = false; if (globalThis.__unref) globalThis.__unref(); }
+      return val;
+    };
     return {
       next() {
         return new Promise((resolve) => {
           const chunk = self.read();
           if (chunk !== null) return resolve({ value: chunk, done: false });
-          if (self._readableState.ended) return resolve({ done: true });
+          if (self._readableState.ended) return resolve(done({ done: true }));
           self.once('readable', () => {
             const c = self.read();
-            resolve(c !== null ? { value: c, done: false } : { done: true });
+            resolve(c !== null ? { value: c, done: false } : done({ done: true }));
           });
-          self.once('end', () => resolve({ done: true }));
+          self.once('end', () => resolve(done({ done: true })));
         });
+      },
+      return() {
+        return Promise.resolve(done({ done: true }));
       }
     };
   }

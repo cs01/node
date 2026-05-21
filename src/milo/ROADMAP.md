@@ -19,12 +19,11 @@ Full build: `bash src/milo/build.sh`
 
 ## low
 
-- [ ] `dgram` — UDP socket send/receive
 - [ ] `cluster` module
 - [ ] `worker_threads` — `Worker`, `MessageChannel`, `MessagePort`
 - [ ] `vm` — proper sandbox isolation via V8 contexts
-- [ ] `perf_hooks` — `monitorEventLoopDelay` real histogram, `eventLoopUtilization`
-- [ ] `readline` — real terminal raw mode, completion, history
-- [ ] `process.nextTick` — proper implementation (currently microtask-based, fragile)
+- [ ] `perf_hooks` — `monitorEventLoopDelay` real histogram
+- [ ] `readline` — real terminal raw mode (tcgetattr/tcsetattr), completion, history
+- [ ] `stream.Writable.toWeb()` / `Readable.toWeb()` — needs ReadableStream/WritableStream globals in V8
 - [ ] Buffer pooling optimization
 - [ ] `domain` module (deprecated but some packages use it)

@@ -19,6 +19,8 @@ extern fn free(ptr: *u8): void
 // read/write for connected sockets
 extern fn read(fd: i32, buf: *u8, len: i64): i64
 extern fn write(fd: i32, buf: *u8, len: i64): i64
+extern fn sendto(fd: i32, buf: *u8, len: i64, flags: i32, addr: *u8, addrlen: i32): i64
+extern fn recvfrom(fd: i32, buf: *u8, len: i64, flags: i32, addr: *u8, addrlen: *i32): i64
 
 // kqueue
 extern fn kqueue(): i32
@@ -675,6 +677,195 @@ fn sslCtxFree(info: *u8, _ud: *u8): void {
     }
 }
 
+// --- UDP bindings ---
+
+// udpSocket() → fd  (AF_INET=2, SOCK_DGRAM=2)
+fn udpSocket(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let fd = socket(2, 2, 0)
+        if fd >= 0 {
+            let flags = fcntl(fd, 3, 0)
+            fcntl(fd, 4, flags | 4)
+        }
+        ci.retI32(fd)
+    }
+}
+
+// udpBind(fd, port, host)
+fn udpBind(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let fd = ci.i32Arg(0, -1)
+    let port = ci.i32Arg(1, 0)
+    unsafe {
+        var host_buf: [u8; 256] = [0; 256]
+        if ci.length() > 2 {
+            ci.arg(2).writeUtf8(iso, host_buf as *u8, 256)
+        }
+
+        var addr: [u8; 16] = [0; 16]
+        addr[0] = 16
+        addr[1] = 2
+        let port_n = htons(port)
+        addr[2] = (port_n & 0xff) as u8
+        addr[3] = ((port_n >> 8) & 0xff) as u8
+
+        if host_buf[0] != 0 {
+            inet_pton(2, host_buf as *u8, (addr as *u8 as i64 + 4) as *u8)
+        }
+
+        // SO_REUSEADDR
+        var on: [i32; 1] = [1]
+        setsockopt(fd, 0xffff, 4, on as *u8, 4)
+
+        let r = bind(fd, addr as *u8, 16)
+        ci.retI32(r)
+    }
+}
+
+// udpSend(fd, data, port, host) → bytes sent
+fn udpSendOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let fd = ci.i32Arg(0, -1)
+    let port = ci.i32Arg(2, 0)
+    unsafe {
+        var dataBuf: [u8; 65536] = [0; 65536]
+        let dataLen = ci.arg(1).writeUtf8(iso, dataBuf as *u8, 65536)
+
+        var host_buf: [u8; 256] = [0; 256]
+        if ci.length() > 3 {
+            ci.arg(3).writeUtf8(iso, host_buf as *u8, 256)
+        }
+
+        var addr: [u8; 16] = [0; 16]
+        addr[0] = 16
+        addr[1] = 2
+        let port_n = htons(port)
+        addr[2] = (port_n & 0xff) as u8
+        addr[3] = ((port_n >> 8) & 0xff) as u8
+
+        if host_buf[0] != 0 {
+            inet_pton(2, host_buf as *u8, (addr as *u8 as i64 + 4) as *u8)
+        } else {
+            // 127.0.0.1 as default
+            addr[4] = 127
+            addr[7] = 1
+        }
+
+        let n = sendto(fd, dataBuf as *u8, dataLen as i64, 0, addr as *u8, 16)
+        ci.retI32(n as i32)
+    }
+}
+
+// udpRecv(fd) → {data, rinfo: {address, port, family, size}} or undefined
+fn udpRecvOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    let fd = ci.i32Arg(0, -1)
+    unsafe {
+        let buf = calloc(1, 65536)
+        var srcAddr: [u8; 16] = [0; 16]
+        var addrLen: [i32; 1] = [16]
+        let n = recvfrom(fd, buf, 65535, 0, srcAddr as *u8, addrLen as *i32)
+        if n <= 0 {
+            ci.retUndefined()
+            free(buf)
+            return
+        }
+
+        // Extract source address and port
+        var addrStr: [u8; 64] = [0; 64]
+        inet_ntop(2, (srcAddr as *u8 as i64 + 4) as *u8, addrStr as *u8, 64)
+        let srcPort = ((srcAddr[2] as i32) << 8) | (srcAddr[3] as i32)
+
+        let result = iso.object()
+        ctx.objectSet(result, "data" as *u8, iso.stringLen(buf, n as i32))
+
+        let rinfo = iso.object()
+        ctx.objectSet(rinfo, "address" as *u8, iso.string(addrStr as *u8))
+        ctx.objectSet(rinfo, "port" as *u8, iso.int32(srcPort))
+        ctx.objectSet(rinfo, "family" as *u8, iso.string("IPv4" as *u8))
+        ctx.objectSet(rinfo, "size" as *u8, iso.int32(n as i32))
+        ctx.objectSet(result, "rinfo" as *u8, rinfo)
+
+        ci.ret(result)
+        free(buf)
+    }
+}
+
+// udpSetOpt(fd, optName, value) — generic setsockopt for UDP
+// optName: 1=SO_BROADCAST, 2=IP_TTL, 3=IP_MULTICAST_TTL
+fn udpSetOpt(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let opt = ci.i32Arg(1, 0)
+    let val = ci.i32Arg(2, 0)
+    unsafe {
+        var optVal: [i32; 1] = [val]
+        if opt == 1 {
+            // SO_BROADCAST: SOL_SOCKET=0xffff, SO_BROADCAST=0x20
+            setsockopt(fd, 0xffff, 0x20, optVal as *u8, 4)
+        }
+        if opt == 2 {
+            // IP_TTL: IPPROTO_IP=0, IP_TTL=4
+            setsockopt(fd, 0, 4, optVal as *u8, 4)
+        }
+        if opt == 3 {
+            // IP_MULTICAST_TTL: IPPROTO_IP=0, IP_MULTICAST_TTL=10
+            setsockopt(fd, 0, 10, optVal as *u8, 4)
+        }
+    }
+}
+
+// udpAddMembership(fd, multicastAddr, interfaceAddr)
+fn udpAddMembership(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let fd = ci.i32Arg(0, -1)
+    unsafe {
+        var mcastBuf: [u8; 256] = [0; 256]
+        ci.arg(1).writeUtf8(iso, mcastBuf as *u8, 256)
+        var ifBuf: [u8; 256] = [0; 256]
+        if ci.length() > 2 {
+            ci.arg(2).writeUtf8(iso, ifBuf as *u8, 256)
+        }
+
+        // ip_mreq: multicast addr (4 bytes) + interface addr (4 bytes)
+        var mreq: [u8; 8] = [0; 8]
+        inet_pton(2, mcastBuf as *u8, mreq as *u8)
+        if ifBuf[0] != 0 {
+            inet_pton(2, ifBuf as *u8, (mreq as *u8 as i64 + 4) as *u8)
+        }
+        // IP_ADD_MEMBERSHIP: IPPROTO_IP=0, IP_ADD_MEMBERSHIP=12
+        setsockopt(fd, 0, 12, mreq as *u8, 8)
+    }
+}
+
+// udpDropMembership(fd, multicastAddr, interfaceAddr)
+fn udpDropMembership(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let fd = ci.i32Arg(0, -1)
+    unsafe {
+        var mcastBuf: [u8; 256] = [0; 256]
+        ci.arg(1).writeUtf8(iso, mcastBuf as *u8, 256)
+        var ifBuf: [u8; 256] = [0; 256]
+        if ci.length() > 2 {
+            ci.arg(2).writeUtf8(iso, ifBuf as *u8, 256)
+        }
+        var mreq: [u8; 8] = [0; 8]
+        inet_pton(2, mcastBuf as *u8, mreq as *u8)
+        if ifBuf[0] != 0 {
+            inet_pton(2, ifBuf as *u8, (mreq as *u8 as i64 + 4) as *u8)
+        }
+        // IP_DROP_MEMBERSHIP: IPPROTO_IP=0, IP_DROP_MEMBERSHIP=13
+        setsockopt(fd, 0, 13, mreq as *u8, 8)
+    }
+}
+
 fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
@@ -709,6 +900,15 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "sslAcceptNew" as *u8, sslAcceptNewOp as *u8)
         c.setMethod(exp, "sslAcceptContinue" as *u8, sslAcceptContinueOp as *u8)
         c.setMethod(exp, "sslCtxFree" as *u8, sslCtxFree as *u8)
+
+        // UDP
+        c.setMethod(exp, "udpSocket" as *u8, udpSocket as *u8)
+        c.setMethod(exp, "udpBind" as *u8, udpBind as *u8)
+        c.setMethod(exp, "udpSend" as *u8, udpSendOp as *u8)
+        c.setMethod(exp, "udpRecv" as *u8, udpRecvOp as *u8)
+        c.setMethod(exp, "udpSetOpt" as *u8, udpSetOpt as *u8)
+        c.setMethod(exp, "udpAddMembership" as *u8, udpAddMembership as *u8)
+        c.setMethod(exp, "udpDropMembership" as *u8, udpDropMembership as *u8)
 
         // constants
         let i = Isolate { ptr: _iso }

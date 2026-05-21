@@ -42,7 +42,15 @@ if (!process.hrtime) {
   process.hrtime.bigint = b.hrtimeBigint;
 }
 
-if (!process.nextTick) process.nextTick = (fn, ...args) => Promise.resolve().then(() => fn(...args));
+// Proper nextTick queue — runs before promises, drains recursively
+process._nextTickQueue = [];
+process._tickCallback = function() {
+  while (process._nextTickQueue.length > 0) {
+    const entry = process._nextTickQueue.shift();
+    entry[0](...entry[1]);
+  }
+};
+process.nextTick = (fn, ...args) => { process._nextTickQueue.push([fn, args]); };
 
 if (!process.on) {
   const _h = {};

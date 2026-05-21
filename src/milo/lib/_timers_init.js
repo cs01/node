@@ -68,18 +68,29 @@ if (typeof setImmediate === 'undefined') {
 
 // Event loop — called from main.milo after script execution
 // Integrates timer queue + kqueue I/O polling
+// Event loop utilization tracking (millisecond precision via Date.now)
+let _eluIdleMs = 0;
+let _eluActiveMs = 0;
+const _now = Date.now;
+
 globalThis.__runEventLoop = function() {
   let net = null;
   try { net = require('net'); } catch {}
   const poll = net && net._pollOnce;
 
   for (;;) {
+    const tickStart = _now();
+    if (process._tickCallback) process._tickCallback();
     _tb.fireDue();
+    if (process._tickCallback) process._tickCallback();
     _tb.drainMicrotasks();
+    if (process._tickCallback) process._tickCallback();
+    _eluActiveMs += _now() - tickStart;
 
     const hasTimers = _tb.hasPending();
     const hasIO = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
-    if (!hasTimers && !hasIO) break;
+    const hasTicks = process._nextTickQueue && process._nextTickQueue.length > 0;
+    if (!hasTimers && !hasIO && !hasTicks) break;
 
     let waitMs = 100;
     if (hasTimers) {
@@ -87,18 +98,31 @@ globalThis.__runEventLoop = function() {
       if (ms >= 0) waitMs = Math.min(waitMs, ms);
     }
 
-    // Prevent busy-spin when timers are immediately due
     if (waitMs < 1) waitMs = 1;
 
+    const pollStart = _now();
     if (poll) {
       poll(waitMs);
     } else {
       _tb.sleepMs(waitMs);
     }
+    _eluIdleMs += _now() - pollStart;
+    if (process._tickCallback) process._tickCallback();
   }
 };
 
+globalThis.__eventLoopUtilization = function() {
+  const total = _eluIdleMs + _eluActiveMs;
+  return { idle: _eluIdleMs, active: _eluActiveMs, utilization: total > 0 ? _eluActiveMs / total : 0 };
+};
+
+// Ref counter for keeping event loop alive (e.g., async iterators, pending promises)
+let _activeRefs = 0;
+globalThis.__ref = function() { _activeRefs++; };
+globalThis.__unref = function() { _activeRefs--; };
+
 globalThis.__hasIO = function() {
+  if (_activeRefs > 0) return true;
   try {
     const net = require('net');
     return (net.Server._servers && net.Server._servers.size > 0) ||

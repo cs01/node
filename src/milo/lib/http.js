@@ -92,37 +92,69 @@ class Server extends EventEmitter {
         }
       });
       let buf = '';
+      let headersParsed = false;
+      let currentReq = null;
+      let bodyReceived = 0;
+      let contentLength = -1;
+
       socket.on('data', (chunk) => {
-        buf += chunk.toString();
-        const headerEnd = buf.indexOf('\r\n\r\n');
-        if (headerEnd === -1) return;
-        const headerPart = buf.substring(0, headerEnd);
-        const body = buf.substring(headerEnd + 4);
-        const lines = headerPart.split('\r\n');
-        const [method, url, version] = lines[0].split(' ');
-        const req = new IncomingMessage();
-        req.method = method;
-        req.url = url;
-        req.httpVersion = (version || '').replace('HTTP/', '');
-        for (let i = 1; i < lines.length; i++) {
-          const idx = lines[i].indexOf(':');
-          if (idx > 0) {
-            const key = lines[i].substring(0, idx).trim().toLowerCase();
-            const val = lines[i].substring(idx + 1).trim();
-            req.headers[key] = val;
-            req.rawHeaders.push(lines[i].substring(0, idx).trim(), val);
+        if (!headersParsed) {
+          buf += chunk.toString();
+          const headerEnd = buf.indexOf('\r\n\r\n');
+          if (headerEnd === -1) return;
+          const headerPart = buf.substring(0, headerEnd);
+          const bodyPart = buf.substring(headerEnd + 4);
+          const lines = headerPart.split('\r\n');
+          const [method, url, version] = lines[0].split(' ');
+          const req = new IncomingMessage();
+          req.method = method;
+          req.url = url;
+          req.httpVersion = (version || '').replace('HTTP/', '');
+          for (let i = 1; i < lines.length; i++) {
+            const idx = lines[i].indexOf(':');
+            if (idx > 0) {
+              const key = lines[i].substring(0, idx).trim().toLowerCase();
+              const val = lines[i].substring(idx + 1).trim();
+              req.headers[key] = val;
+              req.rawHeaders.push(lines[i].substring(0, idx).trim(), val);
+            }
+          }
+          headersParsed = true;
+          currentReq = req;
+          contentLength = parseInt(req.headers['content-length']) || 0;
+
+          if (bodyPart.length > 0) {
+            req.push(Buffer.from(bodyPart));
+            bodyReceived += bodyPart.length;
+          }
+
+          if (bodyReceived >= contentLength) {
+            req.push(null);
+            req.complete = true;
+          }
+
+          socket._httpActive = true;
+          const res = new ServerResponse(socket);
+          res.on('finish', () => {
+            socket._httpActive = false;
+            if (this._closing) socket.destroy();
+          });
+          this.emit('request', req, res);
+        } else if (currentReq && !currentReq.complete) {
+          currentReq.push(chunk);
+          bodyReceived += chunk.length;
+          if (contentLength >= 0 && bodyReceived >= contentLength) {
+            currentReq.push(null);
+            currentReq.complete = true;
           }
         }
-        if (body) req.push(Buffer.from(body));
-        req.push(null);
-        req.complete = true;
-        socket._httpActive = true;
-        const res = new ServerResponse(socket);
-        res.on('finish', () => {
-          socket._httpActive = false;
-          if (this._closing) socket.destroy();
-        });
-        this.emit('request', req, res);
+      });
+
+      socket.on('end', () => {
+        if (currentReq && !currentReq.complete) {
+          currentReq.push(null);
+          currentReq.complete = true;
+        }
       });
     });
     this._server.listen(port, host, cb);

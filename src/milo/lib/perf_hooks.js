@@ -115,7 +115,7 @@ const performance = {
     return wrapped;
   },
   nodeTiming: { name: 'node', entryType: 'node', startTime: 0, duration: 0, bootstrapComplete: 0 },
-  eventLoopUtilization: () => ({ idle: 0, active: 0, utilization: 0 }),
+  eventLoopUtilization: () => globalThis.__eventLoopUtilization ? globalThis.__eventLoopUtilization() : { idle: 0, active: 0, utilization: 0 },
 };
 
 module.exports = {
