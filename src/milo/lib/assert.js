@@ -139,7 +139,7 @@ module.exports = Object.assign(assert, {
   AssertionError, ok, fail, strictEqual, notStrictEqual, equal, notEqual,
   deepEqual, deepStrictEqual, notDeepEqual, notDeepStrictEqual,
   throws, doesNotThrow, rejects, doesNotReject, ifError, match, doesNotMatch,
-  strict: Object.assign(function strict(value, message) { strictEqual(value, true, message); }, {
+  strict: Object.assign(function strict(value, message) { if (!value) fail(value, true, message, '==', strict); }, {
     equal: strictEqual, notEqual: notStrictEqual, deepEqual: deepStrictEqual,
     notDeepEqual: notDeepStrictEqual, ok, fail, throws, doesNotThrow, rejects, doesNotReject, ifError, match, doesNotMatch,
     AssertionError,

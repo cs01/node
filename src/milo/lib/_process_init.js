@@ -77,8 +77,9 @@ process.setUncaughtExceptionCaptureCallback = (fn) => {
 process.hasUncaughtExceptionCaptureCallback = () => _uncaughtExceptionCallback !== null;
 
 if (!process.memoryUsage) {
-  process.memoryUsage = () => ({ rss: 0, heapTotal: 0, heapUsed: 0, external: 0, arrayBuffers: 0 });
-  process.memoryUsage.rss = () => 0;
+  const _pmb = internalBinding('process_methods');
+  process.memoryUsage = () => _pmb.memoryUsage();
+  process.memoryUsage.rss = () => _pmb.memoryUsage().rss;
 }
 if (!process.cpuUsage) process.cpuUsage = () => ({ user: 0, system: 0 });
 if (!process.resourceUsage) process.resourceUsage = () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: 0, sharedMemorySize: 0, unsharedDataSize: 0, unsharedStackSize: 0, minorPageFault: 0, majorPageFault: 0, swappedOut: 0, fsRead: 0, fsWrite: 0, ipcSent: 0, ipcReceived: 0, signalsCount: 0, voluntaryContextSwitches: 0, involuntaryContextSwitches: 0 });

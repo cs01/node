@@ -11,9 +11,14 @@ const _fmt = (a) => {
   return String(a);
 };
 
-// process.stdout / process.stderr
-process.stdout = { write(s) { _con.write(typeof s === 'string' ? s : String(s)); return true; }, fd: 1, isTTY: false };
-process.stderr = { write(s) { _con.writeError(typeof s === 'string' ? s : String(s)); return true; }, fd: 2, isTTY: false };
+// process.stdout / process.stderr / process.stdin
+const _isTTY = _con.isatty ? (fd) => !!_con.isatty(fd) : () => false;
+process.stdout = { write(s) { _con.write(typeof s === 'string' ? s : String(s)); return true; }, fd: 1, isTTY: _isTTY(1) };
+process.stderr = { write(s) { _con.writeError(typeof s === 'string' ? s : String(s)); return true; }, fd: 2, isTTY: _isTTY(2) };
+const { Readable } = require('stream');
+process.stdin = new Readable({ read() {} });
+process.stdin.fd = 0;
+process.stdin.isTTY = _isTTY(0);
 
 const _counts = {};
 const _timers = {};

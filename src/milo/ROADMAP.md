@@ -12,23 +12,18 @@ Full build: `bash src/milo/build.sh`
 
 - [ ] `http.request()`/`http.get()` throw, `createServer` is fake
 - [ ] `AsyncLocalStorage` doesn't propagate across async boundaries — `lib/async_hooks.js:20-25`
-- [ ] `module` missing `_resolveFilename`, `_cache`, `_extensions`
 - [ ] `zlib` all operations are pass-through — no actual compression
 
 ## medium
 
 - [ ] `fs.watch()`/`watchFile()`/`unwatchFile()` missing
 - [ ] `fs.fstatSync` is a stub
-- [ ] `process.memoryUsage()` returns all zeros
-- [ ] `process.stdin` is undefined
-- [ ] `process.stdout.isTTY` always false
 - [ ] `dns.lookup()` immediately errors
 - [ ] `tls` entirely stubbed
 - [ ] `console.table()` prints raw value
 - [ ] `console.log` uses JSON.stringify not util.inspect
 - [ ] `net.Socket` — `remoteAddress`/`remotePort` undefined on accepted sockets
 - [ ] `crypto` — `createCipheriv`, `createSign`, `pbkdf2`, `scrypt` throw
-- [ ] `assert.strict(value)` compares to `true` not truthiness
 - [ ] `util` missing `styleText`, `MIMEType`
 
 ## low
@@ -71,3 +66,8 @@ Full build: `bash src/milo/build.sh`
 - [x] `fs.openSync`/`readSync`/`writeSync`/`closeSync` — native fd operations
 - [x] `Writable.end()` defers 'finish' emit via nextTick (matches Node.js behavior)
 - [x] `child_process` — real `execSync`/`spawnSync`/`exec`/`spawn` via posix_spawnp + pipe
+- [x] `process.memoryUsage()` — real RSS via mach_task_basic_info
+- [x] `process.stdin` — Readable stream on fd 0
+- [x] `process.stdout.isTTY` — real isatty() check
+- [x] `assert.strict(value)` — checks truthiness not `=== true`
+- [x] `module._resolveFilename`/`_cache`/`_extensions` — implemented

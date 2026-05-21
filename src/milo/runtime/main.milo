@@ -14,6 +14,7 @@ extern fn strlen(s: *u8): i64
 extern fn malloc(size: i64): *u8
 extern fn free(ptr: *u8): void
 extern fn getpid(): i32
+extern fn isatty(fd: i32): i32
 extern fn getppid(): i32
 extern fn getcwd(buf: *u8, size: i64): *u8
 
@@ -332,12 +333,19 @@ fn consoleWriteError(info: *u8, _ud: *u8): void {
     }
 }
 
+fn consoleIsatty(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, 0)
+    unsafe { ci.retI32(isatty(fd)) }
+}
+
 fn nm_init_console(_iso: *u8, ctx_ptr: *u8, exports: i32): void {
     let c = Context { ptr: ctx_ptr }
     let exp = Value { slot: exports }
     unsafe {
         c.setMethod(exp, "write" as *u8, consoleWrite as *u8)
         c.setMethod(exp, "writeError" as *u8, consoleWriteError as *u8)
+        c.setMethod(exp, "isatty" as *u8, consoleIsatty as *u8)
     }
 }
 
