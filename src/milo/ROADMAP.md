@@ -18,7 +18,6 @@ Full build: `bash src/milo/build.sh`
 
 - [ ] `fs.watch()`/`watchFile()`/`unwatchFile()` missing
 - [ ] `fs.fstatSync` is a stub
-- [ ] `dns.lookup()` immediately errors
 - [ ] `tls` entirely stubbed
 - [ ] `console.table()` prints raw value
 - [ ] `console.log` uses JSON.stringify not util.inspect
@@ -71,3 +70,4 @@ Full build: `bash src/milo/build.sh`
 - [x] `process.stdout.isTTY` — real isatty() check
 - [x] `assert.strict(value)` — checks truthiness not `=== true`
 - [x] `module._resolveFilename`/`_cache`/`_extensions` — implemented
+- [x] `dns.lookup()` — real getaddrinfo via C helper, IPv4/IPv6, promises API

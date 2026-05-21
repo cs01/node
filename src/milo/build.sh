@@ -21,6 +21,7 @@ bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/timers.milo" -o
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/tcp.milo" -o "$OUT/milo_tcp.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/crypto.milo" -o "$OUT/milo_crypto.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/spawn.milo" -o "$OUT/milo_spawn.o"
+bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/dns.milo" -o "$OUT/milo_dns.o"
 cd "$NODE_DIR"
 
 echo "=== compiling c helpers ==="
@@ -49,6 +50,7 @@ clang++ -o "$OUT/milo-node" \
   "$OUT/milo_tcp.o" \
   "$OUT/milo_crypto.o" \
   "$OUT/milo_spawn.o" \
+  "$OUT/milo_dns.o" \
   "$OUT/v8capi.o" \
   -L"$OUT" -L"$OUT/gen/release" \
   -lv8_base_without_compiler -lv8_compiler -lv8_libplatform -lv8_libbase \
