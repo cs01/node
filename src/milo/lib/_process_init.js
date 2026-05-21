@@ -47,7 +47,12 @@ process._nextTickQueue = [];
 process._tickCallback = function() {
   while (process._nextTickQueue.length > 0) {
     const entry = process._nextTickQueue.shift();
-    entry[0](...entry[1]);
+    try { entry[0](...entry[1]); }
+    catch (e) {
+      const handlers = process.listeners && process.listeners('uncaughtException');
+      if (handlers && handlers.length > 0) process.emit('uncaughtException', e);
+      else throw e;
+    }
   }
 };
 process.nextTick = (fn, ...args) => { process._nextTickQueue.push([fn, args]); };

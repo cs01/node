@@ -31,10 +31,19 @@ class Timeout {
   [Symbol.dispose]() { globalThis.clearTimeout(this); }
 }
 
+function _safeCall(fn, args) {
+  try { fn(...args); }
+  catch (e) {
+    const handlers = process.listeners && process.listeners('uncaughtException');
+    if (handlers && handlers.length > 0) process.emit('uncaughtException', e);
+    else throw e;
+  }
+}
+
 globalThis.setTimeout = function(fn, delay, ...args) {
   if (typeof fn !== 'function') fn = Function(fn);
   const t = new Timeout(0, fn, delay, args, false);
-  const wrapped = () => { _timerCallbacks.delete(t._id); fn(...args); };
+  const wrapped = () => { _timerCallbacks.delete(t._id); _safeCall(fn, args); };
   t._id = _tb.schedule(wrapped, Math.max(0, delay || 0), 0);
   _timerCallbacks.set(t._id, wrapped);
   return t;
@@ -49,7 +58,7 @@ globalThis.clearTimeout = function(t) {
 globalThis.setInterval = function(fn, delay, ...args) {
   if (typeof fn !== 'function') fn = Function(fn);
   const t = new Timeout(0, fn, delay, args, true);
-  const wrapped = () => fn(...args);
+  const wrapped = () => _safeCall(fn, args);
   t._id = _tb.schedule(wrapped, Math.max(0, delay || 0), 1);
   _timerCallbacks.set(t._id, wrapped);
   return t;
