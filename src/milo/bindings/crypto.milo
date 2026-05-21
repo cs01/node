@@ -77,7 +77,7 @@ fn hashDigest(info: *u8, _ud: *u8): void {
         if algo == 3 { CC_SHA512(dataPtr, dataLen as u32, hashBuf as *u8) }
 
         // Return raw hash bytes into a result Uint8Array
-        let result = iso.uint8arrayNew(iso.arraybufferNew(hashLen as i64), 0, hashLen)
+        let result = iso.uint8arrayNew(iso.arraybufferNew(hashLen as i64), 0, hashLen as i64)
         let resultPtr = result.typedArrayData(iso)
         memcpy(resultPtr, hashBuf as *u8, hashLen as i64)
         ci.ret(result)
@@ -122,11 +122,11 @@ fn cryptOp(info: *u8, _ud: *u8): void {
             return
         }
 
-        let written = outMoved[0] as i32
-        let ab = iso.arraybufferNew(written as i64)
+        let written = outMoved[0]
+        let ab = iso.arraybufferNew(written)
         let result = iso.uint8arrayNew(ab, 0, written)
         let resultPtr = result.typedArrayData(iso)
-        memcpy(resultPtr, outBuf, written as i64)
+        memcpy(resultPtr, outBuf, written)
         free(outBuf)
         ci.ret(result)
     }
@@ -163,7 +163,7 @@ fn pbkdf2Op(info: *u8, _ud: *u8): void {
         }
 
         let ab = iso.arraybufferNew(keyLen as i64)
-        let result = iso.uint8arrayNew(ab, 0, keyLen)
+        let result = iso.uint8arrayNew(ab, 0, keyLen as i64)
         let resultPtr = result.typedArrayData(iso)
         memcpy(resultPtr, outBuf, keyLen as i64)
         free(outBuf)
@@ -220,13 +220,13 @@ fn gcmCrypt(info: *u8, _ud: *u8): void {
         }
 
         let dataAb = iso.arraybufferNew(dataLen as i64)
-        let dataResult = iso.uint8arrayNew(dataAb, 0, dataLen)
+        let dataResult = iso.uint8arrayNew(dataAb, 0, dataLen as i64)
         let dataResultPtr = dataResult.typedArrayData(iso)
         memcpy(dataResultPtr, outBuf, dataLen as i64)
         free(outBuf)
 
         let tagAb = iso.arraybufferNew(tagLen as i64)
-        let tagResult = iso.uint8arrayNew(tagAb, 0, tagLen)
+        let tagResult = iso.uint8arrayNew(tagAb, 0, tagLen as i64)
         let tagResultPtr = tagResult.typedArrayData(iso)
         memcpy(tagResultPtr, tagBuf as *u8, tagLen as i64)
 
@@ -266,7 +266,7 @@ fn signOp(info: *u8, _ud: *u8): void {
         }
 
         let ab = iso.arraybufferNew(sigLen as i64)
-        let result = iso.uint8arrayNew(ab, 0, sigLen)
+        let result = iso.uint8arrayNew(ab, 0, sigLen as i64)
         let resultPtr = result.typedArrayData(iso)
         memcpy(resultPtr, sigBuf, sigLen as i64)
         free(sigBuf)

@@ -11,9 +11,9 @@ process.env = new Proxy({}, {
     if (key === Symbol.toStringTag) return 'process.env';
     const k = String(key); if (_envDeleted.has(k)) return undefined; if (k in _envOverrides) return _envOverrides[k]; return _envB.get(k);
   },
-  set(_, key, value) { const k = String(key); _envDeleted.delete(k); _envOverrides[k] = String(value); return true; },
+  set(_, key, value) { const k = String(key); const v = String(value); _envDeleted.delete(k); _envOverrides[k] = v; if (_envB.set) _envB.set(k, v); return true; },
   has(_, key) { const k = String(key); if (_envDeleted.has(k)) return false; return k in _envOverrides || _envB.get(k) !== undefined; },
-  deleteProperty(_, key) { const k = String(key); delete _envOverrides[k]; _envDeleted.add(k); return true; },
+  deleteProperty(_, key) { const k = String(key); delete _envOverrides[k]; _envDeleted.add(k); if (_envB.unset) _envB.unset(k); return true; },
   ownKeys() {
     const nativeKeys = (_envB.enumerate ? _envB.enumerate() : []).map(e => e.split('=')[0]);
     const all = new Set([...nativeKeys, ...Object.keys(_envOverrides)]);
@@ -109,5 +109,68 @@ if (!process.cpuUsage) process.cpuUsage = () => ({ user: 0, system: 0 });
 if (!process.debugPort) process.debugPort = 9229;
 if (!process.report) process.report = { getReport: () => ({}) };
 if (!process.domain) process.domain = null;
-if (!process.connected) process.connected = false;
 if (!process.resourceUsage) process.resourceUsage = () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: 0, sharedMemorySize: 0, unsharedDataSize: 0, unsharedStackSize: 0, minorPageFault: 0, majorPageFault: 0, swappedOut: 0, fsRead: 0, fsWrite: 0, ipcSent: 0, ipcReceived: 0, signalsCount: 0, voluntaryContextSwitches: 0, involuntaryContextSwitches: 0 });
+
+// IPC channel setup for forked processes (fd 3)
+(function _setupIPC() {
+  if (!process.env.NODE_CHANNEL_FD) { process.connected = false; return; }
+  const _spawnB = internalBinding('spawn');
+  process.connected = true;
+  let _ipcBuf = '';
+
+  process.send = function(message, sendHandle, options, callback) {
+    if (typeof sendHandle === 'function') { callback = sendHandle; sendHandle = undefined; }
+    if (typeof options === 'function') { callback = options; options = undefined; }
+    if (!process.connected) { if (callback) callback(new Error('channel closed')); return false; }
+    const data = JSON.stringify(message) + '\n';
+    _spawnB.writePipe(3, data);
+    if (callback) process.nextTick(callback);
+    return true;
+  };
+
+  process.disconnect = function() {
+    if (!process.connected) return;
+    process.connected = false;
+    _spawnB.closeFd(3);
+    process.emit('disconnect');
+  };
+
+  // Register fd 3 with kqueue for async IPC reads
+  const net = require('net');
+  const tcp = internalBinding('tcp');
+  _spawnB.setNonBlocking(3);
+  net._ensurePoll();
+  const ipcObj = {
+    _fd: 3, destroyed: false, _unref: false,
+    _onReadable() {
+      for (;;) {
+        const data = _spawnB.readPipe(3);
+        if (data === undefined) {
+          net.Socket._sockets.delete(3);
+          _spawnB.closeFd(3);
+          this.destroyed = true;
+          process.connected = false;
+          process.emit('disconnect');
+          return;
+        }
+        if (data.length === 0) break;
+        _ipcBuf += data.replace(/\0/g, '');
+        let nl;
+        while ((nl = _ipcBuf.indexOf('\n')) >= 0) {
+          const line = _ipcBuf.substring(0, nl);
+          _ipcBuf = _ipcBuf.substring(nl + 1);
+          if (line.length > 0) {
+            try { process.emit('message', JSON.parse(line)); } catch {}
+          }
+        }
+      }
+    }
+  };
+  net.Socket._sockets.set(3, ipcObj);
+  tcp.pollAdd(3, tcp.EVFILT_READ);
+
+  process.channel = {
+    ref() { ipcObj._unref = false; },
+    unref() { ipcObj._unref = true; }
+  };
+})();

@@ -21,6 +21,8 @@ extern fn strlen(s: *u8): i64
 extern fn memcpy(dst: *u8, src: *u8, len: i64): *u8
 extern fn fcntl(fd: i32, cmd: i32, arg: i32): i32
 extern fn kill(pid: i32, sig: i32): i32
+extern fn socketpair(domain: i32, socketType: i32, protocol: i32, sv: *i32): i32
+extern fn environ_get(): *u8
 
 fn readAllFromFd(fd: i32, outLen: *i64): *u8 {
     unsafe {
@@ -141,9 +143,10 @@ fn spawnSyncBinding(info: *u8, _ud: *u8): void {
             posix_spawn_file_actions_addopen(fileActions as *u8, 2, "/dev/null", 1, 0)
         }
 
-        // Spawn the process
+        // Spawn the process — pass real environ so child inherits env vars
         var pid: [i32; 1] = [0]
-        let spawnResult = posix_spawnp(pid as *i32, fileBuf as *u8, fileActions as *u8, 0 as *u8, argvBuf, 0 as *u8)
+        let envp = environ_get()
+        let spawnResult = posix_spawnp(pid as *i32, fileBuf as *u8, fileActions as *u8, 0 as *u8, argvBuf, envp)
 
         posix_spawn_file_actions_destroy(fileActions as *u8)
 
@@ -318,14 +321,27 @@ fn spawnAsyncBinding(info: *u8, _ud: *u8): void {
             posix_spawn_file_actions_addopen(fileActions as *u8, 2, "/dev/null", 1, 0)
         }
 
+        // Optional IPC fd: arg5 = child-side fd to dup2 onto fd 3
+        var ipcChildFd: i32 = -1
+        if ci.length() > 5 { ipcChildFd = ci.i32Arg(5, -1) }
+        if ipcChildFd >= 0 {
+            posix_spawn_file_actions_adddup2(fileActions as *u8, ipcChildFd, 3)
+            if ipcChildFd != 3 {
+                posix_spawn_file_actions_addclose(fileActions as *u8, ipcChildFd)
+            }
+        }
+
         var pid: [i32; 1] = [0]
-        let spawnResult = posix_spawnp(pid as *i32, fileBuf as *u8, fileActions as *u8, 0 as *u8, argvBuf, 0 as *u8)
+        let envpAsync = environ_get()
+        let spawnResult = posix_spawnp(pid as *i32, fileBuf as *u8, fileActions as *u8, 0 as *u8, argvBuf, envpAsync)
         posix_spawn_file_actions_destroy(fileActions as *u8)
 
         // Close child-side pipe ends in parent
         if stdinPipe[0] >= 0 { close(stdinPipe[0]) }
         if stdoutPipe[1] >= 0 { close(stdoutPipe[1]) }
         if stderrPipe[1] >= 0 { close(stderrPipe[1]) }
+        // Close child-side IPC fd in parent
+        if ipcChildFd >= 0 { close(ipcChildFd) }
 
         // Free argv
         var fi: i32 = 0
@@ -400,11 +416,12 @@ fn writePipeBinding(info: *u8, _ud: *u8): void {
     unsafe {
         var buf: [u8; 65536] = [0; 65536]
         let len = ci.arg(1).writeUtf8(iso, buf as *u8, 65536)
-        if len <= 0 {
+        if len <= 1 {
             ci.retI32(0)
             return
         }
-        let n = write(fd, buf as *u8, len as i64)
+        // writeUtf8 includes null terminator — exclude it
+        let n = write(fd, buf as *u8, len as i64 - 1)
         ci.retI32(n as i32)
     }
 }
@@ -445,6 +462,37 @@ fn killPidBinding(info: *u8, _ud: *u8): void {
     if pid > 0 { unsafe { kill(pid, sig) } }
 }
 
+// socketpair() → [fd0, fd1] or -1
+fn socketpairBinding(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    unsafe {
+        var sv: [i32; 2] = [0; 2]
+        // AF_UNIX=1, SOCK_STREAM=1
+        let ret = socketpair(1, 1, 0, sv as *i32)
+        if ret != 0 {
+            ci.retI32(-1)
+            return
+        }
+        let result = iso.array(2)
+        ctx.objectSetIndex(result, 0, iso.int32(sv[0]))
+        ctx.objectSetIndex(result, 1, iso.int32(sv[1]))
+        ci.ret(result)
+    }
+}
+
+// setNonBlocking(fd) — sets O_NONBLOCK on a file descriptor
+fn setNonBlockingBinding(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    if fd < 0 { return }
+    unsafe {
+        let fl = fcntl(fd, 3, 0)
+        fcntl(fd, 4, fl | 4)
+    }
+}
+
 fn nm_init_spawn(_iso: *u8, ctxPtr: *u8, exports: i32): void {
     let ctx = Context { ptr: ctxPtr }
     let exp = Value { slot: exports }
@@ -456,5 +504,7 @@ fn nm_init_spawn(_iso: *u8, ctxPtr: *u8, exports: i32): void {
         ctx.setMethod(exp, "closeFd" as *u8, closeFdBinding as *u8)
         ctx.setMethod(exp, "waitpidNH" as *u8, waitpidNHBinding as *u8)
         ctx.setMethod(exp, "killPid" as *u8, killPidBinding as *u8)
+        ctx.setMethod(exp, "socketpair" as *u8, socketpairBinding as *u8)
+        ctx.setMethod(exp, "setNonBlocking" as *u8, setNonBlockingBinding as *u8)
     }
 }

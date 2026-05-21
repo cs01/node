@@ -6,13 +6,6 @@ Full build: `bash src/milo/build.sh`
 
 ## medium
 
-### child_process
-- [ ] `fork()` with IPC messaging
-
-### process
-- [ ] `process.send()` / IPC when forked
-- [ ] `process.channel` for IPC
-
 ### net
 - [ ] net.Socket should extend Duplex (currently extends EventEmitter with ad-hoc methods)
 
@@ -59,3 +52,8 @@ Full build: `bash src/milo/build.sh`
 - [x] zlib decompression for high-compression-ratio data (progressive buffer sizing)
 - [x] pg (postgres) client loads
 - [x] 38+ npm packages verified: express, ws, uuid, chalk, nanoid, pg, redis, ioredis, knex, etc.
+- [x] `fork()` with IPC messaging (socketpair + kqueue)
+- [x] `process.send()` / `process.on('message')` in forked children
+- [x] `process.channel` ref/unref for IPC
+- [x] env var inheritance in child processes (posix_spawn environ fix)
+- [x] `process.env` set/delete synced to real C environ

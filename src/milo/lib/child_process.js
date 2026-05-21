@@ -239,8 +239,178 @@ function execFile(file, args, options, cb) {
   return child;
 }
 
-function fork() {
-  throw new Error('child_process.fork() not supported in milo-node');
+function fork(modulePath, args, options) {
+  if (Array.isArray(args)) { options = options || {}; }
+  else if (args && typeof args === 'object' && !Array.isArray(args)) { options = args; args = []; }
+  else { args = args || []; options = options || {}; }
+
+  const net = require('net');
+  const tcp = internalBinding('tcp');
+  const spawnBinding = internalBinding('spawn');
+
+  // Create Unix domain socket pair for IPC
+  const pair = spawnBinding.socketpair();
+  if (!pair || pair === -1) throw new Error('socketpair() failed');
+  const parentFd = pair[0];
+  const childFd = pair[1];
+
+  // Resolve the execPath (use current process executable)
+  const execPath = options.execPath || process.execPath || './out/Release/milo-node';
+  const execArgv = options.execArgv || [];
+
+  // Build spawn args: execArgv + modulePath + args
+  const spawnArgs = [...execArgv, modulePath, ...args];
+  const { Readable, Writable } = require('stream');
+
+  // Set NODE_CHANNEL_FD so child knows about IPC (synced to C environ via proxy)
+  const hadChannelFd = process.env.NODE_CHANNEL_FD;
+  process.env.NODE_CHANNEL_FD = '3';
+  // fork() defaults to inherit unless silent:true or explicit stdio
+  const forkOpts = options.stdio ? options : (options.silent ? { stdio: ['pipe', 'pipe', 'pipe'] } : { stdio: ['inherit', 'inherit', 'inherit'] });
+  const [stdinMode, stdoutMode, stderrMode] = parseStdio(forkOpts);
+  const result = spawnBinding.spawnAsync(execPath, spawnArgs, stdinMode, stdoutMode, stderrMode, childFd);
+  if (hadChannelFd !== undefined) process.env.NODE_CHANNEL_FD = hadChannelFd;
+  else delete process.env.NODE_CHANNEL_FD;
+
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.killed = false;
+  child.connected = true;
+  child.channel = {};
+
+  if (!result || result === -1) {
+    child.pid = 0;
+    child.stdin = null;
+    child.stdout = null;
+    child.stderr = null;
+    process.nextTick(() => child.emit('error', new Error('fork ' + modulePath + ' failed')));
+    return child;
+  }
+
+  child.pid = result.pid;
+  let pipesOpen = 0;
+
+  // Setup stdin
+  if (result.stdinFd >= 0) {
+    child.stdin = new Writable({
+      write(chunk, enc, cb) {
+        spawnBinding.writePipe(result.stdinFd, typeof chunk === 'string' ? chunk : chunk.toString());
+        cb();
+      },
+      final(cb) { spawnBinding.closeFd(result.stdinFd); cb(); }
+    });
+  } else { child.stdin = null; }
+
+  // Setup stdout/stderr pipes
+  function setupReadPipe(fd) {
+    if (fd < 0) return null;
+    pipesOpen++;
+    const stream = new Readable({ read() {} });
+    net._ensurePoll();
+    const pipeObj = {
+      _fd: fd, destroyed: false,
+      _onReadable() {
+        for (;;) {
+          const data = spawnBinding.readPipe(fd);
+          if (data === undefined) {
+            stream.push(null);
+            net.Socket._sockets.delete(fd);
+            spawnBinding.closeFd(fd);
+            this.destroyed = true;
+            pipesOpen--;
+            _checkExit();
+            return;
+          }
+          if (data.length === 0) break;
+          stream.push(Buffer.from(data));
+        }
+      }
+    };
+    net.Socket._sockets.set(fd, pipeObj);
+    tcp.pollAdd(fd, tcp.EVFILT_READ);
+    return stream;
+  }
+
+  child.stdout = setupReadPipe(result.stdoutFd);
+  child.stderr = setupReadPipe(result.stderrFd);
+
+  // IPC message channel over parentFd — newline-delimited JSON
+  net._ensurePoll();
+  spawnBinding.setNonBlocking(parentFd);
+
+  let ipcBuf = '';
+  const ipcObj = {
+    _fd: parentFd, destroyed: false, _unref: true,
+    _onReadable() {
+      for (;;) {
+        const data = spawnBinding.readPipe(parentFd);
+        if (data === undefined) {
+          // IPC channel closed
+          net.Socket._sockets.delete(parentFd);
+          spawnBinding.closeFd(parentFd);
+          this.destroyed = true;
+          child.connected = false;
+          child.emit('disconnect');
+          return;
+        }
+        if (data.length === 0) break;
+        ipcBuf += data.replace(/\0/g, '');
+        let nl;
+        while ((nl = ipcBuf.indexOf('\n')) >= 0) {
+          const line = ipcBuf.substring(0, nl);
+          ipcBuf = ipcBuf.substring(nl + 1);
+          if (line.length > 0) {
+            try { child.emit('message', JSON.parse(line)); } catch {}
+          }
+        }
+      }
+    }
+  };
+  net.Socket._sockets.set(parentFd, ipcObj);
+  tcp.pollAdd(parentFd, tcp.EVFILT_READ);
+
+  child.send = function(message, sendHandle, options, callback) {
+    if (typeof sendHandle === 'function') { callback = sendHandle; sendHandle = undefined; }
+    if (typeof options === 'function') { callback = options; options = undefined; }
+    if (!child.connected) { if (callback) callback(new Error('channel closed')); return false; }
+    const data = JSON.stringify(message) + '\n';
+    spawnBinding.writePipe(parentFd, data);
+    if (callback) process.nextTick(callback);
+    return true;
+  };
+
+  child.disconnect = function() {
+    if (!child.connected) return;
+    child.connected = false;
+    net.Socket._sockets.delete(parentFd);
+    spawnBinding.closeFd(parentFd);
+    child.emit('disconnect');
+  };
+
+  child.kill = function(signal) {
+    if (child.killed) return false;
+    const sig = typeof signal === 'string' ? { SIGTERM: 15, SIGKILL: 9, SIGINT: 2, SIGHUP: 1 }[signal] || 15 : (signal || 15);
+    spawnBinding.killPid(child.pid, sig);
+    child.killed = true;
+    return true;
+  };
+
+  function _checkExit() {
+    if (pipesOpen > 0) return;
+    const _poll = () => {
+      const status = spawnBinding.waitpidNH(child.pid);
+      if (status === -1) { setTimeout(_poll, 10); return; }
+      child.exitCode = status;
+      if (child.connected) child.disconnect();
+      child.emit('exit', status, null);
+      child.emit('close', status, null);
+    };
+    _poll();
+  }
+
+  if (pipesOpen === 0) process.nextTick(_checkExit);
+  return child;
 }
 
 module.exports = {

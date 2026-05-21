@@ -1,6 +1,6 @@
 # node-milo
 
-Node.js runtime ported to Milo. Compiles to native code via the Milo compiler.
+Node.js runtime ported to Milo. Compiles native via Milo compiler.
 
 ## Build
 
@@ -12,12 +12,12 @@ bun run src/main.ts emit-obj ../node/src/milo/runtime/main.milo -o ../node/build
 
 ## Milo Style
 
-- **camelCase** for all identifiers (functions, variables, types). No snake_case except for extern C function names that must match their C signature.
-- Only prefix with `nm_` for init functions that are called from the C binding registry.
+- **camelCase** all identifiers (functions, variables, types). No snake_case except extern C names matching C signatures.
+- Only prefix `nm_` for init functions called from C binding registry.
 
 ## Milo Safety Best Practices
 
-Goal: keep `unsafe` contained to the thinnest possible layer. Binding *orchestration* should be safe; only the raw FFI seam should be unsafe.
+Goal: keep `unsafe` in thinnest possible layer. Binding orchestration safe; only raw FFI seam unsafe.
 
 ### Use `extern type` for opaque handles
 
@@ -36,7 +36,7 @@ struct Context { ptr: *u8 }
 
 ### Let strings auto-coerce to *u8
 
-The compiler auto-coerces `string` → `*u8` in extern calls. No cast or unsafe needed when the extern returns a scalar.
+Compiler auto-coerces `string` → `*u8` in extern calls. No cast or unsafe needed when extern returns scalar.
 
 ```milo
 // GOOD — safe, auto-coercion handles it
@@ -49,7 +49,7 @@ unsafe { puts(msg as *u8) }
 
 ### Use `.cstr()` for explicit pointer extraction
 
-When you need the `*u8` in a variable (not just passing to an extern), use `.cstr()` instead of casting.
+When you need `*u8` in variable (not just passing to extern), use `.cstr()` instead of casting.
 
 ```milo
 // GOOD
@@ -81,7 +81,7 @@ unsafe {
 
 ### Minimize unsafe surface area
 
-Wrap raw FFI in small functions that expose a safe interface. Keep binding logic (argument validation, result construction) outside unsafe.
+Wrap raw FFI in small functions exposing safe interface. Keep binding logic (arg validation, result construction) outside unsafe.
 
 ```milo
 // GOOD — unsafe is one line
@@ -103,21 +103,21 @@ fn getHostName(): string {
 
 ### Safe extern call rules
 
-An extern call does NOT need `unsafe` when:
+Extern call does NOT need `unsafe` when:
 - All pointer params receive auto-coerced args (string→*u8, array→*T, or matching *T)
 - Return type is scalar or void
 
-An extern call DOES need `unsafe` when:
-- It returns a pointer (*T) — unknown provenance
-- A param takes a raw *T that isn't from auto-coercion
+Extern call DOES need `unsafe` when:
+- Returns pointer (*T) — unknown provenance
+- Param takes raw *T not from auto-coercion
 
 ## Compat Roadmap
 
-See `src/milo/ROADMAP.md` for the full list of Node.js compatibility gaps. When working on milo-node:
-- Pick items from the roadmap (critical first, then high, etc.)
-- After fixing, mark the item `[x]` and move to the `## done` section
-- Add new gaps as you discover them
-- Only run tests relevant to the module you're fixing: `./out/Release/milo-node -e "..."`
+See `src/milo/ROADMAP.md` for full Node.js compatibility gaps. When working on milo-node:
+- Pick items from roadmap (critical first, then high)
+- After fixing, mark `[x]` and move to `## done` section
+- Add new gaps as discovered
+- Only run tests for module you're fixing: `./out/Release/milo-node -e "..."`
 - Full rebuild: `bash src/milo/build.sh`
 
 ## Architecture

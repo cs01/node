@@ -317,7 +317,7 @@ fn tcpRecvBinary(info: *u8, _ud: *u8): void {
         let n = read(fd, buf, 65535)
         if n > 0 {
             let ab = iso.arraybufferNew(n)
-            let result = iso.uint8arrayNew(ab, 0, n as i32)
+            let result = iso.uint8arrayNew(ab, 0, n)
             let resultPtr = result.typedArrayData(iso)
             memcpy(resultPtr, buf, n)
             free(buf)

@@ -35,6 +35,8 @@ extern fn v8c_uint8array_new(iso: *u8, ab: i32, offset: i64, length: i64): i32
 extern fn v8c_biguint64array_new(iso: *u8, ab: i32, offset: i64, length: i64): i32
 extern fn v8c_typedarray_data(iso: *u8, ta: i32): *u8
 extern fn v8c_typedarray_byte_length(iso: *u8, ta: i32): i64
+extern fn v8c_arraybuffer_data(iso: *u8, ab: i32): *u8
+extern fn v8c_string_length(iso: *u8, str: i32): i32
 
 // Value operations
 extern fn v8c_to_int32(iso: *u8, val: i32, out: *i32): i32
@@ -152,6 +154,17 @@ impl CallbackInfo {
             return out
         }
     }
+
+    fn i64Arg(self: CallbackInfo, idx: i32, defaultVal: i64): i64 {
+        unsafe {
+            if idx >= v8c_fci_length(self.ptr) { return defaultVal }
+            let arg = v8c_fci_arg(self.ptr, idx)
+            let iso = v8c_fci_isolate(self.ptr)
+            var out: f64 = defaultVal as f64
+            v8c_to_double(iso, arg, &out)
+            return out as i64
+        }
+    }
 }
 
 // --- Isolate: value constructors ---
@@ -209,8 +222,8 @@ impl Isolate {
         unsafe { return Value { slot: v8c_uint32array_new(self.ptr, ab.slot, offset, length) } }
     }
 
-    fn uint8arrayNew(self: Isolate, ab: Value, offset: i64, length: i32): Value {
-        unsafe { return Value { slot: v8c_uint8array_new(self.ptr, ab.slot, offset, length as i64) } }
+    fn uint8arrayNew(self: Isolate, ab: Value, offset: i64, length: i64): Value {
+        unsafe { return Value { slot: v8c_uint8array_new(self.ptr, ab.slot, offset, length) } }
     }
 
     fn biguint64arrayNew(self: Isolate, ab: Value, offset: i64, length: i64): Value {
@@ -267,6 +280,14 @@ impl Value {
 
     fn typedArrayByteLength(self: Value, iso: Isolate): i64 {
         unsafe { return v8c_typedarray_byte_length(iso.ptr, self.slot) }
+    }
+
+    fn arraybufferData(self: Value, iso: Isolate): *u8 {
+        unsafe { return v8c_arraybuffer_data(iso.ptr, self.slot) }
+    }
+
+    fn stringLength(self: Value, iso: Isolate): i32 {
+        unsafe { return v8c_string_length(iso.ptr, self.slot) }
     }
 }
 

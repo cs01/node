@@ -1,7 +1,21 @@
-// buffer module — Buffer over Uint8Array + internalBinding('buffer') for alloc
+// buffer module — Buffer over Uint8Array + native fast paths via internalBinding('buffer')
 'use strict';
 
 const encodings = ['utf8', 'utf-8', 'ascii', 'latin1', 'binary', 'hex', 'base64', 'base64url', 'ucs2', 'ucs-2', 'utf16le', 'utf-16le'];
+
+// native bindings for hot paths
+const binding = (typeof internalBinding === 'function') ? internalBinding('buffer') : {};
+const _nativeFill = binding.fill;
+const _nativeFillRange = binding.fillRange;
+const _nativeCompare = binding.compare;
+const _nativeCopy = binding.copy;
+const _nativeIndexOf = binding.indexOf;
+const _nativeIndexOfByte = binding.indexOfByte;
+const _nativeHexEncode = binding.hexEncode;
+const _nativeHexDecode = binding.hexDecode;
+const _nativeBase64Encode = binding.base64Encode;
+const _nativeBase64Decode = binding.base64Decode;
+const _nativeUtf8ByteLength = binding.utf8ByteLength;
 
 function _utf8Encode(str) {
   const a = [];
@@ -31,22 +45,26 @@ function _utf8Decode(buf, start, end) {
 }
 
 function _hexEncode(buf, start, end) {
+  if (_nativeHexEncode) return _nativeHexEncode(buf.subarray(start, end));
   let s = '';
   for (let i = start; i < end; i++) s += (buf[i] < 16 ? '0' : '') + buf[i].toString(16);
   return s;
 }
 
 function _hexDecode(str) {
+  if (_nativeHexDecode) return _nativeHexDecode(str);
   const a = [];
   for (let i = 0; i < str.length; i += 2) a.push(parseInt(str.slice(i, i + 2), 16));
   return a;
 }
 
 function _base64Decode(str) {
+  if (_nativeBase64Decode) return _nativeBase64Decode(str);
   return Uint8Array.from(atob(str), c => c.charCodeAt(0));
 }
 
 function _base64Encode(buf, start, end) {
+  if (_nativeBase64Encode) return _nativeBase64Encode(buf.subarray(start, end));
   let s = '';
   for (let i = start; i < end; i++) s += String.fromCharCode(buf[i]);
   return btoa(s);
@@ -104,8 +122,23 @@ class Buffer extends Uint8Array {
     }
     if (typeof value === 'string') {
       const enc = (encodingOrOffset || 'utf8').toLowerCase();
-      if (enc === 'hex') return new Buffer(_hexDecode(value));
-      if (enc === 'base64' || enc === 'base64url') return new Buffer(_base64Decode(value.replace(/-/g, '+').replace(/_/g, '/')));
+      if (enc === 'hex') {
+        if (_nativeHexDecode) {
+          const u8 = _nativeHexDecode(value);
+          Object.setPrototypeOf(u8, Buffer.prototype);
+          return u8;
+        }
+        return new Buffer(_hexDecode(value));
+      }
+      if (enc === 'base64' || enc === 'base64url') {
+        const cleaned = value.replace(/-/g, '+').replace(/_/g, '/');
+        if (_nativeBase64Decode) {
+          const u8 = _nativeBase64Decode(cleaned);
+          Object.setPrototypeOf(u8, Buffer.prototype);
+          return u8;
+        }
+        return new Buffer(_base64Decode(cleaned));
+      }
       if (enc === 'ascii' || enc === 'latin1' || enc === 'binary') {
         const a = new Buffer(value.length);
         for (let i = 0; i < value.length; i++) a[i] = value.charCodeAt(i) & 0xff;
@@ -138,7 +171,27 @@ class Buffer extends Uint8Array {
 
   static isBuffer(obj) { return obj instanceof Buffer; }
   static isEncoding(enc) { return encodings.includes((enc || '').toLowerCase()); }
-  static byteLength(str, encoding) { return Buffer.from(str, encoding).length; }
+
+  static byteLength(str, encoding) {
+    if (typeof str !== 'string') {
+      if (ArrayBuffer.isView(str) || str instanceof ArrayBuffer) return str.byteLength;
+      str = String(str);
+    }
+    const enc = (encoding || 'utf8').toLowerCase();
+    if (enc === 'ascii' || enc === 'latin1' || enc === 'binary') return str.length;
+    if (enc === 'ucs2' || enc === 'ucs-2' || enc === 'utf16le' || enc === 'utf-16le') return str.length * 2;
+    if (enc === 'hex') return str.length >>> 1;
+    if (enc === 'base64' || enc === 'base64url') {
+      let len = str.length;
+      let pad = 0;
+      if (str[len - 1] === '=') pad++;
+      if (str[len - 2] === '=') pad++;
+      return (len * 3 >>> 2) - pad;
+    }
+    // utf8 — use native if available
+    if (_nativeUtf8ByteLength) return _nativeUtf8ByteLength(str);
+    return Buffer.from(str, encoding).length;
+  }
 
   static concat(list, totalLength) {
     if (totalLength === undefined) totalLength = list.reduce((sum, b) => sum + b.length, 0);
@@ -149,6 +202,7 @@ class Buffer extends Uint8Array {
   }
 
   static compare(a, b) {
+    if (_nativeCompare) return _nativeCompare(a, b);
     const len = Math.min(a.length, b.length);
     for (let i = 0; i < len; i++) { if (a[i] < b[i]) return -1; if (a[i] > b[i]) return 1; }
     return a.length < b.length ? -1 : a.length > b.length ? 1 : 0;
@@ -179,6 +233,8 @@ class Buffer extends Uint8Array {
   toJSON() { return { type: 'Buffer', data: Array.from(this) }; }
   equals(other) {
     if (!Buffer.isBuffer(other)) throw new TypeError('Argument must be a Buffer');
+    if (this.length !== other.length) return false;
+    if (_nativeCompare) return _nativeCompare(this, other) === 0;
     return Buffer.compare(this, other) === 0;
   }
   compare(other, targetStart, targetEnd, sourceStart, sourceEnd) {
@@ -187,8 +243,12 @@ class Buffer extends Uint8Array {
     sourceEnd = sourceEnd !== undefined ? sourceEnd : this.length;
     targetStart = targetStart || 0;
     targetEnd = targetEnd !== undefined ? targetEnd : other.length;
+    if (_nativeCompare && sourceStart === 0 && sourceEnd === this.length && targetStart === 0 && targetEnd === other.length) {
+      return _nativeCompare(this, other);
+    }
     const src = this.subarray(sourceStart, sourceEnd);
     const tgt = other.subarray(targetStart, targetEnd);
+    if (_nativeCompare) return _nativeCompare(src, tgt);
     const len = Math.min(src.length, tgt.length);
     for (let i = 0; i < len; i++) { if (src[i] < tgt[i]) return -1; if (src[i] > tgt[i]) return 1; }
     return src.length < tgt.length ? -1 : src.length > tgt.length ? 1 : 0;
@@ -199,6 +259,7 @@ class Buffer extends Uint8Array {
     sourceStart = sourceStart || 0;
     sourceEnd = sourceEnd !== undefined ? sourceEnd : this.length;
     if (targetStart >= target.length || sourceStart >= sourceEnd) return 0;
+    if (_nativeCopy) return _nativeCopy(this, target, targetStart, sourceStart, sourceEnd);
     const len = Math.min(sourceEnd - sourceStart, target.length - targetStart);
     target.set(this.subarray(sourceStart, sourceStart + len), targetStart);
     return len;
@@ -211,9 +272,13 @@ class Buffer extends Uint8Array {
   }
 
   indexOf(value, byteOffset, encoding) {
-    if (typeof value === 'number') return super.indexOf(value, byteOffset);
+    if (typeof value === 'number') {
+      if (_nativeIndexOfByte) return _nativeIndexOfByte(this, value & 0xff, byteOffset || 0);
+      return super.indexOf(value, byteOffset);
+    }
     const needle = Buffer.isBuffer(value) ? value : Buffer.from(value, encoding);
     const start = byteOffset || 0;
+    if (_nativeIndexOf) return _nativeIndexOf(this, needle, start);
     for (let i = start; i <= this.length - needle.length; i++) {
       let found = true;
       for (let j = 0; j < needle.length; j++) { if (this[i + j] !== needle[j]) { found = false; break; } }
@@ -324,7 +389,11 @@ class Buffer extends Uint8Array {
       const fillBuf = Buffer.from(value, encoding);
       for (let i = offset; i < end; i++) this[i] = fillBuf[(i - offset) % fillBuf.length];
     } else if (typeof value === 'number') {
-      for (let i = offset; i < end; i++) this[i] = value & 0xff;
+      if (_nativeFillRange) {
+        _nativeFillRange(this, value, offset, end);
+      } else {
+        for (let i = offset; i < end; i++) this[i] = value & 0xff;
+      }
     } else if (Buffer.isBuffer(value)) {
       for (let i = offset; i < end; i++) this[i] = value[(i - offset) % value.length];
     }

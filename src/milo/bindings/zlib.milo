@@ -56,7 +56,7 @@ fn zlibOp(info: *u8, _ud: *u8): void {
             }
 
             let ab = iso.arraybufferNew(written as i64)
-            let result = iso.uint8arrayNew(ab, 0, written)
+            let result = iso.uint8arrayNew(ab, 0, written as i64)
             let resultData = result.typedArrayData(iso)
             for i in 0..written as i64 {
                 resultData[i] = outBuf[i]
@@ -71,9 +71,8 @@ fn zlibOp(info: *u8, _ud: *u8): void {
             if outBuf as i64 == 0 { return }
 
             var written = nm_zlib_inflate(inputData, inputLen, outBuf, outSize, windowBits)
-            // Retry with progressively larger buffers (high compression ratios need this)
             var attempts = 0
-            while written < 0 and attempts < 8 {
+            while written < 0 && attempts < 8 {
                 free(outBuf)
                 outSize = outSize * 4
                 outBuf = malloc(outSize as i64)
@@ -87,7 +86,7 @@ fn zlibOp(info: *u8, _ud: *u8): void {
             }
 
             let ab = iso.arraybufferNew(written as i64)
-            let result = iso.uint8arrayNew(ab, 0, written)
+            let result = iso.uint8arrayNew(ab, 0, written as i64)
             let resultData = result.typedArrayData(iso)
             for i in 0..written as i64 {
                 resultData[i] = outBuf[i]

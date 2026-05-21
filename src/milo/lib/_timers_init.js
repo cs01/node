@@ -134,8 +134,13 @@ globalThis.__hasIO = function() {
   if (_activeRefs > 0) return true;
   try {
     const net = require('net');
-    return (net.Server._servers && net.Server._servers.size > 0) ||
-           (net.Socket._sockets && net.Socket._sockets.size > 0) ||
-           (net._fileWatchers && net._fileWatchers.size > 0);
+    if (net.Server._servers && net.Server._servers.size > 0) return true;
+    if (net._fileWatchers && net._fileWatchers.size > 0) return true;
+    if (net.Socket._sockets && net.Socket._sockets.size > 0) {
+      for (const sock of net.Socket._sockets.values()) {
+        if (!sock._unref) return true;
+      }
+    }
+    return false;
   } catch { return false; }
 };
