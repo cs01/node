@@ -133,13 +133,19 @@ class Server extends EventEmitter {
             req.complete = true;
           }
 
-          socket._httpActive = true;
-          const res = new ServerResponse(socket);
-          res.on('finish', () => {
-            socket._httpActive = false;
-            if (this._closing) socket.destroy();
-          });
-          this.emit('request', req, res);
+          if (req.headers['upgrade'] && this.listenerCount('upgrade') > 0) {
+            req.push(null);
+            req.complete = true;
+            this.emit('upgrade', req, socket, Buffer.from(bodyPart));
+          } else {
+            socket._httpActive = true;
+            const res = new ServerResponse(socket);
+            res.on('finish', () => {
+              socket._httpActive = false;
+              if (this._closing) socket.destroy();
+            });
+            this.emit('request', req, res);
+          }
         } else if (currentReq && !currentReq.complete) {
           currentReq.push(chunk);
           bodyReceived += chunk.length;
@@ -157,8 +163,11 @@ class Server extends EventEmitter {
         }
       });
     });
-    this._server.listen(port, host, cb);
-    this._listening = true;
+    this._server.listen(port, host, () => {
+      this._listening = true;
+      this.emit('listening');
+      if (cb) cb();
+    });
     return this;
   }
   close(cb) {
@@ -290,6 +299,12 @@ class ClientRequest extends EventEmitter {
           }
         }
         headersParsed = true;
+
+        if (res.statusCode === 101 && this.listenerCount('upgrade') > 0) {
+          this.emit('upgrade', res, socket, Buffer.from(bodyPart));
+          return;
+        }
+
         contentLength = parseInt(res.headers['content-length']) || -1;
         chunked = (res.headers['transfer-encoding'] || '').includes('chunked');
 

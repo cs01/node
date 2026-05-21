@@ -26,6 +26,8 @@ class Socket extends EventEmitter {
     this.writable = true;
     this.destroyed = false;
     this._connecting = false;
+    this._readableState = { ended: false, endEmitted: false, length: 0, objectMode: false };
+    this._writableState = { ended: false, finished: false, length: 0, errorEmitted: false, needDrain: false };
     this.remoteAddress = undefined;
     this.remotePort = undefined;
     this.localAddress = undefined;
@@ -71,23 +73,32 @@ class Socket extends EventEmitter {
   }
 
   _onReadable() {
-    const data = tcp.recv(this._fd);
+    const data = tcp.recvBinary(this._fd);
     if (data === undefined) {
       if (this.readable) {
         this.readable = false;
+        this._readableState.ended = true;
+        this._readableState.endEmitted = true;
         this.emit('end');
       }
       this.destroy();
     } else if (data.length > 0) {
-      this.emit('data', Buffer.from(data));
+      this.emit('data', Buffer.from(data.buffer, data.byteOffset, data.byteLength));
     }
   }
 
   write(data, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
     if (this.destroyed) return false;
-    const str = typeof data === 'string' ? data : data.toString();
-    const n = tcp.send(this._fd, str);
+    let n;
+    if (Buffer.isBuffer(data)) {
+      n = tcp.sendBinary(this._fd, new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+    } else if (data instanceof Uint8Array) {
+      n = tcp.sendBinary(this._fd, data);
+    } else {
+      const str = typeof data === 'string' ? data : String(data);
+      n = tcp.send(this._fd, str);
+    }
     if (cb) process.nextTick(cb);
     return n >= 0;
   }
@@ -97,6 +108,8 @@ class Socket extends EventEmitter {
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
     if (data !== undefined) this.write(data, encoding);
     this.writable = false;
+    this._writableState.ended = true;
+    this._writableState.finished = true;
     if (this._fd >= 0) tcp.shutdown(this._fd, 1); // SHUT_WR
     if (cb) this.once('finish', cb);
     this.emit('finish');
@@ -142,6 +155,18 @@ class Socket extends EventEmitter {
       this._timeoutTimer = null;
     }
     return this;
+  }
+
+  cork() { this._corked = (this._corked || 0) + 1; }
+  uncork() { this._corked = Math.max(0, (this._corked || 0) - 1); }
+
+  read(size) { return null; }
+  pause() { this._paused = true; return this; }
+  resume() { this._paused = false; return this; }
+  pipe(dest, opts) {
+    this.on('data', (chunk) => dest.write(chunk));
+    this.on('end', () => { if (!opts || opts.end !== false) dest.end(); });
+    return dest;
   }
 
   ref() { return this; }

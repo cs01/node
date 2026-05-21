@@ -254,6 +254,43 @@ class Buffer extends Uint8Array {
   writeDoubleBE(value, offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setFloat64(offset, value, false); }
   writeDoubleLE(value, offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setFloat64(offset, value, true); }
 
+  readUIntBE(offset, byteLength) {
+    let val = 0;
+    for (let i = 0; i < byteLength; i++) val = val * 256 + this[offset + i];
+    return val;
+  }
+  readUIntLE(offset, byteLength) {
+    let val = 0; let mul = 1;
+    for (let i = 0; i < byteLength; i++) { val += this[offset + i] * mul; mul *= 256; }
+    return val;
+  }
+  readIntBE(offset, byteLength) {
+    let val = this.readUIntBE(offset, byteLength);
+    if (val >= Math.pow(2, 8 * byteLength - 1)) val -= Math.pow(2, 8 * byteLength);
+    return val;
+  }
+  readIntLE(offset, byteLength) {
+    let val = this.readUIntLE(offset, byteLength);
+    if (val >= Math.pow(2, 8 * byteLength - 1)) val -= Math.pow(2, 8 * byteLength);
+    return val;
+  }
+  writeUIntBE(value, offset, byteLength) {
+    for (let i = byteLength - 1; i >= 0; i--) { this[offset + i] = value & 0xff; value = Math.floor(value / 256); }
+    return offset + byteLength;
+  }
+  writeUIntLE(value, offset, byteLength) {
+    for (let i = 0; i < byteLength; i++) { this[offset + i] = value & 0xff; value = Math.floor(value / 256); }
+    return offset + byteLength;
+  }
+  writeIntBE(value, offset, byteLength) {
+    if (value < 0) value += Math.pow(2, 8 * byteLength);
+    return this.writeUIntBE(value, offset, byteLength);
+  }
+  writeIntLE(value, offset, byteLength) {
+    if (value < 0) value += Math.pow(2, 8 * byteLength);
+    return this.writeUIntLE(value, offset, byteLength);
+  }
+
   readBigInt64BE(offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigInt64(offset || 0, false); }
   readBigInt64LE(offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigInt64(offset || 0, true); }
   readBigUInt64BE(offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigUint64(offset || 0, false); }

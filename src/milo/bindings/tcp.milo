@@ -15,6 +15,7 @@ extern fn strlen(s: *u8): i64
 extern fn memset(s: *u8, c: i32, n: i64): *u8
 extern fn calloc(count: i64, size: i64): *u8
 extern fn free(ptr: *u8): void
+extern fn memcpy(dst: *u8, src: *u8, len: i64): *u8
 
 // read/write for connected sockets
 extern fn read(fd: i32, buf: *u8, len: i64): i64
@@ -270,6 +271,24 @@ fn tcpSend(info: *u8, _ud: *u8): void {
     }
 }
 
+// tcpSendBinary(fd, uint8Array) -> bytes written — raw binary, no UTF-8 conversion
+fn tcpSendBinary(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let iso = ci.isolate()
+    let arr = ci.arg(1)
+    let dataPtr = arr.typedArrayData(iso)
+    let dataLen = arr.typedArrayByteLength(iso)
+    if dataLen <= 0 {
+        ci.retI32(0)
+        return
+    }
+    unsafe {
+        let n = write(fd, dataPtr, dataLen)
+        ci.retI32(n as i32)
+    }
+}
+
 // tcpRecv(fd) -> string or empty string if EAGAIN, or undefined if closed
 fn tcpRecv(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
@@ -285,6 +304,33 @@ fn tcpRecv(info: *u8, _ud: *u8): void {
             ci.retStr("" as *u8)
         }
         free(buf)
+    }
+}
+
+// tcpRecvBinary(fd) -> Uint8Array or empty Uint8Array if EAGAIN, or undefined if closed
+fn tcpRecvBinary(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let iso = ci.isolate()
+    unsafe {
+        let buf = calloc(1, 65536)
+        let n = read(fd, buf, 65535)
+        if n > 0 {
+            let ab = iso.arraybufferNew(n)
+            let result = iso.uint8arrayNew(ab, 0, n as i32)
+            let resultPtr = result.typedArrayData(iso)
+            memcpy(resultPtr, buf, n)
+            free(buf)
+            ci.ret(result)
+        } else if n == 0 {
+            free(buf)
+            ci.retUndefined()
+        } else {
+            free(buf)
+            let ab = iso.arraybufferNew(0)
+            let result = iso.uint8arrayNew(ab, 0, 0)
+            ci.ret(result)
+        }
     }
 }
 
@@ -876,7 +922,9 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "accept" as *u8, tcpAccept as *u8)
         c.setMethod(exp, "connect" as *u8, tcpConnect as *u8)
         c.setMethod(exp, "send" as *u8, tcpSend as *u8)
+        c.setMethod(exp, "sendBinary" as *u8, tcpSendBinary as *u8)
         c.setMethod(exp, "recv" as *u8, tcpRecv as *u8)
+        c.setMethod(exp, "recvBinary" as *u8, tcpRecvBinary as *u8)
         c.setMethod(exp, "shutdown" as *u8, tcpShutdown as *u8)
         c.setMethod(exp, "close" as *u8, tcpClose as *u8)
         c.setMethod(exp, "getSockName" as *u8, tcpGetSockName as *u8)

@@ -11,6 +11,24 @@ function randomBytes(size) {
   return buf;
 }
 
+function randomFillSync(buf, offset, size) {
+  if (offset === undefined) offset = 0;
+  if (size === undefined) size = buf.length - offset;
+  const tmp = Buffer.alloc(size);
+  b.randomFill(tmp, size);
+  tmp.copy(buf, offset, 0, size);
+  return buf;
+}
+
+function randomFill(buf, offset, size, cb) {
+  if (typeof offset === 'function') { cb = offset; offset = 0; size = buf.length; }
+  if (typeof size === 'function') { cb = size; size = buf.length - offset; }
+  process.nextTick(() => {
+    try { randomFillSync(buf, offset, size); cb(null, buf); }
+    catch (e) { cb(e); }
+  });
+}
+
 function randomUUID() {
   const bytes = randomBytes(16);
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
@@ -359,7 +377,7 @@ function generateKeyPairSync(type, options) {
 }
 
 module.exports = {
-  randomBytes, randomUUID, randomInt, createHash, createHmac, timingSafeEqual,
+  randomBytes, randomFillSync, randomFill, randomUUID, randomInt, createHash, createHmac, timingSafeEqual,
   createCipheriv, createDecipheriv,
   pbkdf2, pbkdf2Sync, scrypt, scryptSync,
   createSign, createVerify, generateKeyPairSync, generateKeySync,
