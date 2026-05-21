@@ -107,9 +107,22 @@ async function rejects(fn, expected, message) {
   try { await (typeof fn === 'function' ? fn() : fn); } catch (e) {
     threw = true;
     if (expected instanceof RegExp) { if (!expected.test(e.message)) fail(e.message, expected, message, 'rejects'); }
-    else if (typeof expected === 'function' && !(e instanceof expected)) fail(e, expected, message, 'rejects');
+    else if (typeof expected === 'function') {
+      if (expected.prototype !== undefined && !(e instanceof expected)) fail(e, expected, message, 'rejects');
+      else if (expected.prototype === undefined) { const r = expected(e); if (r !== true) fail(e, expected, message, 'rejects'); }
+    } else if (typeof expected === 'object' && expected !== null) {
+      for (const key of Object.keys(expected)) {
+        if (!_deepEqual(e[key], expected[key], true)) fail(e[key], expected[key], message || `rejects: ${key} mismatch`, 'rejects');
+      }
+    }
   }
   if (!threw) fail(undefined, undefined, message || 'Missing expected rejection', 'rejects');
+}
+
+async function doesNotReject(fn, expected, message) {
+  try { await (typeof fn === 'function' ? fn() : fn); } catch (e) {
+    fail(e, undefined, message || 'Got unwanted rejection', 'doesNotReject');
+  }
 }
 
 function ifError(err) { if (err !== null && err !== undefined) throw err; }
@@ -125,9 +138,10 @@ function doesNotMatch(string, regexp, message) {
 module.exports = Object.assign(assert, {
   AssertionError, ok, fail, strictEqual, notStrictEqual, equal, notEqual,
   deepEqual, deepStrictEqual, notDeepEqual, notDeepStrictEqual,
-  throws, doesNotThrow, rejects, ifError, match, doesNotMatch,
+  throws, doesNotThrow, rejects, doesNotReject, ifError, match, doesNotMatch,
   strict: Object.assign(function strict(value, message) { strictEqual(value, true, message); }, {
     equal: strictEqual, notEqual: notStrictEqual, deepEqual: deepStrictEqual,
-    notDeepEqual: notDeepStrictEqual, ok, fail, throws, doesNotThrow, rejects, ifError, match, doesNotMatch,
+    notDeepEqual: notDeepStrictEqual, ok, fail, throws, doesNotThrow, rejects, doesNotReject, ifError, match, doesNotMatch,
+    AssertionError,
   }),
 });

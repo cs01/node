@@ -5,6 +5,7 @@ from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
 
 extern fn clock_gettime(clk_id: i32, tp: *u8): i32
 extern fn v8c_function_call(ctx: *u8, func: i32, recv: i32, argc: i32, argv: *i32): i32
+extern fn v8c_isolate_run_microtasks(iso: *u8): void
 extern fn nanosleep(req: *u8, rem: *u8): i32
 extern fn calloc(count: i64, size: i64): *u8
 
@@ -68,7 +69,10 @@ fn timerSchedule(info: *u8, _ud: *u8): void {
         t_dnsec[slot as i64] = dnsec
         t_cb[slot as i64] = cb.slot
         var ival: i32 = 0
-        if is_interval != 0 { ival = delay }
+        if is_interval != 0 {
+            ival = delay
+            if ival < 1 { ival = 1 }
+        }
         t_interval[slot as i64] = ival
         t_active[slot as i64] = 1
         timer_count = timer_count + 1
@@ -172,6 +176,10 @@ fn timerSleepMs(info: *u8, _ud: *u8): void {
     }
 }
 
+fn timerDrainMicrotasks(_info: *u8, _ud: *u8): void {
+    unsafe { v8c_isolate_run_microtasks(stored_iso) }
+}
+
 fn nm_init_timers(_iso: *u8, ctx: *u8, exports: i32): void {
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
@@ -190,5 +198,6 @@ fn nm_init_timers(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "msUntilNext" as *u8, timerMsUntilNext as *u8)
         c.setMethod(exp, "fireDue" as *u8, timerFireDue as *u8)
         c.setMethod(exp, "sleepMs" as *u8, timerSleepMs as *u8)
+        c.setMethod(exp, "drainMicrotasks" as *u8, timerDrainMicrotasks as *u8)
     }
 }

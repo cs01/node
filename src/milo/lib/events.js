@@ -68,8 +68,12 @@ class EventEmitter {
 
   listeners(type) { return (this._events[type] || []).map(h => h.listener || h); }
   rawListeners(type) { return [...(this._events[type] || [])]; }
-  listenerCount(type) { return (this._events[type] || []).length; }
-  eventNames() { return Object.keys(this._events); }
+  listenerCount(type, listener) {
+    const list = this._events[type] || [];
+    if (listener === undefined) return list.length;
+    return list.filter(h => h === listener || h.listener === listener).length;
+  }
+  eventNames() { return [...Object.keys(this._events), ...Object.getOwnPropertySymbols(this._events)]; }
 }
 
 EventEmitter.defaultMaxListeners = 10;

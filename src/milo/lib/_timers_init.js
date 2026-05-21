@@ -75,6 +75,7 @@ globalThis.__runEventLoop = function() {
 
   for (;;) {
     _tb.fireDue();
+    _tb.drainMicrotasks();
 
     const hasTimers = _tb.hasPending();
     const hasIO = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
@@ -86,9 +87,12 @@ globalThis.__runEventLoop = function() {
       if (ms >= 0) waitMs = Math.min(waitMs, ms);
     }
 
+    // Prevent busy-spin when timers are immediately due
+    if (waitMs < 1) waitMs = 1;
+
     if (poll) {
       poll(waitMs);
-    } else if (waitMs > 0) {
+    } else {
       _tb.sleepMs(waitMs);
     }
   }
