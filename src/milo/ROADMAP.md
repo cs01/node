@@ -10,7 +10,6 @@ Full build: `bash src/milo/build.sh`
 
 ## high — missing functionality npm packages depend on
 
-- [ ] `child_process` entirely stubbed
 - [ ] `http.request()`/`http.get()` throw, `createServer` is fake
 - [ ] `AsyncLocalStorage` doesn't propagate across async boundaries — `lib/async_hooks.js:20-25`
 - [ ] `module` missing `_resolveFilename`, `_cache`, `_extensions`
@@ -71,3 +70,4 @@ Full build: `bash src/milo/build.sh`
 - [x] `fs.createReadStream`/`createWriteStream` — real fd-backed streams with pipe support
 - [x] `fs.openSync`/`readSync`/`writeSync`/`closeSync` — native fd operations
 - [x] `Writable.end()` defers 'finish' emit via nextTick (matches Node.js behavior)
+- [x] `child_process` — real `execSync`/`spawnSync`/`exec`/`spawn` via posix_spawnp + pipe

@@ -3,6 +3,7 @@
 from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
 
 extern fn posix_spawn(pid: *i32, path: *u8, fileActions: *u8, attrp: *u8, argv: *u8, envp: *u8): i32
+extern fn posix_spawnp(pid: *i32, file: *u8, fileActions: *u8, attrp: *u8, argv: *u8, envp: *u8): i32
 extern fn posix_spawn_file_actions_init(fa: *u8): i32
 extern fn posix_spawn_file_actions_destroy(fa: *u8): i32
 extern fn posix_spawn_file_actions_adddup2(fa: *u8, fd: i32, newfd: i32): i32
@@ -60,7 +61,7 @@ fn spawnSyncBinding(info: *u8, _ud: *u8): void {
 
         // Build argv as malloc'd pointer array (cast to *i64 for indexing)
         // Max 128 args, each slot is 8 bytes (pointer)
-        let argvBuf = malloc(128 * 8)
+        let argvBuf = malloc(1024 as i64)
         let argvArr = argvBuf as *i64
         var argc: i32 = 0
 
@@ -73,7 +74,7 @@ fn spawnSyncBinding(info: *u8, _ud: *u8): void {
         // arg1: JS array of string args
         if ci.length() > 1 {
             let argsArr = ci.arg(1)
-            let arrLen = ctx.arrayLength(argsArr)
+            let arrLen = argsArr.arrayLength(iso)
             var ai: i32 = 0
             while ai < arrLen && argc < 126 {
                 let elem = ctx.objectGetIndex(argsArr, ai as u32)
@@ -110,7 +111,7 @@ fn spawnSyncBinding(info: *u8, _ud: *u8): void {
 
         // Spawn the process
         var pid: [i32; 1] = [0]
-        let spawnResult = posix_spawn(pid as *i32, fileBuf as *u8, fileActions as *u8, 0 as *u8, argvBuf, 0 as *u8)
+        let spawnResult = posix_spawnp(pid as *i32, fileBuf as *u8, fileActions as *u8, 0 as *u8, argvBuf, 0 as *u8)
 
         posix_spawn_file_actions_destroy(fileActions as *u8)
 
