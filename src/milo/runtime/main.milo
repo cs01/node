@@ -28,6 +28,7 @@ extern fn nm_init_fs(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_util(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_buffer(iso: *u8, ctx: *u8, exports: i32): void
+extern fn nm_init_timers(iso: *u8, ctx: *u8, exports: i32): void
 
 // V8 lifecycle (not wrapped in v8.milo types — used at top-level init/shutdown)
 extern fn v8c_platform_init(execPath: *u8): i32
@@ -47,6 +48,7 @@ extern fn v8c_try_catch_delete(tc: *u8): void
 extern fn v8c_try_catch_has_caught(tc: *u8): i32
 extern fn v8c_try_catch_message(tc: *u8): i32
 extern fn v8c_isolate_run_microtasks(iso: *u8): void
+extern fn v8c_function_call(ctx: *u8, func: i32, recv: i32, argc: i32, argv: *i32): i32
 
 extern fn nm_set_lib_dir(dir: *u8): void
 extern fn nm_get_lib_dir(): *u8
@@ -229,6 +231,7 @@ fn registerBuiltinBindings(): void {
         nm_binding_register("process_methods" as *u8, nm_init_process_methods as *u8)
         nm_binding_register("util" as *u8, nm_init_util as *u8)
         nm_binding_register("buffer" as *u8, nm_init_buffer as *u8)
+        nm_binding_register("timers" as *u8, nm_init_timers as *u8)
     }
 }
 
@@ -520,8 +523,14 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
 
         v8c_try_catch_delete(tc2)
 
-        // Drain microtask queue so promises/async callbacks fire
+        // Drain microtask queue then run event loop (timers)
         v8c_isolate_run_microtasks(isoPtr)
+        let runLoop = ctx.objectGet(global, "__runEventLoop" as *u8)
+        if runLoop.slot >= 0 {
+            let undef = iso.undefined()
+            unsafe { v8c_function_call(ctxPtr, runLoop.slot, undef.slot, 0, 0 as *i32) }
+            v8c_isolate_run_microtasks(isoPtr)
+        }
 
         if fileBuf as i64 != 0 {
             free(fileBuf)

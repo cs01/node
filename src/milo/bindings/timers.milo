@@ -1,0 +1,193 @@
+// timers binding — native timer queue for event loop
+
+from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
+
+extern fn clock_gettime(clk_id: i32, tp: *u8): i32
+extern fn v8c_function_call(ctx: *u8, func: i32, recv: i32, argc: i32, argv: *i32): i32
+extern fn nanosleep(req: *u8, rem: *u8): i32
+extern fn calloc(count: i64, size: i64): *u8
+
+var t_id: *i32 = 0 as *i32
+var t_dsec: *i64 = 0 as *i64
+var t_dnsec: *i64 = 0 as *i64
+var t_cb: *i32 = 0 as *i32
+var t_interval: *i32 = 0 as *i32
+var t_active: *i32 = 0 as *i32
+var next_id: i32 = 1
+var timer_count: i32 = 0
+var stored_iso: *u8 = 0 as *u8
+var stored_ctx: *u8 = 0 as *u8
+
+fn deadline_from_delay(delay_ms: i32, out_sec: *i64, out_nsec: *i64): void {
+    unsafe {
+        var ts: [i64; 2] = [0, 0]
+        clock_gettime(6, ts as *u8)
+        let total_ns = ts[1] + (delay_ms as i64) * 1000000
+        out_sec[0] = ts[0] + total_ns / 1000000000
+        out_nsec[0] = total_ns % 1000000000
+    }
+}
+
+fn timerSchedule(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 2 {
+        ci.retI32(0)
+        return
+    }
+    let cb = ci.arg(0)
+    let delay = ci.i32Arg(1, 0)
+    let is_interval = ci.i32Arg(2, 0)
+
+    unsafe {
+        stored_iso = ci.isolate().ptr
+        stored_ctx = ci.context().ptr
+        let id = next_id
+        next_id = next_id + 1
+
+        var slot: i32 = -1
+        var i: i32 = 0
+        while i < 256 {
+            if t_active[i as i64] == 0 {
+                slot = i
+                break
+            }
+            i = i + 1
+        }
+        if slot < 0 {
+            ci.retI32(0)
+            return
+        }
+
+        var dsec: i64 = 0
+        var dnsec: i64 = 0
+        deadline_from_delay(delay, &dsec, &dnsec)
+
+        t_id[slot as i64] = id
+        t_dsec[slot as i64] = dsec
+        t_dnsec[slot as i64] = dnsec
+        t_cb[slot as i64] = cb.slot
+        var ival: i32 = 0
+        if is_interval != 0 { ival = delay }
+        t_interval[slot as i64] = ival
+        t_active[slot as i64] = 1
+        timer_count = timer_count + 1
+        ci.retI32(id)
+    }
+}
+
+fn timerClear(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let id = ci.i32Arg(0, 0)
+    unsafe {
+        var i: i32 = 0
+        while i < 256 {
+            if t_active[i as i64] != 0 && t_id[i as i64] == id {
+                t_active[i as i64] = 0
+                timer_count = timer_count - 1
+                break
+            }
+            i = i + 1
+        }
+    }
+}
+
+fn timerHasPending(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    var has: i32 = 0
+    if timer_count > 0 { has = 1 }
+    ci.retBool(has)
+}
+
+fn timerMsUntilNext(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if timer_count == 0 {
+        ci.retI32(-1)
+        return
+    }
+    unsafe {
+        var ts: [i64; 2] = [0, 0]
+        clock_gettime(6, ts as *u8)
+        var min_ms: i64 = 999999999
+        var i: i32 = 0
+        while i < 256 {
+            if t_active[i as i64] != 0 {
+                let ds = t_dsec[i as i64] - ts[0]
+                let dns = t_dnsec[i as i64] - ts[1]
+                let ms = ds * 1000 + dns / 1000000
+                if ms < min_ms { min_ms = ms }
+            }
+            i = i + 1
+        }
+        if min_ms < 0 { min_ms = 0 }
+        ci.retI32(min_ms as i32)
+    }
+}
+
+fn timerFireDue(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    var fired: i32 = 0
+    unsafe {
+        var ts: [i64; 2] = [0, 0]
+        clock_gettime(6, ts as *u8)
+        let now_s = ts[0]
+        let now_ns = ts[1]
+        let iso = Isolate { ptr: stored_iso }
+        let undef = iso.undefined()
+
+        var i: i32 = 0
+        while i < 256 {
+            if t_active[i as i64] != 0 {
+                if t_dsec[i as i64] < now_s || (t_dsec[i as i64] == now_s && t_dnsec[i as i64] <= now_ns) {
+                    v8c_function_call(stored_ctx, t_cb[i as i64], undef.slot, 0, 0 as *i32)
+                    fired = fired + 1
+
+                    if t_interval[i as i64] > 0 {
+                        var dsec: i64 = 0
+                        var dnsec: i64 = 0
+                        deadline_from_delay(t_interval[i as i64], &dsec, &dnsec)
+                        t_dsec[i as i64] = dsec
+                        t_dnsec[i as i64] = dnsec
+                    } else {
+                        t_active[i as i64] = 0
+                        timer_count = timer_count - 1
+                    }
+                }
+            }
+            i = i + 1
+        }
+    }
+    ci.retI32(fired)
+}
+
+fn timerSleepMs(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let ms = ci.i32Arg(0, 0)
+    if ms <= 0 { return }
+    unsafe {
+        var ts: [i64; 2] = [0, 0]
+        ts[0] = ms as i64 / 1000
+        ts[1] = (ms as i64 % 1000) * 1000000
+        nanosleep(ts as *u8, 0 as *u8)
+    }
+}
+
+fn nm_init_timers(_iso: *u8, ctx: *u8, exports: i32): void {
+    let c = Context { ptr: ctx }
+    let exp = Value { slot: exports }
+    unsafe {
+        stored_iso = _iso
+        stored_ctx = ctx
+        t_id = calloc(256, 4) as *i32
+        t_dsec = calloc(256, 8) as *i64
+        t_dnsec = calloc(256, 8) as *i64
+        t_cb = calloc(256, 4) as *i32
+        t_interval = calloc(256, 4) as *i32
+        t_active = calloc(256, 4) as *i32
+        c.setMethod(exp, "schedule" as *u8, timerSchedule as *u8)
+        c.setMethod(exp, "clear" as *u8, timerClear as *u8)
+        c.setMethod(exp, "hasPending" as *u8, timerHasPending as *u8)
+        c.setMethod(exp, "msUntilNext" as *u8, timerMsUntilNext as *u8)
+        c.setMethod(exp, "fireDue" as *u8, timerFireDue as *u8)
+        c.setMethod(exp, "sleepMs" as *u8, timerSleepMs as *u8)
+    }
+}

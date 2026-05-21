@@ -63,11 +63,41 @@
   if (typeof performance === 'undefined') globalThis.performance = { now() { return Date.now(); }, timeOrigin: Date.now() };
   if (typeof global === 'undefined') globalThis.global = globalThis;
   if (typeof structuredClone === 'undefined') globalThis.structuredClone = (v) => JSON.parse(JSON.stringify(v));
-  if (typeof setImmediate === 'undefined') { let _imm = []; globalThis.setImmediate = function(fn, ...args) { const id = _imm.length; _imm.push(fn); Promise.resolve().then(() => { const f = _imm[id]; if (f) { _imm[id] = null; f(...args); } }); return id; }; globalThis.clearImmediate = (id) => { _imm[id] = null; }; }
-  if (typeof setTimeout === 'undefined') globalThis.setTimeout = () => 0;
-  if (typeof clearTimeout === 'undefined') globalThis.clearTimeout = () => {};
-  if (typeof setInterval === 'undefined') globalThis.setInterval = () => 0;
-  if (typeof clearInterval === 'undefined') globalThis.clearInterval = () => {};
+  // --- timers (backed by native timer binding) ---
+  const _tb = _nativeBinding('timers');
+  const _timerCallbacks = new Map();
+  globalThis.setTimeout = function(fn, delay, ...args) {
+    if (typeof fn !== 'function') fn = Function(fn);
+    const wrapped = () => { _timerCallbacks.delete(id); fn(...args); };
+    const id = _tb.schedule(wrapped, Math.max(0, delay || 0), 0);
+    _timerCallbacks.set(id, wrapped);
+    return id;
+  };
+  globalThis.clearTimeout = function(id) { _timerCallbacks.delete(id); _tb.clear(id); };
+  globalThis.setInterval = function(fn, delay, ...args) {
+    if (typeof fn !== 'function') fn = Function(fn);
+    const wrapped = () => fn(...args);
+    const id = _tb.schedule(wrapped, Math.max(0, delay || 0), 1);
+    _timerCallbacks.set(id, wrapped);
+    return id;
+  };
+  globalThis.clearInterval = function(id) { _timerCallbacks.delete(id); _tb.clear(id); };
+  if (typeof setImmediate === 'undefined') {
+    globalThis.setImmediate = function(fn, ...args) { return setTimeout(fn, 0, ...args); };
+    globalThis.clearImmediate = function(id) { clearTimeout(id); };
+  }
+
+  // Event loop — called from main.milo after script execution
+  globalThis.__runEventLoop = function() {
+    let maxIdle = 0;
+    while (_tb.hasPending()) {
+      const ms = _tb.msUntilNext();
+      if (ms > 0) _tb.sleepMs(Math.min(ms, 100));
+      _tb.fireDue();
+      // check if we're stuck (no timers fired, none pending changing)
+      if (!_tb.hasPending()) break;
+    }
+  };
 
   // --- process ---
   process.emitWarning = (msg) => console.error('Warning:', msg);
