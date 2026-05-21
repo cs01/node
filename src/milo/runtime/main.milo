@@ -31,6 +31,7 @@ extern fn nm_init_buffer(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_timers(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_tcp(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_crypto(iso: *u8, ctx: *u8, exports: i32): void
+extern fn nm_init_spawn(iso: *u8, ctx: *u8, exports: i32): void
 
 // V8 lifecycle (not wrapped in v8.milo types — used at top-level init/shutdown)
 extern fn v8c_platform_init(execPath: *u8): i32
@@ -236,6 +237,7 @@ fn registerBuiltinBindings(): void {
         nm_binding_register("timers" as *u8, nm_init_timers as *u8)
         nm_binding_register("tcp" as *u8, nm_init_tcp as *u8)
         nm_binding_register("crypto" as *u8, nm_init_crypto as *u8)
+        nm_binding_register("spawn" as *u8, nm_init_spawn as *u8)
     }
 }
 
