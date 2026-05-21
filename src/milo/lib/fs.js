@@ -28,9 +28,7 @@ function appendFileSync(path, data) {
   writeFileSync(path, existing + (typeof data === 'string' ? data : data.toString()));
 }
 
-function statSync(path) {
-  const s = b.stat(String(path));
-  if (s === -1) throw _fsError('ENOENT', 'stat', path, 'no such file or directory');
+function _wrapStats(s) {
   return {
     dev: s.dev || 0, ino: s.ino || 0, mode: s.mode || 0, nlink: s.nlink || 0,
     uid: s.uid || 0, gid: s.gid || 0, rdev: 0, size: s.size || 0,
@@ -41,6 +39,12 @@ function statSync(path) {
     isSymbolicLink: () => !!s.isSymbolicLink, isBlockDevice: () => false,
     isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
   };
+}
+
+function statSync(path) {
+  const s = b.stat(String(path));
+  if (s === -1) throw _fsError('ENOENT', 'stat', path, 'no such file or directory');
+  return _wrapStats(s);
 }
 
 function existsSync(path) { return !!b.exists(String(path)); }
@@ -68,7 +72,11 @@ function readdirSync(path) { return b.readdir(String(path)) || []; }
 function realpathSync(path) { return b.realpath(String(path)); }
 function chmodSync(path, mode) { b.chmod(String(path), mode); }
 function symlinkSync(target, path) { b.symlink(String(target), String(path)); }
-function lstatSync(path) { return statSync(path); }
+function lstatSync(path) {
+  const result = b.lstat(String(path));
+  if (typeof result === 'number') throw _fsError('ENOENT', 'lstat', path, 'no such file or directory');
+  return _wrapStats(result);
+}
 function readlinkSync(path) { return b.readlink ? b.readlink(String(path)) : String(path); }
 // POSIX open flags
 const O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0x200, O_TRUNC = 0x400, O_APPEND = 0x8, O_EXCL = 0x800;
@@ -89,8 +97,9 @@ function openSync(path, flags, mode) {
 function closeSync(fd) { b.close(fd); }
 
 function fstatSync(fd) {
-  // No fstat native yet — return minimal
-  return { isFile: () => true, isDirectory: () => false, size: 0 };
+  const result = b.fstat(fd);
+  if (typeof result === 'number') throw _fsError('EBADF', 'fstat', fd, 'bad file descriptor');
+  return _wrapStats(result);
 }
 
 function readSync(fd, buffer, offset, length, position) {
