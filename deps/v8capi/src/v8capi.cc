@@ -3,6 +3,7 @@
 
 #include "v8capi.h"
 #include "v8.h"
+#include "v8-fast-api-calls.h"
 #include "libplatform/libplatform.h"
 
 #include <cassert>
@@ -1435,4 +1436,188 @@ extern "C" int v8c_object_define_property(v8c_context* ctx, v8c_value obj,
     auto result = lo.As<v8::Object>()->DefineOwnProperty(
         context, k, lv, v8_attrs);
     return result.IsJust() ? 0 : -1;
+}
+
+// ---------------------------------------------------------------------------
+// Fast buffer operations — V8 Fast API for hot buffer ops
+// Each op has: _impl (shared logic), Slow* (FCI fallback), Fast* (JIT path)
+// ---------------------------------------------------------------------------
+
+struct BufData { uint8_t* data; size_t length; };
+
+static BufData buf_arg(const v8::Local<v8::Value>& val) {
+    if (val.IsEmpty() || !val->IsArrayBufferView()) return {nullptr, 0};
+    auto view = val.As<v8::ArrayBufferView>();
+    return {static_cast<uint8_t*>(view->Buffer()->Data()) + view->ByteOffset(),
+            view->ByteLength()};
+}
+
+static int32_t int_arg(const FCI& info, int idx, int32_t def) {
+    if (idx >= info.Length()) return def;
+    auto val = info[idx];
+    if (val->IsInt32()) return val.As<v8::Int32>()->Value();
+    if (val->IsNumber()) return static_cast<int32_t>(val.As<v8::Number>()->Value());
+    return def;
+}
+
+// Debug counters for fast path verification (temporary)
+static int64_t g_slow_count = 0;
+static int64_t g_fast_count = 0;
+
+extern "C" void v8c_fast_api_stats(int64_t* slow_out, int64_t* fast_out) {
+    *slow_out = g_slow_count;
+    *fast_out = g_fast_count;
+}
+
+// ---- compare(a, b) → -1/0/1 ----
+
+static int32_t compare_impl(BufData a, BufData b) {
+    size_t m = a.length < b.length ? a.length : b.length;
+    if (m > 0) {
+        int c = memcmp(a.data, b.data, m);
+        if (c < 0) return -1;
+        if (c > 0) return 1;
+    }
+    return a.length < b.length ? -1 : a.length > b.length ? 1 : 0;
+}
+
+static void SlowCompare(const FCI& info) {
+    g_slow_count++;
+    info.GetReturnValue().Set(compare_impl(buf_arg(info[0]), buf_arg(info[1])));
+}
+static int32_t FastCompare(v8::Local<v8::Value>, v8::Local<v8::Value> a,
+                            v8::Local<v8::Value> b,
+                            v8::FastApiCallbackOptions&) {
+    g_fast_count++;
+    return compare_impl(buf_arg(a), buf_arg(b));
+}
+static v8::CFunction cf_compare(v8::CFunction::Make(FastCompare));
+
+// ---- indexOfByte(buf, byte, offset) → index or -1 ----
+
+static int32_t index_of_byte_impl(BufData buf, int32_t byte_val, int32_t offset) {
+    if (offset < 0) offset = 0;
+    if (static_cast<size_t>(offset) >= buf.length || !buf.data) return -1;
+    auto* p = static_cast<uint8_t*>(
+        memchr(buf.data + offset, byte_val & 0xff, buf.length - offset));
+    return p ? static_cast<int32_t>(p - buf.data) : -1;
+}
+
+static void SlowIndexOfByte(const FCI& info) {
+    info.GetReturnValue().Set(
+        index_of_byte_impl(buf_arg(info[0]), int_arg(info, 1, 0), int_arg(info, 2, 0)));
+}
+static int32_t FastIndexOfByte(v8::Local<v8::Value>, v8::Local<v8::Value> buf,
+                                int32_t byte_val, int32_t offset,
+                                v8::FastApiCallbackOptions&) {
+    return index_of_byte_impl(buf_arg(buf), byte_val, offset);
+}
+static v8::CFunction cf_index_of_byte(v8::CFunction::Make(FastIndexOfByte));
+
+// ---- indexOf(haystack, needle, offset) → index or -1 ----
+
+static int32_t index_of_impl(BufData h, BufData n, int32_t offset) {
+    if (offset < 0) offset = 0;
+    if (static_cast<size_t>(offset) >= h.length || !h.data) return -1;
+    if (n.length == 0) return offset;
+    if (n.length > h.length - offset) return -1;
+    auto* p = memmem(h.data + offset, h.length - offset, n.data, n.length);
+    return p ? static_cast<int32_t>(static_cast<uint8_t*>(p) - h.data) : -1;
+}
+
+static void SlowIndexOf(const FCI& info) {
+    info.GetReturnValue().Set(
+        index_of_impl(buf_arg(info[0]), buf_arg(info[1]), int_arg(info, 2, 0)));
+}
+static int32_t FastIndexOf(v8::Local<v8::Value>, v8::Local<v8::Value> h,
+                            v8::Local<v8::Value> n, int32_t offset,
+                            v8::FastApiCallbackOptions&) {
+    return index_of_impl(buf_arg(h), buf_arg(n), offset);
+}
+static v8::CFunction cf_index_of(v8::CFunction::Make(FastIndexOf));
+
+// ---- copy(src, dst, targetStart, sourceStart, sourceEnd) → bytes copied ----
+
+static int32_t copy_impl(BufData src, BufData dst,
+                           int32_t ts, int32_t ss, int32_t se) {
+    if (ts >= static_cast<int32_t>(dst.length) || ss >= se) return 0;
+    int32_t len = se - ss;
+    int32_t max = static_cast<int32_t>(dst.length) - ts;
+    if (len > max) len = max;
+    if (len <= 0 || !src.data || !dst.data) return 0;
+    memmove(dst.data + ts, src.data + ss, len);
+    return len;
+}
+
+static void SlowCopy(const FCI& info) {
+    auto src = buf_arg(info[0]);
+    info.GetReturnValue().Set(copy_impl(
+        src, buf_arg(info[1]), int_arg(info, 2, 0), int_arg(info, 3, 0),
+        int_arg(info, 4, static_cast<int32_t>(src.length))));
+}
+static int32_t FastCopy(v8::Local<v8::Value>, v8::Local<v8::Value> s,
+                         v8::Local<v8::Value> d, int32_t ts, int32_t ss,
+                         int32_t se, v8::FastApiCallbackOptions&) {
+    return copy_impl(buf_arg(s), buf_arg(d), ts, ss, se);
+}
+static v8::CFunction cf_copy(v8::CFunction::Make(FastCopy));
+
+// ---- fill(buf, value) ----
+
+static void SlowFill(const FCI& info) {
+    auto buf = buf_arg(info[0]);
+    if (buf.length > 0 && buf.data)
+        memset(buf.data, int_arg(info, 1, 0) & 0xff, buf.length);
+}
+static void FastFill(v8::Local<v8::Value>, v8::Local<v8::Value> b,
+                      int32_t val, v8::FastApiCallbackOptions&) {
+    auto buf = buf_arg(b);
+    if (buf.length > 0 && buf.data) memset(buf.data, val & 0xff, buf.length);
+}
+static v8::CFunction cf_fill(v8::CFunction::Make(FastFill));
+
+// ---- fillRange(buf, value, offset, end) ----
+
+static void SlowFillRange(const FCI& info) {
+    auto buf = buf_arg(info[0]);
+    int32_t val = int_arg(info, 1, 0);
+    int32_t off = int_arg(info, 2, 0);
+    int32_t end = int_arg(info, 3, static_cast<int32_t>(buf.length));
+    if (off < 0) off = 0;
+    if (end > static_cast<int32_t>(buf.length)) end = static_cast<int32_t>(buf.length);
+    if (off < end && buf.data) memset(buf.data + off, val & 0xff, end - off);
+}
+static void FastFillRange(v8::Local<v8::Value>, v8::Local<v8::Value> b,
+                           int32_t val, int32_t off, int32_t end,
+                           v8::FastApiCallbackOptions&) {
+    auto buf = buf_arg(b);
+    if (off < 0) off = 0;
+    if (end > static_cast<int32_t>(buf.length)) end = static_cast<int32_t>(buf.length);
+    if (off < end && buf.data) memset(buf.data + off, val & 0xff, end - off);
+}
+static v8::CFunction cf_fill_range(v8::CFunction::Make(FastFillRange));
+
+// ---- Registration: sets fast methods on exports object ----
+
+static void set_fast_method(v8::Isolate* iso, v8::Local<v8::Context> context,
+                             v8::Local<v8::Object> obj, const char* name,
+                             v8::FunctionCallback slow, const v8::CFunction* fast) {
+    auto ft = v8::FunctionTemplate::New(
+        iso, slow, v8::Local<v8::Value>(), v8::Local<v8::Signature>(), 0,
+        v8::ConstructorBehavior::kThrow, v8::SideEffectType::kHasSideEffect, fast);
+    auto key = v8::String::NewFromUtf8(iso, name).ToLocalChecked();
+    obj->Set(context, key, ft->GetFunction(context).ToLocalChecked()).Check();
+}
+
+extern "C" void v8c_register_buffer_fast_ops(v8c_context* ctx, v8c_value exports) {
+    auto* i = ctx_isolate(ctx);
+    auto context = ctx_local(ctx);
+    auto obj = unwrap(i, exports).As<v8::Object>();
+
+    set_fast_method(i, context, obj, "compare",     SlowCompare,     &cf_compare);
+    set_fast_method(i, context, obj, "indexOfByte",  SlowIndexOfByte, &cf_index_of_byte);
+    set_fast_method(i, context, obj, "indexOf",      SlowIndexOf,     &cf_index_of);
+    set_fast_method(i, context, obj, "copy",         SlowCopy,        &cf_copy);
+    set_fast_method(i, context, obj, "fill",         SlowFill,        &cf_fill);
+    set_fast_method(i, context, obj, "fillRange",    SlowFillRange,   &cf_fill_range);
 }

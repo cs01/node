@@ -129,3 +129,37 @@ JS → V8 C wrapper (v8_c_api.cpp) → Milo bindings → POSIX/macOS syscalls
 - `v8/v8.milo` — V8 C API wrappers (safe Milo interface over extern fns)
 - `bindings/*.milo` — Native module implementations (tcp, fs, os, env, timers, etc.)
 - `runtime/main.milo` — Bootstrap, binding registry, JS execution
+
+## Fast Call Trampoline Pattern
+
+For hot-path binding ops (buffer compare, copy, indexOf, fill, etc.), use `v8c_fast_call` — a single generic C trampoline that eliminates per-call FFI overhead.
+
+**Problem**: Normal bindings do ~8 FFI round-trips per call (fci_length, fci_arg, isolate, typedArrayData, typedArrayByteLength, etc). For small buffers this overhead dominates.
+
+**Solution**: ONE C function (`v8c_fast_call` in v8capi.cc) walks JS args, extracts typed arrays as raw `(ptr, len)` pairs and numbers as `i32`, then calls a Milo function pointer with a universal signature:
+
+```
+JS call → V8 slow callback → v8c_fast_call (extracts all args in C++) → Milo fn(buf0, len0, buf1, len1, i0, i1, i2) → i32
+```
+
+### How to use
+
+1. Write a pure Milo impl fn with the universal 7-arg signature:
+```milo
+fn compareImpl(a: *u8, aLen: i64, b: *u8, bLen: i64, _i0: i32, _i1: i32, _i2: i32): i32 {
+    // all logic here, no V8 API calls
+}
+```
+
+2. Register with `setFastMethod` (trampoline = `v8c_fast_call`, data = Milo fn):
+```milo
+c.setFastMethod(exp, "compare", v8c_fast_call as *u8, compareImpl as *u8)
+```
+
+3. The C trampoline auto-classifies JS args: TypedArrays → buf0/buf1, Numbers → i0/i1/i2. Unused slots are null/0.
+
+### Limits and next steps
+
+- Currently uses V8 slow callback path. Gives ~40% improvement over raw FFI but still 4-6x slower than Node on 1KB buffers. At 1MB, matches Node exactly.
+- To close remaining gap: add V8 Fast API (`CFunction` + `CFunctionInfo`) registration that calls same Milo impl fns. This bypasses FunctionCallbackInfo entirely.
+- Only works for ops that take typed arrays + ints and return i32. String encode/decode ops still use traditional `setMethod` approach.

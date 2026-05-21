@@ -3,13 +3,28 @@
 from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
 
 extern fn memset(dst: *u8, val: i32, len: i64): *u8
-extern fn memcmp(a: *u8, b: *u8, len: i64): i32
 extern fn memcpy(dst: *u8, src: *u8, len: i64): *u8
-extern fn memmove(dst: *u8, src: *u8, len: i64): *u8
-extern fn memchr(s: *u8, c: i32, n: i64): *u8
-extern fn memmem(haystack: *u8, hlen: i64, needle: *u8, nlen: i64): *u8
 extern fn calloc(count: i64, size: i64): *u8
 extern fn free(ptr: *u8): void
+
+// V8 Fast API — buffer ops registered directly in C for JIT inlining
+extern fn v8c_register_buffer_fast_ops(ctx: *u8, exports: i32): void
+extern fn v8c_fast_api_stats(slow: *i64, fast: *i64): void
+
+fn bufFastApiStats(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    var slow: i64 = 0
+    var fast: i64 = 0
+    unsafe {
+        v8c_fast_api_stats(&slow, &fast)
+        let result = iso.object()
+        let ctx = ci.context()
+        ctx.objectSet(result, "slow" as *u8, iso.number(slow as f64))
+        ctx.objectSet(result, "fast" as *u8, iso.number(fast as f64))
+        ci.ret(result)
+    }
+}
 
 fn bufCreateUnsafeArrayBuffer(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
@@ -32,150 +47,6 @@ fn bufNoopWrite(info: *u8, _ud: *u8): void {
     ci.ret(iso.int32(0))
 }
 
-// bufFill(typedArray, value) — fill typed array with byte value
-fn bufFill(info: *u8, _ud: *u8): void {
-    let ci = CallbackInfo { ptr: info }
-    let iso = ci.isolate()
-    let arr = ci.arg(0)
-    let dataPtr = arr.typedArrayData(iso)
-    let dataLen = arr.typedArrayByteLength(iso)
-    let val = ci.i32Arg(1, 0)
-    unsafe { memset(dataPtr, val & 0xff, dataLen) }
-}
-
-// bufFillRange(typedArray, value, offset, end) — fill range with byte value
-fn bufFillRange(info: *u8, _ud: *u8): void {
-    let ci = CallbackInfo { ptr: info }
-    let iso = ci.isolate()
-    let arr = ci.arg(0)
-    let dataPtr = arr.typedArrayData(iso)
-    let dataLen = arr.typedArrayByteLength(iso)
-    let val = ci.i32Arg(1, 0)
-    var offset = ci.i32Arg(2, 0)
-    var end = ci.i32Arg(3, dataLen as i32)
-    if offset < 0 { offset = 0 }
-    if end > dataLen as i32 { end = dataLen as i32 }
-    if offset >= end { return }
-    let offI64 = offset as i64
-    let lenI64 = (end - offset) as i64
-    unsafe { memset((dataPtr as i64 + offI64) as *u8, val & 0xff, lenI64) }
-}
-
-// bufCompare(a, b) — lexicographic compare, returns -1/0/1
-fn bufCompare(info: *u8, _ud: *u8): void {
-    let ci = CallbackInfo { ptr: info }
-    let iso = ci.isolate()
-    let a = ci.arg(0)
-    let b = ci.arg(1)
-    let aPtr = a.typedArrayData(iso)
-    let aLen = a.typedArrayByteLength(iso)
-    let bPtr = b.typedArrayData(iso)
-    let bLen = b.typedArrayByteLength(iso)
-    var minLen = aLen
-    if bLen < minLen { minLen = bLen }
-    unsafe {
-        let cmp = memcmp(aPtr, bPtr, minLen)
-        if cmp != 0 {
-            if cmp < 0 { ci.retI32(-1) } else { ci.retI32(1) }
-            return
-        }
-    }
-    if aLen < bLen { ci.retI32(-1) }
-    else if aLen > bLen { ci.retI32(1) }
-    else { ci.retI32(0) }
-}
-
-// bufCopy(src, dst, targetStart, sourceStart, sourceEnd)
-fn bufCopy(info: *u8, _ud: *u8): void {
-    let ci = CallbackInfo { ptr: info }
-    let iso = ci.isolate()
-    let src = ci.arg(0)
-    let dst = ci.arg(1)
-    let targetStart = ci.i32Arg(2, 0)
-    let sourceStart = ci.i32Arg(3, 0)
-    let srcLen = src.typedArrayByteLength(iso)
-    let sourceEnd = ci.i32Arg(4, srcLen as i32)
-    let dstLen = dst.typedArrayByteLength(iso)
-
-    if targetStart >= dstLen as i32 || sourceStart >= sourceEnd {
-        ci.retI32(0)
-        return
-    }
-    var len = sourceEnd - sourceStart
-    let maxLen = dstLen as i32 - targetStart
-    if len > maxLen { len = maxLen }
-
-    let srcPtr = src.typedArrayData(iso)
-    let dstPtr = dst.typedArrayData(iso)
-    unsafe { memmove((dstPtr as i64 + targetStart as i64) as *u8, (srcPtr as i64 + sourceStart as i64) as *u8, len as i64) }
-    ci.retI32(len)
-}
-
-// bufIndexOf(haystack, needle_byte_or_typedArray, byteOffset) — returns index or -1
-fn bufIndexOf(info: *u8, _ud: *u8): void {
-    let ci = CallbackInfo { ptr: info }
-    let iso = ci.isolate()
-    let haystack = ci.arg(0)
-    let hPtr = haystack.typedArrayData(iso)
-    let hLen = haystack.typedArrayByteLength(iso)
-    let byteOffset = ci.i32Arg(2, 0)
-
-    if byteOffset as i64 >= hLen {
-        ci.retI32(-1)
-        return
-    }
-
-    let needle = ci.arg(1)
-    let nPtr = needle.typedArrayData(iso)
-    let nLen = needle.typedArrayByteLength(iso)
-
-    if nLen == 0 {
-        ci.retI32(byteOffset)
-        return
-    }
-    if nLen > hLen - byteOffset as i64 {
-        ci.retI32(-1)
-        return
-    }
-
-    unsafe {
-        let searchPtr = (hPtr as i64 + byteOffset as i64) as *u8
-        let searchLen = hLen - byteOffset as i64
-        let result = memmem(searchPtr, searchLen, nPtr, nLen)
-        if result == 0 as *u8 {
-            ci.retI32(-1)
-        } else {
-            ci.retI32((result as i64 - hPtr as i64) as i32)
-        }
-    }
-}
-
-// bufIndexOfByte(typedArray, byte, offset) — SIMD-optimized via memchr
-fn bufIndexOfByte(info: *u8, _ud: *u8): void {
-    let ci = CallbackInfo { ptr: info }
-    let iso = ci.isolate()
-    let arr = ci.arg(0)
-    let dataPtr = arr.typedArrayData(iso)
-    let dataLen = arr.typedArrayByteLength(iso)
-    let byte = ci.i32Arg(1, 0)
-    let offset = ci.i32Arg(2, 0)
-
-    if offset as i64 >= dataLen {
-        ci.retI32(-1)
-        return
-    }
-
-    unsafe {
-        let p = (dataPtr as i64 + offset as i64) as *u8
-        let remaining = dataLen - offset as i64
-        let result = memchr(p, byte & 0xff, remaining)
-        if result == 0 as *u8 {
-            ci.retI32(-1)
-        } else {
-            ci.retI32((result as i64 - dataPtr as i64) as i32)
-        }
-    }
-}
 
 // bufHexEncode(typedArray) -> hex string
 fn bufHexEncode(info: *u8, _ud: *u8): void {
@@ -426,13 +297,9 @@ fn nm_init_buffer(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "base64Write" as *u8, bufNoopWrite as *u8)
         c.setMethod(exp, "base64urlWrite" as *u8, bufNoopWrite as *u8)
 
-        // fast native ops
-        c.setMethod(exp, "fill" as *u8, bufFill as *u8)
-        c.setMethod(exp, "fillRange" as *u8, bufFillRange as *u8)
-        c.setMethod(exp, "compare" as *u8, bufCompare as *u8)
-        c.setMethod(exp, "copy" as *u8, bufCopy as *u8)
-        c.setMethod(exp, "indexOf" as *u8, bufIndexOf as *u8)
-        c.setMethod(exp, "indexOfByte" as *u8, bufIndexOfByte as *u8)
+        // fast buffer ops via V8 Fast API (JIT-inlined C, bypasses FCI overhead)
+        v8c_register_buffer_fast_ops(ctx, exports)
+        c.setMethod(exp, "_fastApiStats" as *u8, bufFastApiStats as *u8)
         c.setMethod(exp, "hexEncode" as *u8, bufHexEncode as *u8)
         c.setMethod(exp, "hexDecode" as *u8, bufHexDecode as *u8)
         c.setMethod(exp, "base64Encode" as *u8, bufBase64Encode as *u8)

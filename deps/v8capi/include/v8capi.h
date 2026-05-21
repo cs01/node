@@ -406,6 +406,13 @@ int v8c_object_define_property(v8c_context* ctx, v8c_value obj,
                                 const char* key, v8c_value val,
                                 int attributes);
 
+// ---------------------------------------------------------------------------
+// Fast buffer operations — V8 Fast API (JIT-inlined, bypasses FCI overhead)
+// ---------------------------------------------------------------------------
+
+void v8c_register_buffer_fast_ops(v8c_context* ctx, v8c_value exports);
+void v8c_fast_api_stats(int64_t* slow_out, int64_t* fast_out);
+
 #ifdef __cplusplus
 }
 #endif
