@@ -189,15 +189,16 @@ class Server extends EventEmitter {
   }
 
   listen(port, host, backlog, cb) {
-    if (typeof host === 'function') { cb = host; host = '0.0.0.0'; backlog = 128; }
-    if (typeof backlog === 'function') { cb = backlog; backlog = 128; }
     if (typeof port === 'object') {
+      // listen(opts, cb)
+      cb = typeof host === 'function' ? host : cb;
       const opts = port;
       port = opts.port;
       host = opts.host || '0.0.0.0';
       backlog = opts.backlog || 128;
-      cb = host;
-      if (typeof opts.host === 'function') { cb = opts.host; host = '0.0.0.0'; }
+    } else {
+      if (typeof host === 'function') { cb = host; host = '0.0.0.0'; backlog = 128; }
+      if (typeof backlog === 'function') { cb = backlog; backlog = 128; }
     }
     if (!host) host = '0.0.0.0';
     if (!backlog) backlog = 128;

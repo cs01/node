@@ -188,6 +188,12 @@ class Server extends EventEmitter {
     return this;
   }
   address() { return this._server ? this._server.address() : null; }
+  setTimeout(ms, cb) { this._timeout = ms; if (cb) this.on('timeout', cb); return this; }
+  get timeout() { return this._timeout || 0; }
+  set timeout(ms) { this._timeout = ms; }
+  get listening() { return this._listening; }
+  ref() { return this; }
+  unref() { return this; }
 }
 
 class ClientRequest extends EventEmitter {
