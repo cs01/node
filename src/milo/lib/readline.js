@@ -84,4 +84,38 @@ function createInterface(input, output, completer, terminal) {
   return new Interface(input, output, completer, terminal);
 }
 
-module.exports = { Interface, createInterface };
+function clearScreenDown(stream, cb) {
+  if (stream) stream.write('\x1b[0J');
+  if (cb) cb();
+}
+
+function clearLine(stream, dir, cb) {
+  if (stream) stream.write(dir < 0 ? '\x1b[1K' : dir > 0 ? '\x1b[0K' : '\x1b[2K');
+  if (cb) cb();
+}
+
+function cursorTo(stream, x, y, cb) {
+  if (typeof y === 'function') { cb = y; y = undefined; }
+  if (stream) {
+    if (y !== undefined) stream.write(`\x1b[${y + 1};${x + 1}H`);
+    else stream.write(`\x1b[${x + 1}G`);
+  }
+  if (cb) cb();
+}
+
+function moveCursor(stream, dx, dy, cb) {
+  if (stream) {
+    if (dx > 0) stream.write(`\x1b[${dx}C`);
+    else if (dx < 0) stream.write(`\x1b[${-dx}D`);
+    if (dy > 0) stream.write(`\x1b[${dy}B`);
+    else if (dy < 0) stream.write(`\x1b[${-dy}A`);
+  }
+  if (cb) cb();
+}
+
+function emitKeypressEvents() {}
+
+module.exports = {
+  Interface, createInterface,
+  clearScreenDown, clearLine, cursorTo, moveCursor, emitKeypressEvents,
+};

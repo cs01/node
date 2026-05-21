@@ -93,4 +93,65 @@ function once(emitter, type) {
 }
 
 EventEmitter.once = once;
+EventEmitter.captureRejections = false;
+EventEmitter.captureRejectionSymbol = Symbol.for('nodejs.rejection');
+EventEmitter.errorMonitor = Symbol('events.errorMonitor');
+
+EventEmitter.on = function on(emitter, event, options) {
+  const unconsumedEvents = [];
+  const unconsumedPromises = [];
+  let error = null;
+  let finished = false;
+
+  const eventHandler = (...args) => {
+    const value = args.length === 1 ? args[0] : args;
+    if (unconsumedPromises.length > 0) {
+      unconsumedPromises.shift().resolve({ value, done: false });
+    } else {
+      unconsumedEvents.push(value);
+    }
+  };
+
+  const errorHandler = (err) => {
+    error = err;
+    if (unconsumedPromises.length > 0) {
+      unconsumedPromises.shift().reject(err);
+    }
+  };
+
+  emitter.on(event, eventHandler);
+  if (event !== 'error') emitter.on('error', errorHandler);
+
+  const iterator = {
+    next() {
+      if (unconsumedEvents.length > 0) {
+        return Promise.resolve({ value: unconsumedEvents.shift(), done: false });
+      }
+      if (error) { const err = error; error = null; return Promise.reject(err); }
+      if (finished) return Promise.resolve({ done: true });
+      return new Promise((resolve, reject) => { unconsumedPromises.push({ resolve, reject }); });
+    },
+    return() {
+      finished = true;
+      emitter.removeListener(event, eventHandler);
+      emitter.removeListener('error', errorHandler);
+      for (const p of unconsumedPromises) p.resolve({ done: true });
+      return Promise.resolve({ done: true });
+    },
+    throw(err) { error = err; return this.return(); },
+    [Symbol.asyncIterator]() { return this; },
+  };
+
+  if (options?.signal) {
+    options.signal.addEventListener('abort', () => { iterator.return(); });
+  }
+
+  return iterator;
+};
+
+EventEmitter.addAbortListener = function(signal, listener) {
+  signal.addEventListener('abort', listener);
+  return { [Symbol.dispose]() { signal.removeEventListener('abort', listener); } };
+};
+
 module.exports = EventEmitter;

@@ -32,7 +32,33 @@
   const _jsBindings = {
     constants: _constants, types: _types,
     config: { hasIntl: true, hasOpenSSL: false, hasCrypto: false, hasInspector: false },
-    errors: { exitCodes: { kNoFailure: 0, kGenericUserError: 1 }, noSideEffectsToString(v) { try { return ''+v; } catch { return 'Object'; } }, triggerUncaughtException(e) { throw e; } },
+    errors: { exitCodes: { kNoFailure: 0, kGenericUserError: 1, kUnfinishedTopLevelAwait: 13 }, noSideEffectsToString(v) { try { return ''+v; } catch { return 'Object'; } }, triggerUncaughtException(e) { throw e; } },
+    util: {
+      getCallerLocation() { return undefined; },
+      getPromiseDetails() { return [0, undefined]; },
+      getProxyDetails() { return undefined; },
+      previewEntries() { return [[], false]; },
+      sleep() {},
+    },
+    icu: { transcode: (source) => source },
+    options: { getOptions() { return new Map(); } },
+    credentials: { implementsPosixCredentials: true },
+    inspector: { open() {}, url() { return undefined; }, waitForDebugger() {} },
+    process_methods: { patchProcessObject() {} },
+    task_queue: { setTickCallback() {} },
+    messaging: {},
+    symbols: {
+      arrow_message_private_symbol: Symbol('arrow_message_private_symbol'),
+      decorated_private_symbol: Symbol('decorated_private_symbol'),
+      owner_symbol: Symbol('owner_symbol'),
+      handle_onclose_symbol: Symbol('handle_onclose'),
+    },
+    worker: { isMainThread: true, threadId: 0 },
+    performance: { milestones: {}, loopIdleTime() { return 0; }, timerify() { return arguments[0]; }, markBootstrapComplete() {} },
+    serdes: { Serializer: class { writeHeader() {} writeValue() {} releaseBuffer() { return Buffer.alloc(0); } }, Deserializer: class { readHeader() {} readValue() { return undefined; } } },
+    contextify: { ContextifyScript: class { constructor() {} runInThisContext() {} runInContext() {} } },
+    string_decoder: { encodings: { utf8: 0, ucs2: 1, latin1: 2 } },
+    heap_utils: { createHeapSnapshotStream() { throw new Error('heap snapshot not available'); } },
   };
   const _nativeBinding = internalBinding;
   globalThis.internalBinding = function(name) {

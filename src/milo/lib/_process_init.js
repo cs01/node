@@ -59,3 +59,17 @@ if (!process.execArgv) process.execArgv = [];
 if (!process.allowedNodeEnvironmentFlags) process.allowedNodeEnvironmentFlags = new Set();
 if (!process.kill) process.kill = () => {};
 if (!process.binding) process.binding = (name) => { throw new Error('process.binding is not supported'); };
+
+let _uncaughtExceptionCallback = null;
+process.setUncaughtExceptionCaptureCallback = (fn) => {
+  if (fn !== null && typeof fn !== 'function') throw new TypeError('The "fn" argument must be of type function or null');
+  _uncaughtExceptionCallback = fn;
+};
+process.hasUncaughtExceptionCaptureCallback = () => _uncaughtExceptionCallback !== null;
+
+if (!process.memoryUsage) {
+  process.memoryUsage = () => ({ rss: 0, heapTotal: 0, heapUsed: 0, external: 0, arrayBuffers: 0 });
+  process.memoryUsage.rss = () => 0;
+}
+if (!process.cpuUsage) process.cpuUsage = () => ({ user: 0, system: 0 });
+if (!process.resourceUsage) process.resourceUsage = () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: 0, sharedMemorySize: 0, unsharedDataSize: 0, unsharedStackSize: 0, minorPageFault: 0, majorPageFault: 0, swappedOut: 0, fsRead: 0, fsWrite: 0, ipcSent: 0, ipcReceived: 0, signalsCount: 0, voluntaryContextSwitches: 0, involuntaryContextSwitches: 0 });

@@ -158,7 +158,6 @@ class Writable extends Stream {
 class Duplex extends Readable {
   constructor(opts) {
     super(opts);
-    Writable.call(this, opts);
     this.writable = true;
     this._writableState = { ended: false, finished: false, corked: 0, buffered: [] };
     if (opts && opts.write) this._write = opts.write;

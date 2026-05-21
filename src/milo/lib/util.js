@@ -132,8 +132,44 @@ function isDeepStrictEqual(a, b) {
   try { assert.deepStrictEqual(a, b); return true; } catch { return false; }
 }
 
+function getCallSites() {
+  const orig = Error.prepareStackTrace;
+  Error.prepareStackTrace = (_, stack) => stack;
+  const err = new Error();
+  const stack = err.stack || [];
+  Error.prepareStackTrace = orig;
+  return stack.map(s => ({
+    functionName: s.getFunctionName?.() || '',
+    scriptName: s.getFileName?.() || '',
+    lineNumber: s.getLineNumber?.() || 0,
+    column: s.getColumnNumber?.() || 0,
+  }));
+}
+
+function stripVTControlCharacters(str) {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1B\[[0-9;]*[A-Za-z]/g, '').replace(/\x1B\][^\x07]*\x07/g, '');
+}
+
+function parseEnv(content) {
+  const result = {};
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq < 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let val = trimmed.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))
+      val = val.slice(1, -1);
+    result[key] = val;
+  }
+  return result;
+}
+
 module.exports = {
   inspect, format, formatWithOptions, inherits, deprecate,
   promisify, callbackify, debuglog, types, isDeepStrictEqual,
+  getCallSites, stripVTControlCharacters, parseEnv,
   TextEncoder: globalThis.TextEncoder, TextDecoder: globalThis.TextDecoder,
 };

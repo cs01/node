@@ -62,9 +62,14 @@ class Console {
   }
 
   table(data) { this.log(data); }
-  clear() {}
-  group() {}
+  clear() {
+    if (this._stdout && this._stdout.isTTY) {
+      this._stdout.write('\x1b[1;1H\x1b[0J');
+    }
+  }
+  group(...args) { if (args.length > 0) this.log(...args); }
   groupEnd() {}
+  dirxml(...args) { this.log(...args); }
 }
 
 module.exports = new Console(null, null);
