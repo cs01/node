@@ -134,11 +134,13 @@
 
   globalThis.require = function require(id) {
     if (id.startsWith('node:')) id = id.slice(5);
+    // Map subpath requires to flat filenames (e.g. timers/promises -> timers_promises)
+    const flatId = id.replace(/\//g, '_');
     if (_moduleWrappers[id]) return _moduleWrappers[id].exports;
     if (moduleCache[id]) return moduleCache[id];
 
     // Try milo lib/, then Node's lib/
-    let src = _tryMiloLib(id) || __loadBuiltin(id);
+    let src = _tryMiloLib(id) || _tryMiloLib(flatId) || __loadBuiltin(id);
     if (src !== undefined) {
       const mod = { exports: {} };
       _moduleWrappers[id] = mod;
