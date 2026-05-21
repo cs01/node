@@ -66,8 +66,8 @@ Full build: `bash src/milo/build.sh`
 - [ ] `worker_threads` — `Worker`, `MessageChannel`, `MessagePort`
 - [ ] `vm` — proper sandbox isolation via V8 contexts
 - [ ] `readline` — interactive stdin input, Interface class
-- [ ] `perf_hooks` — `PerformanceObserver` real implementation
-- [ ] `diagnostics_channel` — real channel pub/sub
+- [ ] `perf_hooks` — `monitorEventLoopDelay` real histogram, `eventLoopUtilization`
+- [ ] `readline` — real terminal raw mode, completion, history
 - [ ] `process.nextTick` — proper implementation (currently microtask-based, fragile)
 - [ ] Buffer pooling optimization
 - [ ] `domain` module (deprecated but some packages use it)

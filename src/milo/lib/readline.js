@@ -115,7 +115,21 @@ function moveCursor(stream, dx, dy, cb) {
 
 function emitKeypressEvents() {}
 
+const promises = {
+  createInterface(options) {
+    const rl = createInterface(options);
+    const wrapped = {
+      [Symbol.asyncIterator]() { return rl[Symbol.asyncIterator](); },
+      question(query) { return new Promise(resolve => rl.question(query, resolve)); },
+      close() { rl.close(); },
+      on(ev, fn) { rl.on(ev, fn); return wrapped; },
+    };
+    return wrapped;
+  },
+};
+
 module.exports = {
   Interface, createInterface,
   clearScreenDown, clearLine, cursorTo, moveCursor, emitKeypressEvents,
+  promises,
 };
