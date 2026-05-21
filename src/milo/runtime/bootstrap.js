@@ -1,5 +1,5 @@
 // bootstrap.js — milo-node runtime bootstrap
-// Primordials, console, internalBinding, process setup, web globals, require().
+// Sets up primordials, internalBinding, web globals, and require(). Minimal.
 'use strict';
 
 (function() {
@@ -10,7 +10,6 @@
   globalThis.primordials = primordials;
 
   // --- internalBinding shim ---
-  // JS-only bindings that have no native counterpart in Milo
   const _constants = {
     os: {
       signals: { SIGHUP:1, SIGINT:2, SIGQUIT:3, SIGILL:4, SIGTRAP:5, SIGABRT:6, SIGFPE:8, SIGKILL:9, SIGBUS:10, SIGSEGV:11, SIGSYS:12, SIGPIPE:13, SIGALRM:14, SIGTERM:15, SIGURG:16, SIGSTOP:17, SIGTSTP:18, SIGCONT:19, SIGCHLD:20, SIGTTIN:21, SIGTTOU:22, SIGIO:23, SIGXCPU:24, SIGXFSZ:25, SIGVTALRM:26, SIGPROF:27, SIGINFO:29, SIGUSR1:30, SIGUSR2:31 },
@@ -63,66 +62,6 @@
   if (typeof performance === 'undefined') globalThis.performance = { now() { return Date.now(); }, timeOrigin: Date.now() };
   if (typeof global === 'undefined') globalThis.global = globalThis;
   if (typeof structuredClone === 'undefined') globalThis.structuredClone = (v) => JSON.parse(JSON.stringify(v));
-  // --- timers (backed by native timer binding) ---
-  const _tb = _nativeBinding('timers');
-  const _timerCallbacks = new Map();
-  globalThis.setTimeout = function(fn, delay, ...args) {
-    if (typeof fn !== 'function') fn = Function(fn);
-    const wrapped = () => { _timerCallbacks.delete(id); fn(...args); };
-    const id = _tb.schedule(wrapped, Math.max(0, delay || 0), 0);
-    _timerCallbacks.set(id, wrapped);
-    return id;
-  };
-  globalThis.clearTimeout = function(id) { _timerCallbacks.delete(id); _tb.clear(id); };
-  globalThis.setInterval = function(fn, delay, ...args) {
-    if (typeof fn !== 'function') fn = Function(fn);
-    const wrapped = () => fn(...args);
-    const id = _tb.schedule(wrapped, Math.max(0, delay || 0), 1);
-    _timerCallbacks.set(id, wrapped);
-    return id;
-  };
-  globalThis.clearInterval = function(id) { _timerCallbacks.delete(id); _tb.clear(id); };
-  if (typeof setImmediate === 'undefined') {
-    globalThis.setImmediate = function(fn, ...args) { return setTimeout(fn, 0, ...args); };
-    globalThis.clearImmediate = function(id) { clearTimeout(id); };
-  }
-
-  // Event loop — called from main.milo after script execution
-  globalThis.__runEventLoop = function() {
-    let maxIdle = 0;
-    while (_tb.hasPending()) {
-      const ms = _tb.msUntilNext();
-      if (ms > 0) _tb.sleepMs(Math.min(ms, 100));
-      _tb.fireDue();
-      // check if we're stuck (no timers fired, none pending changing)
-      if (!_tb.hasPending()) break;
-    }
-  };
-
-  // --- process ---
-  process.emitWarning = (msg) => console.error('Warning:', msg);
-  process.env = new Proxy({}, {
-    get(_, key) { return internalBinding('env').get(String(key)); },
-    has(_, key) { return internalBinding('env').get(String(key)) !== undefined; },
-  });
-  process.config = { variables: { asan: 0, v8_enable_i18n_support: 0 }, target_defaults: { default_configuration: 'Release' } };
-  process.features = { inspector: false, debug: false, uv: true, ipv6: true, tls: false };
-  if (!process.versions) process.versions = {};
-  process.versions.node = '24.0.0'; process.versions.v8 = '13.6.233.5'; process.versions.modules = '135';
-  process.version = 'v24.0.0'; process.release = { name: 'node' };
-  if (!process.cwd) process.cwd = () => internalBinding('env').get('PWD') || '/';
-  if (!process.chdir) process.chdir = () => {};
-  if (!process.umask) process.umask = (mask) => { if (mask !== undefined) return 0o22; return 0o22; };
-  if (!process.hrtime) { const b = _nativeBinding('process_methods'); process.hrtime = (...a) => { const r = b.hrtime(); if (a.length && a[0]) { r[0] -= a[0][0]; r[1] -= a[0][1]; if (r[1] < 0) { r[0]--; r[1] += 1e9; } } return r; }; process.hrtime.bigint = b.hrtimeBigint; }
-  if (!process.nextTick) process.nextTick = (fn, ...args) => Promise.resolve().then(() => fn(...args));
-  if (!process.on) { const _h = {}; process.on = (ev, fn) => { (_h[ev] ??= []).push(fn); return process; }; process.once = (ev, fn) => { const w = (...a) => { process.removeListener(ev, w); fn(...a); }; return process.on(ev, w); }; process.removeListener = (ev, fn) => { const h = _h[ev]; if (h) { const i = h.indexOf(fn); if (i >= 0) h.splice(i, 1); } return process; }; process.emit = (ev, ...args) => { for (const fn of (_h[ev] || [])) fn(...args); return true; }; process.listeners = (ev) => _h[ev] || []; process.listenerCount = (ev) => (_h[ev] || []).length; process.removeAllListeners = (ev) => { if (ev) delete _h[ev]; else for (const k of Object.keys(_h)) delete _h[k]; return process; }; process.prependListener = process.on; process.prependOnceListener = process.once; process.off = process.removeListener; }
-
-  // --- console ---
-  globalThis.console = {
-    log(...args) { internalBinding('_console').write(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') + '\n'); },
-    error(...args) { internalBinding('_console').writeError(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') + '\n'); },
-    warn(...args) { console.error(...args); },
-  };
 
   // --- require() ---
   const _fsBinding = _nativeBinding('fs');
@@ -132,7 +71,6 @@
     statSync(path) { const s = _fsBinding.stat(String(path)); if (s === -1) throw new Error('ENOENT: ' + path); return { ...s, isFile: () => !!s.isFile, isDirectory: () => !!s.isDirectory }; },
   };
 
-  // Milo lib dir: src/milo/lib/ (checked before Node's lib/)
   const _miloLibDir = globalThis.__libDir.replace(/\/lib$/, '/src/milo/lib');
   function _tryMiloLib(id) {
     const path = _miloLibDir + '/' + id + '.js';
@@ -140,7 +78,6 @@
     return undefined;
   }
 
-  // Path: loaded early since require() needs it for resolution
   const _pathSrc = _tryMiloLib('path') || __loadBuiltin('path');
   const _pathMod = { exports: {} };
   (new Function('exports', 'module', 'primordials', _pathSrc))(_pathMod.exports, _pathMod, primordials);
@@ -164,12 +101,10 @@
 
   globalThis.require = function require(id) {
     if (id.startsWith('node:')) id = id.slice(5);
-    // Map subpath requires to flat filenames (e.g. timers/promises -> timers_promises)
     const flatId = id.replace(/\//g, '_');
     if (_moduleWrappers[id]) return _moduleWrappers[id].exports;
     if (moduleCache[id]) return moduleCache[id];
 
-    // Try milo lib/, then Node's lib/
     let src = _tryMiloLib(id) || _tryMiloLib(flatId) || __loadBuiltin(id);
     if (src !== undefined) {
       const mod = { exports: {} };
@@ -184,7 +119,6 @@
       return mod.exports;
     }
 
-    // Resolve relative/absolute paths
     const parentDir = _requireStack.length > 0 ? _requireStack[_requireStack.length - 1] : '';
     const resolved = _resolve(id, parentDir);
     if (_moduleWrappers[resolved]) return _moduleWrappers[resolved].exports;
@@ -206,10 +140,13 @@
       return mod.exports;
     }
 
-    // Fall back to native binding
     try { const b = _nativeBinding(id); moduleCache[id] = b; return b; } catch {}
     throw new Error("Cannot find module '" + id + "'");
   };
 
+  // --- load internal init modules (order matters) ---
+  require('_console_init');
+  require('_process_init');
+  require('_timers_init');
   try { const _b = require('buffer'); globalThis.Buffer = _b.Buffer || _b; } catch {}
 })();

@@ -186,5 +186,26 @@ function format(pathObject) {
 const sep = '/';
 const delimiter = ':';
 
-module.exports = { resolve, normalize, isAbsolute, join, relative, dirname, basename, extname, parse, format, sep, delimiter, posix: null };
+// win32 — minimal implementation for test compatibility
+const win32 = {
+  sep: '\\', delimiter: ';',
+  resolve(...args) { return resolve(...args).replace(/\//g, '\\'); },
+  normalize(p) { return normalize(p.replace(/\\/g, '/')).replace(/\//g, '\\'); },
+  isAbsolute(p) { return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\'); },
+  join(...args) { return args.join('\\').replace(/\\/g, '/').split('/').filter((s,i) => s || i === 0).join('\\'); },
+  dirname(p) { const n = p.replace(/\\/g, '/'); const d = dirname(n); return d.replace(/\//g, '\\'); },
+  basename(p, ext) { const parts = p.replace(/\\+$/, '').split(/[\\/]/); const b = parts[parts.length - 1] || ''; if (ext && b.endsWith(ext)) return b.slice(0, -ext.length); return b; },
+  extname(p) { return extname(p.replace(/\\/g, '/')); },
+  parse(p) { return parse(p.replace(/\\/g, '/')); },
+  format(o) { return format(o); },
+  toNamespacedPath(p) { return p; },
+  relative(from, to) { return relative(from.replace(/\\/g, '/'), to.replace(/\\/g, '/')).replace(/\//g, '\\'); },
+};
+win32.posix = null;
+win32.win32 = win32;
+
+function toNamespacedPath(p) { return p; }
+
+module.exports = { resolve, normalize, isAbsolute, join, relative, dirname, basename, extname, parse, format, sep, delimiter, toNamespacedPath, posix: null, win32 };
 module.exports.posix = module.exports;
+win32.posix = module.exports;

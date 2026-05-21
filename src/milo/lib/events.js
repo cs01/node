@@ -9,7 +9,16 @@ class EventEmitter {
 
   emit(type, ...args) {
     const handlers = this._events[type];
-    if (!handlers) return type === 'error' ? (() => { throw args[0] || new Error('Unhandled error'); })() : false;
+    if (!handlers || handlers.length === 0) {
+      if (type === 'error') {
+        const err = args[0];
+        if (err instanceof Error) throw err;
+        const e = new Error('Unhandled error.' + (err ? ' (' + err + ')' : ''));
+        e.context = err;
+        throw e;
+      }
+      return false;
+    }
     for (const h of [...handlers]) h.apply(this, args);
     return true;
   }
@@ -21,7 +30,6 @@ class EventEmitter {
     return this;
   }
 
-  addListener(type, fn) { return this.on(type, fn); }
 
   prependListener(type, fn) {
     if (typeof fn !== 'function') throw new TypeError('listener must be a function');
@@ -66,6 +74,14 @@ class EventEmitter {
 
 EventEmitter.defaultMaxListeners = 10;
 EventEmitter.EventEmitter = EventEmitter;
+EventEmitter.prototype.addListener = EventEmitter.prototype.on;
+EventEmitter.listenerCount = function(emitter, type) { return emitter.listenerCount(type); };
+EventEmitter.getEventListeners = function(emitter, type) { return emitter.listeners(type); };
+EventEmitter.getMaxListeners = function(emitter) { return emitter.getMaxListeners(); };
+EventEmitter.setMaxListeners = function(n, ...emitters) {
+  if (emitters.length === 0) { EventEmitter.defaultMaxListeners = n; return; }
+  for (const e of emitters) e.setMaxListeners(n);
+};
 
 function once(emitter, type) {
   return new Promise((resolve, reject) => {

@@ -1,4 +1,5 @@
 // timers binding — native timer queue for event loop
+// TODO: use [Timer; 256] struct array once global struct array init lands in milo
 
 from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
 

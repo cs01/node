@@ -1,0 +1,385 @@
+// tcp binding — POSIX sockets + kqueue I/O polling
+
+from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
+
+// POSIX socket API
+extern fn socket(domain: i32, socktype: i32, protocol: i32): i32
+extern fn bind(fd: i32, addr: *u8, addrlen: i32): i32
+extern fn listen(fd: i32, backlog: i32): i32
+extern fn accept(fd: i32, addr: *u8, addrlen: *i32): i32
+extern fn connect(fd: i32, addr: *u8, addrlen: i32): i32
+extern fn close(fd: i32): i32
+extern fn setsockopt(fd: i32, level: i32, optname: i32, optval: *u8, optlen: i32): i32
+extern fn fcntl(fd: i32, cmd: i32, arg: i32): i32
+extern fn strlen(s: *u8): i64
+extern fn memset(s: *u8, c: i32, n: i64): *u8
+extern fn calloc(count: i64, size: i64): *u8
+extern fn free(ptr: *u8): void
+
+// read/write for connected sockets
+extern fn read(fd: i32, buf: *u8, len: i64): i64
+extern fn write(fd: i32, buf: *u8, len: i64): i64
+
+// kqueue
+extern fn kqueue(): i32
+extern fn kevent(kq: i32, changelist: *u8, nchanges: i32, eventlist: *u8, nevents: i32, timeout: *u8): i32
+
+// inet_pton / inet_ntop / getsockname
+extern fn inet_pton(af: i32, src: *u8, dst: *u8): i32
+extern fn inet_ntop(af: i32, src: *u8, dst: *u8, size: i32): *u8
+extern fn getsockname(fd: i32, addr: *u8, addrlen: *i32): i32
+extern fn shutdown(fd: i32, how: i32): i32
+
+// macOS constants
+// AF_INET=2, SOCK_STREAM=1, SOL_SOCKET=0xffff, SO_REUSEADDR=4
+// F_SETFL=4, F_GETFL=3, O_NONBLOCK=4
+// EVFILT_READ=-1(0xffff as i16), EVFILT_WRITE=-2
+// EV_ADD=1, EV_DELETE=2, EV_ENABLE=4, EV_ONESHOT=0x10, EV_EOF=0x8000
+
+// htons for little-endian (arm64)
+fn htons(val: i32): i32 {
+    return ((val & 0xff) << 8) | ((val >> 8) & 0xff)
+}
+
+var kq_fd: i32 = -1
+
+// --- kevent struct layout (macOS arm64, 32 bytes) ---
+// offset 0:  ident  (i64) — fd
+// offset 8:  filter (i16)
+// offset 10: flags  (u16)
+// offset 12: fflags (u32)
+// offset 16: data   (i64)
+// offset 24: udata  (i64/ptr)
+
+fn kevent_set(buf: *u8, ident: i64, filter: i32, flags: i32): void {
+    unsafe {
+        let p = buf
+        // ident (8 bytes)
+        (p as *i64)[0] = ident
+        // filter (2 bytes at offset 8)
+        let fp = (p as i64 + 8) as *u8
+        fp[0] = (filter & 0xff) as u8
+        fp[1] = ((filter >> 8) & 0xff) as u8
+        // flags (2 bytes at offset 10)
+        let flp = (p as i64 + 10) as *u8
+        flp[0] = (flags & 0xff) as u8
+        flp[1] = ((flags >> 8) & 0xff) as u8
+        // fflags, data, udata = 0
+        (p as i64 + 12) as *i32
+        let ffp = (p as i64 + 12) as *i32
+        ffp[0] = 0
+        let dp = (p as i64 + 16) as *i64
+        dp[0] = 0
+        let up = (p as i64 + 24) as *i64
+        up[0] = 0
+    }
+}
+
+fn kevent_get_ident(buf: *u8): i64 {
+    unsafe { return (buf as *i64)[0] }
+}
+
+fn kevent_get_filter(buf: *u8): i32 {
+    unsafe {
+        let fp = (buf as i64 + 8) as *u8
+        let lo = fp[0] as i32
+        let hi = fp[1] as i32
+        let val = lo | (hi << 8)
+        // sign extend from 16 bits
+        if val > 32767 { return val - 65536 }
+        return val
+    }
+}
+
+fn kevent_get_flags(buf: *u8): i32 {
+    unsafe {
+        let fp = (buf as i64 + 10) as *u8
+        return fp[0] as i32 | ((fp[1] as i32) << 8)
+    }
+}
+
+// tcpSocket() -> fd
+fn tcpSocket(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let fd = socket(2, 1, 0)
+        if fd < 0 {
+            ci.retI32(-1)
+            return
+        }
+        // SO_REUSEADDR
+        var one: i32 = 1
+        let one_ptr = &one
+        setsockopt(fd, 0xffff, 4, one_ptr as *u8, 4)
+        // non-blocking
+        let flags = fcntl(fd, 3, 0)
+        fcntl(fd, 4, flags | 4)
+        ci.retI32(fd)
+    }
+}
+
+// tcpBind(fd, host_str, port) -> 0 on success
+fn tcpBind(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let port = ci.i32Arg(2, 0)
+    let iso = ci.isolate()
+
+    unsafe {
+        var host_buf: [u8; 256] = [0; 256]
+        let host_arg = ci.arg(1)
+        host_arg.writeUtf8(iso, host_buf as *u8, 256)
+
+        // sockaddr_in: sin_len(1) sin_family(1) sin_port(2) sin_addr(4) sin_zero(8) = 16
+        var addr: [u8; 16] = [0; 16]
+        addr[0] = 16  // sin_len
+        addr[1] = 2   // AF_INET
+        let port_n = htons(port)
+        addr[2] = (port_n & 0xff) as u8
+        addr[3] = ((port_n >> 8) & 0xff) as u8
+
+        if host_buf[0] == 48 && host_buf[1] == 46 && host_buf[2] == 48 && host_buf[3] == 46 && host_buf[4] == 48 && host_buf[5] == 46 && host_buf[6] == 48 {
+            // 0.0.0.0 — INADDR_ANY, already zeroed
+        } else {
+            inet_pton(2, host_buf as *u8, (addr as *u8 as i64 + 4) as *u8)
+        }
+
+        let r = bind(fd, addr as *u8, 16)
+        ci.retI32(r)
+    }
+}
+
+// tcpListen(fd, backlog) -> 0 on success
+fn tcpListen(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let backlog = ci.i32Arg(1, 128)
+    unsafe { ci.retI32(listen(fd, backlog)) }
+}
+
+// tcpAccept(fd) -> new_fd or -1
+fn tcpAccept(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    unsafe {
+        var addr: [u8; 16] = [0; 16]
+        var addrlen: i32 = 16
+        let new_fd = accept(fd, addr as *u8, &addrlen)
+        if new_fd >= 0 {
+            // make non-blocking
+            let flags = fcntl(new_fd, 3, 0)
+            fcntl(new_fd, 4, flags | 4)
+        }
+        ci.retI32(new_fd)
+    }
+}
+
+// tcpConnect(fd, host, port) -> 0 or errno
+fn tcpConnect(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let port = ci.i32Arg(2, 0)
+    let iso = ci.isolate()
+
+    unsafe {
+        var host_buf: [u8; 256] = [0; 256]
+        let host_arg = ci.arg(1)
+        host_arg.writeUtf8(iso, host_buf as *u8, 256)
+
+        var addr: [u8; 16] = [0; 16]
+        addr[0] = 16
+        addr[1] = 2
+        let port_n = htons(port)
+        addr[2] = (port_n & 0xff) as u8
+        addr[3] = ((port_n >> 8) & 0xff) as u8
+        inet_pton(2, host_buf as *u8, (addr as *u8 as i64 + 4) as *u8)
+
+        let r = connect(fd, addr as *u8, 16)
+        ci.retI32(r)
+    }
+}
+
+// tcpSend(fd, string) -> bytes written or -1
+fn tcpSend(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let iso = ci.isolate()
+    unsafe {
+        let buf = calloc(1, 65536)
+        let arg = ci.arg(1)
+        let len = arg.writeUtf8(iso, buf, 65536)
+        if len <= 0 {
+            free(buf)
+            ci.retI32(0)
+            return
+        }
+        let n = write(fd, buf, len as i64)
+        free(buf)
+        ci.retI32(n as i32)
+    }
+}
+
+// tcpRecv(fd) -> string or empty string if EAGAIN, or undefined if closed
+fn tcpRecv(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    unsafe {
+        let buf = calloc(1, 65536)
+        let n = read(fd, buf, 65535)
+        if n > 0 {
+            ci.retStrLen(buf, n as i32)
+        } else if n == 0 {
+            ci.retUndefined()
+        } else {
+            ci.retStr("" as *u8)
+        }
+        free(buf)
+    }
+}
+
+// tcpShutdown(fd, how) — SHUT_RD=0, SHUT_WR=1, SHUT_RDWR=2
+fn tcpShutdown(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let how = ci.i32Arg(1, 1)
+    unsafe { shutdown(fd, how) }
+}
+
+// tcpClose(fd)
+fn tcpClose(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    unsafe { close(fd) }
+}
+
+// tcpGetSockName(fd) -> {port, address}
+fn tcpGetSockName(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let iso = ci.isolate()
+    let ctx = ci.context()
+
+    unsafe {
+        var addr: [u8; 16] = [0; 16]
+        var addrlen: i32 = 16
+        let r = getsockname(fd, addr as *u8, &addrlen)
+        if r != 0 {
+            ci.retUndefined()
+            return
+        }
+        let port_raw = (addr[2] as i32) << 8 | (addr[3] as i32)
+        let obj = iso.object()
+        ctx.objectSet(obj, "port" as *u8, iso.int32(port_raw))
+
+        var ip_buf: [u8; 64] = [0; 64]
+        inet_ntop(2, (addr as *u8 as i64 + 4) as *u8, ip_buf as *u8, 64)
+        ctx.objectSet(obj, "address" as *u8, iso.string(ip_buf as *u8))
+        ctx.objectSet(obj, "family" as *u8, iso.string("IPv4" as *u8))
+        ci.ret(obj)
+    }
+}
+
+// --- kqueue poller ---
+
+// pollInit() -> kqueue fd
+fn pollInit(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        kq_fd = kqueue()
+        ci.retI32(kq_fd)
+    }
+}
+
+// pollAdd(fd, filter) — add fd to kqueue (filter: -1=read, -2=write)
+fn pollAdd(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let filter = ci.i32Arg(1, -1)
+    unsafe {
+        var ev: [u8; 32] = [0; 32]
+        kevent_set(ev as *u8, fd as i64, filter, 1) // EV_ADD=1
+        kevent(kq_fd, ev as *u8, 1, 0 as *u8, 0, 0 as *u8)
+    }
+}
+
+// pollRemove(fd, filter)
+fn pollRemove(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let filter = ci.i32Arg(1, -1)
+    unsafe {
+        var ev: [u8; 32] = [0; 32]
+        kevent_set(ev as *u8, fd as i64, filter, 2) // EV_DELETE=2
+        kevent(kq_fd, ev as *u8, 1, 0 as *u8, 0, 0 as *u8)
+    }
+}
+
+// pollWait(timeout_ms) -> array of {fd, filter, flags}
+fn pollWait(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let timeout_ms = ci.i32Arg(0, 0)
+    let iso = ci.isolate()
+    let ctx = ci.context()
+
+    unsafe {
+        // timespec for kevent timeout
+        var ts: [i64; 2] = [0, 0]
+        ts[0] = timeout_ms as i64 / 1000
+        ts[1] = (timeout_ms as i64 % 1000) * 1000000
+
+        // space for 64 events (64 * 32 = 2048 bytes)
+        let events = calloc(64, 32)
+        let n = kevent(kq_fd, 0 as *u8, 0, events, 64, ts as *u8)
+
+        if n <= 0 {
+            free(events)
+            ci.ret(iso.array(0))
+            return
+        }
+
+        let arr = iso.array(n)
+        var i: i32 = 0
+        while i < n {
+            let ev_ptr = (events as i64 + (i as i64) * 32) as *u8
+            let ident = kevent_get_ident(ev_ptr)
+            let filter = kevent_get_filter(ev_ptr)
+            let flags = kevent_get_flags(ev_ptr)
+
+            let obj = iso.object()
+            ctx.objectSet(obj, "fd" as *u8, iso.int32(ident as i32))
+            ctx.objectSet(obj, "filter" as *u8, iso.int32(filter))
+            ctx.objectSet(obj, "flags" as *u8, iso.int32(flags))
+            ctx.objectSetIndex(arr, i as u32, obj)
+            i = i + 1
+        }
+        free(events)
+        ci.ret(arr)
+    }
+}
+
+fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
+    let c = Context { ptr: ctx }
+    let exp = Value { slot: exports }
+    unsafe {
+        c.setMethod(exp, "socket" as *u8, tcpSocket as *u8)
+        c.setMethod(exp, "bind" as *u8, tcpBind as *u8)
+        c.setMethod(exp, "listen" as *u8, tcpListen as *u8)
+        c.setMethod(exp, "accept" as *u8, tcpAccept as *u8)
+        c.setMethod(exp, "connect" as *u8, tcpConnect as *u8)
+        c.setMethod(exp, "send" as *u8, tcpSend as *u8)
+        c.setMethod(exp, "recv" as *u8, tcpRecv as *u8)
+        c.setMethod(exp, "shutdown" as *u8, tcpShutdown as *u8)
+        c.setMethod(exp, "close" as *u8, tcpClose as *u8)
+        c.setMethod(exp, "getSockName" as *u8, tcpGetSockName as *u8)
+        c.setMethod(exp, "pollInit" as *u8, pollInit as *u8)
+        c.setMethod(exp, "pollAdd" as *u8, pollAdd as *u8)
+        c.setMethod(exp, "pollRemove" as *u8, pollRemove as *u8)
+        c.setMethod(exp, "pollWait" as *u8, pollWait as *u8)
+
+        // constants
+        let i = Isolate { ptr: _iso }
+        c.objectSet(exp, "EVFILT_READ" as *u8, i.int32(-1))
+        c.objectSet(exp, "EVFILT_WRITE" as *u8, i.int32(-2))
+        c.objectSet(exp, "EV_EOF" as *u8, i.int32(0x8000))
+    }
+}

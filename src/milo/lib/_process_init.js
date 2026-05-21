@@ -1,0 +1,61 @@
+// process setup — internal bootstrap module
+'use strict';
+
+process.emitWarning = (msg) => console.error('Warning:', msg);
+
+const _envB = internalBinding('env');
+const _envOverrides = {};
+process.env = new Proxy({}, {
+  get(_, key) { const k = String(key); if (k in _envOverrides) return _envOverrides[k]; return _envB.get(k); },
+  set(_, key, value) { _envOverrides[String(key)] = String(value); return true; },
+  has(_, key) { const k = String(key); return k in _envOverrides || _envB.get(k) !== undefined; },
+  deleteProperty(_, key) { delete _envOverrides[String(key)]; return true; },
+  ownKeys() { return Object.keys(_envOverrides); },
+  getOwnPropertyDescriptor(_, key) { const v = this.get(null, key); if (v !== undefined) return { value: v, writable: true, enumerable: true, configurable: true }; return undefined; },
+});
+
+process.config = { variables: { asan: 0, v8_enable_i18n_support: 0 }, target_defaults: { default_configuration: 'Release' } };
+process.features = { inspector: false, debug: false, uv: true, ipv6: true, tls: false };
+if (!process.versions) process.versions = {};
+process.versions.node = '24.0.0'; process.versions.v8 = '13.6.233.5'; process.versions.modules = '135';
+process.version = 'v24.0.0'; process.release = { name: 'node' };
+if (!process.cwd) process.cwd = () => _envB.get('PWD') || '/';
+if (!process.chdir) process.chdir = () => {};
+if (!process.umask) process.umask = (mask) => { if (mask !== undefined) return 0o22; return 0o22; };
+
+if (!process.hrtime) {
+  const b = internalBinding('process_methods');
+  process.hrtime = (...a) => {
+    const r = b.hrtime();
+    if (a.length && a[0]) { r[0] -= a[0][0]; r[1] -= a[0][1]; if (r[1] < 0) { r[0]--; r[1] += 1e9; } }
+    return r;
+  };
+  process.hrtime.bigint = b.hrtimeBigint;
+}
+
+if (!process.nextTick) process.nextTick = (fn, ...args) => Promise.resolve().then(() => fn(...args));
+
+if (!process.on) {
+  const _h = {};
+  process.on = (ev, fn) => { (_h[ev] ??= []).push(fn); return process; };
+  process.addListener = process.on;
+  process.once = (ev, fn) => { const w = (...a) => { process.removeListener(ev, w); fn(...a); }; return process.on(ev, w); };
+  process.removeListener = (ev, fn) => { const h = _h[ev]; if (h) { const i = h.indexOf(fn); if (i >= 0) h.splice(i, 1); } return process; };
+  process.emit = (ev, ...args) => { const hs = _h[ev]; if (!hs || hs.length === 0) return false; for (const fn of [...hs]) fn(...args); return true; };
+  process.listeners = (ev) => [...(_h[ev] || [])];
+  process.listenerCount = (ev) => (_h[ev] || []).length;
+  process.removeAllListeners = (ev) => { if (ev) delete _h[ev]; else for (const k of Object.keys(_h)) delete _h[k]; return process; };
+  process.prependListener = (ev, fn) => { (_h[ev] ??= []).unshift(fn); return process; };
+  process.prependOnceListener = (ev, fn) => { const w = (...a) => { process.removeListener(ev, w); fn(...a); }; return process.prependListener(ev, w); };
+  process.off = process.removeListener;
+  process.eventNames = () => Object.keys(_h).filter(k => _h[k] && _h[k].length > 0);
+}
+
+const _startTime = Date.now();
+if (!process.uptime) process.uptime = () => (Date.now() - _startTime) / 1000;
+if (!process.title) process.title = 'milo-node';
+if (!process.execPath) process.execPath = process.argv[0] || '';
+if (!process.execArgv) process.execArgv = [];
+if (!process.allowedNodeEnvironmentFlags) process.allowedNodeEnvironmentFlags = new Set();
+if (!process.kill) process.kill = () => {};
+if (!process.binding) process.binding = (name) => { throw new Error('process.binding is not supported'); };
