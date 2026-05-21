@@ -5,12 +5,21 @@ process.emitWarning = (msg) => console.error('Warning:', msg);
 
 const _envB = internalBinding('env');
 const _envOverrides = {};
+const _envDeleted = new Set();
 process.env = new Proxy({}, {
-  get(_, key) { const k = String(key); if (k in _envOverrides) return _envOverrides[k]; return _envB.get(k); },
-  set(_, key, value) { _envOverrides[String(key)] = String(value); return true; },
-  has(_, key) { const k = String(key); return k in _envOverrides || _envB.get(k) !== undefined; },
-  deleteProperty(_, key) { delete _envOverrides[String(key)]; return true; },
-  ownKeys() { return Object.keys(_envOverrides); },
+  get(_, key) {
+    if (key === Symbol.toStringTag) return 'process.env';
+    const k = String(key); if (_envDeleted.has(k)) return undefined; if (k in _envOverrides) return _envOverrides[k]; return _envB.get(k);
+  },
+  set(_, key, value) { const k = String(key); _envDeleted.delete(k); _envOverrides[k] = String(value); return true; },
+  has(_, key) { const k = String(key); if (_envDeleted.has(k)) return false; return k in _envOverrides || _envB.get(k) !== undefined; },
+  deleteProperty(_, key) { const k = String(key); delete _envOverrides[k]; _envDeleted.add(k); return true; },
+  ownKeys() {
+    const nativeKeys = (_envB.enumerate ? _envB.enumerate() : []).map(e => e.split('=')[0]);
+    const all = new Set([...nativeKeys, ...Object.keys(_envOverrides)]);
+    for (const k of _envDeleted) all.delete(k);
+    return [...all];
+  },
   getOwnPropertyDescriptor(_, key) { const v = this.get(null, key); if (v !== undefined) return { value: v, writable: true, enumerable: true, configurable: true }; return undefined; },
 });
 

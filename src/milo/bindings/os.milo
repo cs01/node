@@ -68,11 +68,12 @@ fn osGetCpuModel(info: *u8, _ud: *u8): void {
 fn osGetFreemem(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     // HOST_VM_INFO64 = 4, HOST_VM_INFO64_COUNT = 38
+    // vm_statistics64_data_t: free_count is natural_t (u32) at offset 0
     var stats: [u8; 512] = [0; 512]
     var count: [u32; 1] = [38]
     unsafe {
         if host_statistics64(mach_host_self(), 4, stats as *u8, count as *u32) == 0 {
-            let free_pages = (stats as *i64)[1]
+            let free_pages = (stats as *u32)[0] as i64
             let page_size = sysconf(29)
             ci.retF64((free_pages * page_size) as f64)
         } else {

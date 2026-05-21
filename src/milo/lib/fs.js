@@ -5,27 +5,51 @@ const b = internalBinding('fs');
 
 function readFileSync(path, opts) {
   const r = b.readFile(String(path));
-  if (r === -1) throw new Error('ENOENT: no such file: ' + path);
-  return r;
+  if (r === -1) { const e = new Error(`ENOENT: no such file or directory, open '${path}'`); e.code = 'ENOENT'; e.syscall = 'open'; e.path = String(path); throw e; }
+  const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
+  if (encoding === 'utf8' || encoding === 'utf-8') return r;
+  return Buffer.from(r);
+}
+
+function _fsError(code, syscall, path, msg) {
+  const e = new Error(`${code}: ${msg}, ${syscall} '${path}'`);
+  e.code = code; e.syscall = syscall; e.path = String(path);
+  return e;
 }
 
 function writeFileSync(path, data) {
-  const r = b.writeFile(String(path), String(data));
-  if (r === -1) throw new Error('EIO: write failed: ' + path);
+  const r = b.writeFile(String(path), typeof data === 'string' ? data : data.toString());
+  if (r === -1) throw _fsError('EIO', 'write', path, 'write failed');
+}
+
+function appendFileSync(path, data) {
+  let existing = '';
+  try { existing = readFileSync(path, 'utf8'); } catch {}
+  writeFileSync(path, existing + (typeof data === 'string' ? data : data.toString()));
 }
 
 function statSync(path) {
   const s = b.stat(String(path));
-  if (s === -1) throw new Error('ENOENT: no such file: ' + path);
-  return { ...s, isFile: () => !!s.isFile, isDirectory: () => !!s.isDirectory };
+  if (s === -1) throw _fsError('ENOENT', 'stat', path, 'no such file or directory');
+  return { ...s, isFile: () => !!s.isFile, isDirectory: () => !!s.isDirectory, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false };
 }
 
 function existsSync(path) { return !!b.exists(String(path)); }
 
 function mkdirSync(path, opts) {
   const mode = (opts && opts.mode) || 0o777;
+  if (opts && opts.recursive) {
+    const parts = String(path).split('/');
+    let cur = parts[0] === '' ? '/' : '';
+    for (const p of parts) {
+      if (!p) { if (!cur) cur = '/'; continue; }
+      cur = cur ? cur + '/' + p : p;
+      if (!existsSync(cur)) { const r = b.mkdir(cur, mode); if (r !== 0) throw _fsError('EACCES', 'mkdir', cur, 'permission denied'); }
+    }
+    return cur;
+  }
   const r = b.mkdir(String(path), mode);
-  if (r !== 0) throw new Error('EEXIST: mkdir failed: ' + path);
+  if (r !== 0) throw _fsError('EEXIST', 'mkdir', path, 'file already exists');
 }
 
 function unlinkSync(path) { b.unlink(String(path)); }
@@ -100,7 +124,7 @@ const promises = {
 };
 
 module.exports = {
-  readFileSync, writeFileSync, statSync, existsSync,
+  readFileSync, writeFileSync, appendFileSync, statSync, existsSync,
   mkdirSync, unlinkSync, rmdirSync, renameSync,
   readdirSync, realpathSync, chmodSync,
   rmSync, mkdtempSync, accessSync, copyFileSync,

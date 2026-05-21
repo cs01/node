@@ -1,44 +1,74 @@
-// crypto module — stub with randomBytes/randomUUID via Math.random
+// crypto module — real hashing via CommonCrypto, secure random via getentropy
 'use strict';
+
+const b = internalBinding('crypto');
+const ALGO_MAP = { md5: 0, sha1: 1, sha256: 2, sha512: 3 };
+const HASH_LEN = { md5: 16, sha1: 20, sha256: 32, sha512: 64 };
 
 function randomBytes(size) {
   const buf = Buffer.alloc(size);
-  for (let i = 0; i < size; i++) buf[i] = Math.floor(Math.random() * 256);
+  b.randomFill(buf, size);
   return buf;
 }
 
 function randomUUID() {
-  const b = randomBytes(16);
-  b[6] = (b[6] & 0x0f) | 0x40;
-  b[8] = (b[8] & 0x3f) | 0x80;
-  const h = buf => [...buf].map(x => x.toString(16).padStart(2, '0')).join('');
-  return `${h(b.slice(0,4))}-${h(b.slice(4,6))}-${h(b.slice(6,8))}-${h(b.slice(8,10))}-${h(b.slice(10,16))}`;
+  const bytes = randomBytes(16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const h = (start, end) => [...bytes.slice(start, end)].map(x => x.toString(16).padStart(2, '0')).join('');
+  return `${h(0,4)}-${h(4,6)}-${h(6,8)}-${h(8,10)}-${h(10,16)}`;
 }
 
 function randomInt(min, max) {
   if (max === undefined) { max = min; min = 0; }
-  return Math.floor(Math.random() * (max - min)) + min;
+  const range = max - min;
+  const bytes = randomBytes(4);
+  const val = (bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | ((bytes[3] & 0x7f) << 24)) >>> 0;
+  return min + (val % range);
 }
 
 function createHash(algorithm) {
-  let data = Buffer.alloc(0);
+  const algo = ALGO_MAP[algorithm.toLowerCase()];
+  if (algo === undefined) throw new Error(`Digest method not supported: ${algorithm}`);
+  let chunks = [];
+  let totalLen = 0;
   return {
-    update(input, encoding) { data = Buffer.concat([data, Buffer.from(input, encoding)]); return this; },
+    update(input, encoding) {
+      const buf = Buffer.isBuffer(input) ? input : Buffer.from(input, encoding);
+      chunks.push(buf);
+      totalLen += buf.length;
+      return this;
+    },
     digest(encoding) {
-      // djb2-style hash — not cryptographic, but produces consistent output
-      let h = 5381;
-      for (let i = 0; i < data.length; i++) h = ((h << 5) + h + data[i]) >>> 0;
-      const buf = Buffer.alloc(32);
-      for (let i = 0; i < 32; i++) { buf[i] = h & 0xff; h = ((h << 5) + h + i) >>> 0; }
-      if (encoding === 'hex') return buf.toString('hex');
-      if (encoding === 'base64') return buf.toString('base64');
-      return buf;
+      const data = Buffer.concat(chunks, totalLen);
+      const result = b.hash(algo, data, data.length);
+      if (encoding === 'hex') return Buffer.from(result).toString('hex');
+      if (encoding === 'base64') return Buffer.from(result).toString('base64');
+      return Buffer.from(result);
     },
   };
 }
 
 function createHmac(algorithm, key) {
-  return createHash(algorithm);
+  // HMAC: hash(key XOR opad || hash(key XOR ipad || message))
+  const hashLen = HASH_LEN[algorithm.toLowerCase()] || 32;
+  const blockSize = algorithm.toLowerCase().includes('512') ? 128 : 64;
+  let keyBuf = Buffer.isBuffer(key) ? key : Buffer.from(key);
+  if (keyBuf.length > blockSize) keyBuf = createHash(algorithm).update(keyBuf).digest();
+  if (keyBuf.length < blockSize) { const padded = Buffer.alloc(blockSize); keyBuf.copy(padded); keyBuf = padded; }
+
+  const ipad = Buffer.alloc(blockSize);
+  const opad = Buffer.alloc(blockSize);
+  for (let i = 0; i < blockSize; i++) { ipad[i] = keyBuf[i] ^ 0x36; opad[i] = keyBuf[i] ^ 0x5c; }
+
+  const inner = createHash(algorithm).update(ipad);
+  return {
+    update(data, encoding) { inner.update(data, encoding); return this; },
+    digest(encoding) {
+      const innerHash = inner.digest();
+      return createHash(algorithm).update(opad).update(innerHash).digest(encoding);
+    },
+  };
 }
 
 function timingSafeEqual(a, b) {
@@ -48,15 +78,17 @@ function timingSafeEqual(a, b) {
   return result === 0;
 }
 
-const stub = () => { throw new Error('crypto not fully implemented'); };
+const stub = (name) => () => { throw new Error(`crypto.${name} not implemented`); };
 
 module.exports = {
   randomBytes, randomUUID, randomInt, createHash, createHmac, timingSafeEqual,
-  createCipheriv: stub, createDecipheriv: stub, createSign: stub, createVerify: stub,
-  generateKeyPairSync: stub, generateKeySync: stub, pbkdf2: stub, pbkdf2Sync: stub,
-  scrypt: stub, scryptSync: stub,
+  createCipheriv: stub('createCipheriv'), createDecipheriv: stub('createDecipheriv'),
+  createSign: stub('createSign'), createVerify: stub('createVerify'),
+  generateKeyPairSync: stub('generateKeyPairSync'), generateKeySync: stub('generateKeySync'),
+  pbkdf2: stub('pbkdf2'), pbkdf2Sync: stub('pbkdf2Sync'),
+  scrypt: stub('scrypt'), scryptSync: stub('scryptSync'),
   constants: {},
-  getHashes: () => ['sha1', 'sha256', 'sha512', 'md5'],
+  getHashes: () => ['md5', 'sha1', 'sha256', 'sha512'],
   getCiphers: () => [],
   getCurves: () => [],
 };

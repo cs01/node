@@ -70,7 +70,6 @@
     options: { getOptions() { return new Map(); } },
     credentials: { implementsPosixCredentials: true },
     inspector: { open() {}, url() { return undefined; }, waitForDebugger() {} },
-    process_methods: { patchProcessObject() {} },
     task_queue: {
       setTickCallback() {},
       setPromiseRejectCallback() {},
@@ -148,8 +147,38 @@
   if (typeof Event === 'undefined') globalThis.Event = class Event { constructor(type, opts) { this.type = type; this.bubbles = opts?.bubbles || false; this.cancelable = opts?.cancelable || false; this.defaultPrevented = false; } preventDefault() { this.defaultPrevented = true; } };
   if (typeof EventTarget === 'undefined') globalThis.EventTarget = class EventTarget { #h = {}; addEventListener(t, fn) { (this.#h[t] ??= []).push(fn); } removeEventListener(t, fn) { const a = this.#h[t]; if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); } } dispatchEvent(ev) { for (const fn of (this.#h[ev.type] || [])) fn(ev); } };
   if (typeof URL === 'undefined') {
-    globalThis.URL = class URL { constructor(url, base) { if (base) url = base.replace(/\/$/, '') + '/' + url.replace(/^\//, ''); const m = url.match(/^([a-z]+):\/\/([^/:]+)?(?::(\d+))?(\/[^?#]*)?(\?[^#]*)?(#.*)?$/i); this.protocol = m?.[1] ? m[1] + ':' : ''; this.hostname = m?.[2] || ''; this.port = m?.[3] || ''; this.pathname = m?.[4] || '/'; this.search = m?.[5] || ''; this.hash = m?.[6] || ''; this.host = this.hostname + (this.port ? ':' + this.port : ''); this.href = url; this.origin = this.protocol + '//' + this.host; } toString() { return this.href; } };
-    globalThis.URLSearchParams = class URLSearchParams { #p = []; constructor(init) { if (typeof init === 'string') { for (const p of init.replace(/^\?/,'').split('&')) { const [k,...v] = p.split('='); this.#p.push([decodeURIComponent(k), decodeURIComponent(v.join('='))]); } } } get(k) { const e = this.#p.find(([a])=>a===k); return e ? e[1] : null; } has(k) { return this.#p.some(([a])=>a===k); } };
+    globalThis.URLSearchParams = class URLSearchParams {
+      #p = [];
+      constructor(init) {
+        if (typeof init === 'string') { for (const p of init.replace(/^\?/,'').split('&').filter(Boolean)) { const [k,...v] = p.split('='); this.#p.push([decodeURIComponent(k), decodeURIComponent(v.join('='))]); } }
+        else if (init && typeof init === 'object') { for (const [k,v] of (Array.isArray(init) ? init : Object.entries(init))) this.#p.push([String(k), String(v)]); }
+      }
+      get(k) { const e = this.#p.find(([a])=>a===k); return e ? e[1] : null; }
+      getAll(k) { return this.#p.filter(([a])=>a===k).map(([,v])=>v); }
+      has(k) { return this.#p.some(([a])=>a===k); }
+      set(k, v) { let found = false; this.#p = this.#p.filter(([a]) => { if (a===k && !found) { found = true; return true; } return a!==k; }); if (found) this.#p.find(([a])=>a===k)[1] = String(v); else this.#p.push([k, String(v)]); }
+      append(k, v) { this.#p.push([String(k), String(v)]); }
+      delete(k) { this.#p = this.#p.filter(([a])=>a!==k); }
+      forEach(fn) { for (const [k,v] of this.#p) fn(v, k, this); }
+      keys() { return this.#p.map(([k])=>k)[Symbol.iterator](); }
+      values() { return this.#p.map(([,v])=>v)[Symbol.iterator](); }
+      entries() { return this.#p[Symbol.iterator](); }
+      [Symbol.iterator]() { return this.entries(); }
+      toString() { return this.#p.map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&'); }
+      get size() { return this.#p.length; }
+    };
+    globalThis.URL = class URL {
+      constructor(url, base) {
+        if (base) { const b = typeof base === 'string' ? base : base.href; url = b.replace(/\/$/, '') + '/' + url.replace(/^\//, ''); }
+        const m = url.match(/^([a-z]+):\/\/(?:([^@]+)@)?([^/:?#]+)?(?::(\d+))?(\/[^?#]*)?(\?[^#]*)?(#.*)?$/i);
+        this.protocol = m?.[1] ? m[1] + ':' : ''; this.username = m?.[2]?.split(':')[0] || ''; this.password = m?.[2]?.split(':')[1] || '';
+        this.hostname = m?.[3] || ''; this.port = m?.[4] || ''; this.pathname = m?.[5] || '/'; this.search = m?.[6] || ''; this.hash = m?.[7] || '';
+        this.host = this.hostname + (this.port ? ':' + this.port : ''); this.origin = this.protocol + '//' + this.host;
+        this.href = url; this.searchParams = new URLSearchParams(this.search);
+      }
+      toString() { return this.href; }
+      toJSON() { return this.href; }
+    };
   }
   if (typeof TextEncoder === 'undefined') globalThis.TextEncoder = class TextEncoder { encode(s) { const a = []; for (let i = 0; i < s.length; i++) a.push(s.charCodeAt(i) & 0xff); return new Uint8Array(a); } };
   if (typeof TextDecoder === 'undefined') globalThis.TextDecoder = class TextDecoder { decode(buf) { if (!buf) return ''; const a = new Uint8Array(buf.buffer || buf); let s = ''; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return s; } };
@@ -157,7 +186,7 @@
   if (typeof fetch === 'undefined') globalThis.fetch = () => Promise.reject(new Error('fetch not implemented'));
   if (typeof atob === 'undefined') globalThis.atob = function(s) { const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'; let r = '', i = 0; s = s.replace(/=/g, ''); while (i < s.length) { const a = chars.indexOf(s[i++]), b = chars.indexOf(s[i++]||'A'), c = chars.indexOf(s[i++]||'A'), d = chars.indexOf(s[i++]||'A'); r += String.fromCharCode((a<<2)|(b>>4)); if(s[i-2]!==undefined) r+=String.fromCharCode(((b&15)<<4)|(c>>2)); if(s[i-1]!==undefined) r+=String.fromCharCode(((c&3)<<6)|d); } return r; };
   if (typeof btoa === 'undefined') globalThis.btoa = function(s) { const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'; let r = ''; for (let i = 0; i < s.length; i += 3) { const a = s.charCodeAt(i), b = s.charCodeAt(i+1), c = s.charCodeAt(i+2); r += chars[a>>2] + chars[((a&3)<<4)|(b>>4)] + (isNaN(b)?'=':chars[((b&15)<<2)|(c>>6)]) + (isNaN(c)?'=':chars[c&63]); } return r; };
-  if (typeof performance === 'undefined') globalThis.performance = { now() { return Date.now(); }, timeOrigin: Date.now() };
+  if (typeof performance === 'undefined') { const _perfOrigin = Date.now(); globalThis.performance = { now() { return Date.now() - _perfOrigin; }, timeOrigin: _perfOrigin }; }
   if (typeof global === 'undefined') globalThis.global = globalThis;
   if (typeof structuredClone === 'undefined') globalThis.structuredClone = (v) => JSON.parse(JSON.stringify(v));
 

@@ -31,7 +31,10 @@ extern fn v8c_bigint_i64(iso: *u8, val: i64): i32
 extern fn v8c_symbol_new(iso: *u8, desc: *u8): i32
 extern fn v8c_arraybuffer_new(iso: *u8, size: i64): i32
 extern fn v8c_uint32array_new(iso: *u8, ab: i32, offset: i64, length: i64): i32
+extern fn v8c_uint8array_new(iso: *u8, ab: i32, offset: i64, length: i64): i32
 extern fn v8c_biguint64array_new(iso: *u8, ab: i32, offset: i64, length: i64): i32
+extern fn v8c_typedarray_data(iso: *u8, ta: i32): *u8
+extern fn v8c_typedarray_byte_length(iso: *u8, ta: i32): i64
 
 // Value operations
 extern fn v8c_to_int32(iso: *u8, val: i32, out: *i32): i32
@@ -206,6 +209,10 @@ impl Isolate {
         unsafe { return Value { slot: v8c_uint32array_new(self.ptr, ab.slot, offset, length) } }
     }
 
+    fn uint8arrayNew(self: Isolate, ab: Value, offset: i64, length: i32): Value {
+        unsafe { return Value { slot: v8c_uint8array_new(self.ptr, ab.slot, offset, length as i64) } }
+    }
+
     fn biguint64arrayNew(self: Isolate, ab: Value, offset: i64, length: i64): Value {
         unsafe { return Value { slot: v8c_biguint64array_new(self.ptr, ab.slot, offset, length) } }
     }
@@ -252,6 +259,14 @@ impl Value {
 
     fn arrayLength(self: Value, iso: Isolate): i32 {
         unsafe { return v8c_array_length(iso.ptr, self.slot) }
+    }
+
+    fn typedArrayData(self: Value, iso: Isolate): *u8 {
+        unsafe { return v8c_typedarray_data(iso.ptr, self.slot) }
+    }
+
+    fn typedArrayByteLength(self: Value, iso: Isolate): i64 {
+        unsafe { return v8c_typedarray_byte_length(iso.ptr, self.slot) }
     }
 }
 
