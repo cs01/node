@@ -7,10 +7,9 @@ Full build: `bash src/milo/build.sh`
 ## high — npm packages depend on these
 
 ### http / https
-- [ ] `http.request()` / `http.get()` — real outbound HTTP over TCP
-- [ ] `http.createServer()` — real request parsing, header population, response body writing
 - [ ] `https.request()` / `https.get()` — TLS-wrapped HTTP client
 - [ ] `https.createServer()` — TLS server
+- [ ] HTTP server graceful shutdown (server.close + event loop exit)
 
 ### crypto
 - [ ] `createSign` / `createVerify` — RSA/ECDSA signing
