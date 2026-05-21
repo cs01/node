@@ -25,8 +25,10 @@ bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/dns.milo" -o "$
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/zlib.milo" -o "$OUT/milo_zlib.o"
 cd "$NODE_DIR"
 
+OPENSSL_PREFIX="$(brew --prefix openssl@3 2>/dev/null || echo /opt/homebrew/opt/openssl@3)"
+
 echo "=== compiling c helpers ==="
-clang -c -I"$NODE_DIR/deps/v8/include" -o "$OUT/entry.o" src/milo/runtime/entry.c
+clang -c -I"$NODE_DIR/deps/v8/include" -I"$OPENSSL_PREFIX/include" -o "$OUT/entry.o" src/milo/runtime/entry.c
 clang -c -o "$OUT/binding_registry_c.o" src/milo/runtime/binding_registry.c
 
 echo "=== compiling v8capi ==="
@@ -60,6 +62,7 @@ clang++ -o "$OUT/milo-node" \
   -lsimdutf -lsimdjson -lnode_crates \
   -licuucx -licui18n -licudata \
   -framework CoreFoundation -framework Security \
+  -L"$OPENSSL_PREFIX/lib" -lssl -lcrypto \
   -lc++ -lpthread -ldl -lz
 
 echo "=== done: $OUT/milo-node ==="

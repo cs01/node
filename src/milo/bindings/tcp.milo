@@ -237,7 +237,12 @@ fn tcpSend(info: *u8, _ud: *u8): void {
     unsafe {
         let buf = calloc(1, 65536)
         let arg = ci.arg(1)
-        let len = arg.writeUtf8(iso, buf, 65536)
+        var len = arg.writeUtf8(iso, buf, 65536)
+        // strip null terminator from writeUtf8 count
+        if len > 0 {
+            let last = (buf as i64 + (len - 1) as i64) as *u8
+            if last[0] == 0 { len = len - 1 }
+        }
         if len <= 0 {
             free(buf)
             ci.retI32(0)

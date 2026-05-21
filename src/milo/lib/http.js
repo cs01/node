@@ -80,7 +80,17 @@ class Server extends EventEmitter {
     const cb = typeof args[args.length - 1] === 'function' ? args.pop() : null;
     const port = args[0] || 0;
     const host = args[1] || '0.0.0.0';
+    this._sockets = new Set();
+    this._closing = false;
     this._server = net.createServer((socket) => {
+      this._sockets.add(socket);
+      socket._httpActive = false;
+      socket.on('close', () => {
+        this._sockets.delete(socket);
+        if (this._closing && this._sockets.size === 0) {
+          process.nextTick(() => this.emit('close'));
+        }
+      });
       let buf = '';
       socket.on('data', (chunk) => {
         buf += chunk.toString();
@@ -106,7 +116,12 @@ class Server extends EventEmitter {
         if (body) req.push(Buffer.from(body));
         req.push(null);
         req.complete = true;
+        socket._httpActive = true;
         const res = new ServerResponse(socket);
+        res.on('finish', () => {
+          socket._httpActive = false;
+          if (this._closing) socket.destroy();
+        });
         this.emit('request', req, res);
       });
     });
@@ -115,10 +130,21 @@ class Server extends EventEmitter {
     return this;
   }
   close(cb) {
+    if (cb) this.once('close', cb);
     this._listening = false;
-    if (this._server) this._server.close(cb);
-    else if (cb) cb();
-    this.emit('close');
+    this._closing = true;
+    if (this._server) this._server.close();
+    if (!this._sockets || this._sockets.size === 0) {
+      process.nextTick(() => this.emit('close'));
+      return this;
+    }
+    for (const socket of this._sockets) {
+      if (!socket._httpActive) socket.destroy();
+    }
+    if (this._sockets.size === 0) {
+      process.nextTick(() => this.emit('close'));
+    }
+    return this;
   }
   address() { return this._server ? this._server.address() : null; }
 }

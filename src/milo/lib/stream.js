@@ -56,7 +56,7 @@ class Readable extends Stream {
     this._didPush = true;
     if (chunk === null) {
       state.ended = true;
-      if (state.flowing) process.nextTick(() => this.emit('end'));
+      if (state.flowing) process.nextTick(() => { if (!state.endEmitted) { state.endEmitted = true; this.emit('end'); } });
       return false;
     }
     if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
@@ -106,7 +106,7 @@ class Readable extends Stream {
       this._read(state.highWaterMark);
       if (!this._didPush) break;
     }
-    if (state.ended) this.emit('end');
+    if (state.ended && !state.endEmitted) { state.endEmitted = true; this.emit('end'); }
   }
   pause() { this._readableState.flowing = false; return this; }
   isPaused() { return this._readableState.flowing === false; }

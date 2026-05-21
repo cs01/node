@@ -73,14 +73,14 @@ class Socket extends EventEmitter {
   _onReadable() {
     const data = tcp.recv(this._fd);
     if (data === undefined) {
-      // connection closed by remote
-      this.readable = false;
-      this.emit('end');
+      if (this.readable) {
+        this.readable = false;
+        this.emit('end');
+      }
       this.destroy();
     } else if (data.length > 0) {
       this.emit('data', Buffer.from(data));
     }
-    // empty string = EAGAIN, ignore
   }
 
   write(data, encoding, cb) {
@@ -279,6 +279,10 @@ function _pollOnce(timeout) {
     }
 
     if ((flags & EV_EOF) && !sock.destroyed) {
+      if (sock.readable) {
+        sock.readable = false;
+        sock.emit('end');
+      }
       sock.destroy();
     }
   }

@@ -9,24 +9,17 @@ Full build: `bash src/milo/build.sh`
 ### http / https
 - [ ] `https.request()` / `https.get()` — TLS-wrapped HTTP client
 - [ ] `https.createServer()` — TLS server
-- [ ] HTTP server graceful shutdown (server.close + event loop exit)
 
 ### crypto
 - [ ] `createSign` / `createVerify` — RSA/ECDSA signing
 - [ ] `generateKeyPairSync` / `generateKeySync`
-- [ ] AES-GCM mode (authenticated encryption)
-
 
 ### fs
 - [ ] `fs.watch()` recursive option — watch entire directory trees
-- [ ] `fs.createReadStream` / `createWriteStream` — seek/position support
 
 ### tls
-- [ ] `tls.connect()` — TLS client via SecureTransport or OpenSSL
+- [ ] `tls.connect()` — TLS client via OpenSSL
 - [ ] `tls.createServer()` — TLS server
-
-### async_hooks
-- [ ] `AsyncLocalStorage` propagation across async boundaries
 
 ## medium
 
@@ -42,10 +35,8 @@ Full build: `bash src/milo/build.sh`
 ### dns
 - [ ] MX, TXT, SRV, NS, CNAME, PTR record queries (need libresolv or manual DNS protocol)
 
-
 ### os
 - [ ] `os.networkInterfaces()` — MAC addresses (currently all zeros)
-- [ ] `os.machine()` — hardware architecture string
 
 ### process
 - [ ] `process.send()` / IPC when forked

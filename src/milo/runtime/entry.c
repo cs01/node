@@ -178,6 +178,58 @@ int nm_userinfo(int uid, char* out, int out_len) {
     return (n >= 0 && n < out_len) ? 0 : -1;
 }
 
+// AES-GCM via OpenSSL EVP
+#include <openssl/evp.h>
+
+int nm_aes_gcm_crypt(int encrypt,
+                      const unsigned char* key, int key_len,
+                      const unsigned char* iv, int iv_len,
+                      const unsigned char* aad, int aad_len,
+                      const unsigned char* input, int input_len,
+                      unsigned char* output,
+                      unsigned char* tag_buf, int tag_len) {
+    const EVP_CIPHER* cipher = NULL;
+    if (key_len == 16) cipher = EVP_aes_128_gcm();
+    else if (key_len == 24) cipher = EVP_aes_192_gcm();
+    else if (key_len == 32) cipher = EVP_aes_256_gcm();
+    else return -1;
+
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return -1;
+    int outlen = 0, tmplen = 0;
+
+    if (encrypt) {
+        if (EVP_EncryptInit_ex(ctx, cipher, NULL, NULL, NULL) != 1) goto fail;
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, iv_len, NULL) != 1) goto fail;
+        if (EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) != 1) goto fail;
+        if (aad && aad_len > 0) {
+            if (EVP_EncryptUpdate(ctx, NULL, &tmplen, aad, aad_len) != 1) goto fail;
+        }
+        if (EVP_EncryptUpdate(ctx, output, &outlen, input, input_len) != 1) goto fail;
+        if (EVP_EncryptFinal_ex(ctx, output + outlen, &tmplen) != 1) goto fail;
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, tag_len, tag_buf) != 1) goto fail;
+    } else {
+        if (EVP_DecryptInit_ex(ctx, cipher, NULL, NULL, NULL) != 1) goto fail;
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, iv_len, NULL) != 1) goto fail;
+        if (EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv) != 1) goto fail;
+        if (aad && aad_len > 0) {
+            if (EVP_DecryptUpdate(ctx, NULL, &tmplen, aad, aad_len) != 1) goto fail;
+        }
+        if (EVP_DecryptUpdate(ctx, output, &outlen, input, input_len) != 1) goto fail;
+        // Set expected tag before final
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, tag_len, (void*)tag_buf) != 1) goto fail;
+        if (EVP_DecryptFinal_ex(ctx, output + outlen, &tmplen) != 1) {
+            EVP_CIPHER_CTX_free(ctx);
+            return 1; // auth tag mismatch
+        }
+    }
+    EVP_CIPHER_CTX_free(ctx);
+    return 0;
+fail:
+    EVP_CIPHER_CTX_free(ctx);
+    return -2;
+}
+
 // zlib helpers — gzip/gunzip/deflate/inflate
 #include <zlib.h>
 

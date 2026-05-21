@@ -90,6 +90,7 @@ const CIPHER_MAP = {
 };
 
 function createCipheriv(algorithm, key, iv) {
+  if (_isGCM(algorithm)) return _createGCMCipher(algorithm, key, iv);
   const cipher = CIPHER_MAP[algorithm.toLowerCase()];
   if (!cipher) throw new Error(`Unknown cipher: ${algorithm}`);
   const keyBuf = Buffer.isBuffer(key) ? key : Buffer.from(key);
@@ -116,6 +117,7 @@ function createCipheriv(algorithm, key, iv) {
 }
 
 function createDecipheriv(algorithm, key, iv) {
+  if (_isGCM(algorithm)) return _createGCMDecipher(algorithm, key, iv);
   const cipher = CIPHER_MAP[algorithm.toLowerCase()];
   if (!cipher) throw new Error(`Unknown cipher: ${algorithm}`);
   const keyBuf = Buffer.isBuffer(key) ? key : Buffer.from(key);
@@ -177,6 +179,83 @@ function scrypt(password, salt, keylen, options, cb) {
   });
 }
 
+// AES-GCM cipher/decipher
+const GCM_MAP = {
+  'aes-128-gcm': { keyLen: 16 },
+  'aes-192-gcm': { keyLen: 24 },
+  'aes-256-gcm': { keyLen: 32 },
+};
+
+function _isGCM(algorithm) { return algorithm.toLowerCase() in GCM_MAP; }
+
+function _createGCMCipher(algorithm, key, iv) {
+  const keyBuf = Buffer.isBuffer(key) ? key : Buffer.from(key);
+  const ivBuf = Buffer.isBuffer(iv) ? iv : Buffer.from(iv);
+  let aadBuf = null;
+  let chunks = [];
+  let authTag = null;
+  let authTagLength = 16;
+  return {
+    setAAD(aad, opts) { aadBuf = Buffer.isBuffer(aad) ? aad : Buffer.from(aad); return this; },
+    setAutoPadding() { return this; },
+    update(data, inputEnc, outputEnc) {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, inputEnc);
+      chunks.push(buf);
+      return Buffer.alloc(0);
+    },
+    final(outputEnc) {
+      const input = Buffer.concat(chunks);
+      const aad = aadBuf || Buffer.alloc(0);
+      const emptyTag = new Uint8Array(authTagLength);
+      const result = b.gcmCrypt(1, new Uint8Array(keyBuf), new Uint8Array(ivBuf),
+                                 new Uint8Array(aad), new Uint8Array(input), emptyTag);
+      if (typeof result === 'number') throw new Error('AES-GCM encrypt failed: ' + result);
+      authTag = Buffer.from(result.tag.buffer, result.tag.byteOffset, result.tag.byteLength);
+      const out = Buffer.from(result.data.buffer, result.data.byteOffset, result.data.byteLength);
+      if (outputEnc === 'hex') return out.toString('hex');
+      if (outputEnc === 'base64') return out.toString('base64');
+      return out;
+    },
+    getAuthTag() {
+      if (!authTag) throw new Error('Auth tag not available before final()');
+      return authTag;
+    },
+  };
+}
+
+function _createGCMDecipher(algorithm, key, iv) {
+  const keyBuf = Buffer.isBuffer(key) ? key : Buffer.from(key);
+  const ivBuf = Buffer.isBuffer(iv) ? iv : Buffer.from(iv);
+  let aadBuf = null;
+  let chunks = [];
+  let expectedTag = null;
+  return {
+    setAAD(aad, opts) { aadBuf = Buffer.isBuffer(aad) ? aad : Buffer.from(aad); return this; },
+    setAuthTag(tag) { expectedTag = Buffer.isBuffer(tag) ? tag : Buffer.from(tag, 'hex'); return this; },
+    setAutoPadding() { return this; },
+    update(data, inputEnc, outputEnc) {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, inputEnc || 'hex');
+      chunks.push(buf);
+      return Buffer.alloc(0);
+    },
+    final(outputEnc) {
+      if (!expectedTag) throw new Error('Unsupported state: auth tag must be set before final()');
+      const input = Buffer.concat(chunks);
+      const aad = aadBuf || Buffer.alloc(0);
+      const result = b.gcmCrypt(0, new Uint8Array(keyBuf), new Uint8Array(ivBuf),
+                                 new Uint8Array(aad), new Uint8Array(input), new Uint8Array(expectedTag));
+      if (typeof result === 'number') {
+        if (result === 1) throw new Error('Unsupported state or unable to authenticate data');
+        throw new Error('AES-GCM decrypt failed: ' + result);
+      }
+      const out = Buffer.from(result.data.buffer, result.data.byteOffset, result.data.byteLength);
+      if (outputEnc === 'utf8' || outputEnc === 'utf-8') return out.toString('utf8');
+      if (outputEnc === 'hex') return out.toString('hex');
+      return out;
+    },
+  };
+}
+
 const stub = (name) => () => { throw new Error(`crypto.${name} not implemented`); };
 
 module.exports = {
@@ -187,6 +266,6 @@ module.exports = {
   generateKeyPairSync: stub('generateKeyPairSync'), generateKeySync: stub('generateKeySync'),
   constants: {},
   getHashes: () => ['md5', 'sha1', 'sha256', 'sha512'],
-  getCiphers: () => Object.keys(CIPHER_MAP),
+  getCiphers: () => [...Object.keys(CIPHER_MAP), ...Object.keys(GCM_MAP)],
   getCurves: () => [],
 };
