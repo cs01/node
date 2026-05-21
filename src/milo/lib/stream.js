@@ -59,12 +59,16 @@ class Readable extends Stream {
       if (state.flowing) process.nextTick(() => { if (!state.endEmitted) { state.endEmitted = true; this.emit('end'); } });
       return false;
     }
-    if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
+    if (!state.objectMode && typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
     if (state.flowing) {
       this.emit('data', chunk);
     } else {
       state.buffer.push(chunk);
       state.length += chunk.length || 1;
+      if (!state._readableEmitScheduled && this.listenerCount('readable') > 0) {
+        state._readableEmitScheduled = true;
+        process.nextTick(() => { state._readableEmitScheduled = false; this.emit('readable'); });
+      }
     }
     return state.length < state.highWaterMark;
   }
@@ -262,7 +266,7 @@ Readable.prototype.drop = function(limit) {
 };
 
 Readable.from = function(iterable, opts) {
-  const r = new Readable(opts);
+  const r = new Readable({ objectMode: true, highWaterMark: 16, ...opts });
   r._read = () => {};
   (async () => {
     for await (const chunk of iterable) r.push(chunk);

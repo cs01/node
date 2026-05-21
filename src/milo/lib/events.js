@@ -8,6 +8,7 @@ class EventEmitter {
   getMaxListeners() { return this._maxListeners; }
 
   emit(type, ...args) {
+    if (!this._events) this._events = Object.create(null);
     const handlers = this._events[type];
     if (!handlers || handlers.length === 0) {
       if (type === 'error') {
@@ -25,6 +26,7 @@ class EventEmitter {
 
   on(type, fn) {
     if (typeof fn !== 'function') throw new TypeError('listener must be a function');
+    if (!this._events) this._events = Object.create(null);
     (this._events[type] ??= []).push(fn);
     if (type !== 'newListener') this.emit('newListener', type, fn);
     return this;
@@ -33,6 +35,7 @@ class EventEmitter {
 
   prependListener(type, fn) {
     if (typeof fn !== 'function') throw new TypeError('listener must be a function');
+    if (!this._events) this._events = Object.create(null);
     (this._events[type] ??= []).unshift(fn);
     return this;
   }
@@ -50,6 +53,7 @@ class EventEmitter {
   }
 
   removeListener(type, fn) {
+    if (!this._events) this._events = Object.create(null);
     const list = this._events[type];
     if (!list) return this;
     const idx = list.findIndex(h => h === fn || h.listener === fn);
@@ -61,19 +65,21 @@ class EventEmitter {
   off(type, fn) { return this.removeListener(type, fn); }
 
   removeAllListeners(type) {
+    if (!this._events) this._events = Object.create(null);
     if (type !== undefined) delete this._events[type];
     else this._events = Object.create(null);
     return this;
   }
 
-  listeners(type) { return (this._events[type] || []).map(h => h.listener || h); }
-  rawListeners(type) { return [...(this._events[type] || [])]; }
+  listeners(type) { if (!this._events) return []; return (this._events[type] || []).map(h => h.listener || h); }
+  rawListeners(type) { if (!this._events) return []; return [...(this._events[type] || [])]; }
   listenerCount(type, listener) {
+    if (!this._events) return 0;
     const list = this._events[type] || [];
     if (listener === undefined) return list.length;
     return list.filter(h => h === listener || h.listener === listener).length;
   }
-  eventNames() { return [...Object.keys(this._events), ...Object.getOwnPropertySymbols(this._events)]; }
+  eventNames() { if (!this._events) return []; return [...Object.keys(this._events), ...Object.getOwnPropertySymbols(this._events)]; }
 }
 
 EventEmitter.defaultMaxListeners = 10;

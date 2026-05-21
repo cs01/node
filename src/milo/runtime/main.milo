@@ -17,6 +17,10 @@ extern fn getpid(): i32
 extern fn isatty(fd: i32): i32
 extern fn getppid(): i32
 extern fn getcwd(buf: *u8, size: i64): *u8
+extern fn tcgetattr(fd: i32, termios: *u8): i32
+extern fn tcsetattr(fd: i32, actions: i32, termios: *u8): i32
+extern fn cfmakeraw(termios: *u8): void
+extern fn ioctl(fd: i32, request: u64, arg: *u8): i32
 
 // Binding registry
 extern fn nm_binding_register(name: *u8, init: *u8): void
@@ -337,6 +341,61 @@ fn consoleWriteError(info: *u8, _ud: *u8): void {
     }
 }
 
+// TTY raw mode — save/restore termios (128 bytes covers macOS arm64 struct termios)
+var _savedTermios: [u8; 128] = [0; 128]
+var _termiosSaved: i32 = 0
+
+fn ttySetRawMode(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, 0)
+    let enable = ci.i32Arg(1, 0)
+
+    if enable != 0 {
+        unsafe { tcgetattr(fd, _savedTermios as *u8) }
+        _termiosSaved = 1
+        var raw: [u8; 128] = [0; 128]
+        var i: i64 = 0
+        while i < 128 {
+            raw[i] = _savedTermios[i]
+            i = i + 1
+        }
+        unsafe {
+            cfmakeraw(raw as *u8)
+            tcsetattr(fd, 0, raw as *u8)
+        }
+    } else {
+        if _termiosSaved != 0 {
+            unsafe { tcsetattr(fd, 0, _savedTermios as *u8) }
+        }
+    }
+    ci.retI32(0)
+}
+
+fn ttyGetWindowSize(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    let fd = ci.i32Arg(0, 1)
+    // struct winsize: ws_row(u16), ws_col(u16), ws_xpixel(u16), ws_ypixel(u16) = 8 bytes
+    var ws: [u8; 8] = [0; 8]
+    // TIOCGWINSZ = 0x40087468 on macOS
+    unsafe {
+        let ret = ioctl(fd, 1074295912, ws as *u8)
+        if ret < 0 {
+            ci.retUndefined()
+            return
+        }
+    }
+    let row = (ws[0] as i32) | ((ws[1] as i32) << 8)
+    let col = (ws[2] as i32) | ((ws[3] as i32) << 8)
+    let arr = iso.array(2)
+    unsafe {
+        ctx.objectSetIndex(arr, 0, iso.int32(col))
+        ctx.objectSetIndex(arr, 1, iso.int32(row))
+    }
+    ci.ret(arr)
+}
+
 fn consoleIsatty(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let fd = ci.i32Arg(0, 0)
@@ -350,6 +409,8 @@ fn nm_init_console(_iso: *u8, ctx_ptr: *u8, exports: i32): void {
         c.setMethod(exp, "write" as *u8, consoleWrite as *u8)
         c.setMethod(exp, "writeError" as *u8, consoleWriteError as *u8)
         c.setMethod(exp, "isatty" as *u8, consoleIsatty as *u8)
+        c.setMethod(exp, "setRawMode" as *u8, ttySetRawMode as *u8)
+        c.setMethod(exp, "getWindowSize" as *u8, ttyGetWindowSize as *u8)
     }
 }
 

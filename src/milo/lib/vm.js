@@ -38,12 +38,15 @@ function runInNewContext(code, sandbox, options) {
   sandbox = sandbox || Object.create(null);
   const keys = Object.keys(sandbox);
   const vals = keys.map(k => sandbox[k]);
-  // Wrap in return so expressions produce a value
+  // Pass sandbox vars as params, write back after execution
+  const returnKeys = keys.map(k => `__sb__['${k}'] = ${k};`).join(' ');
   let fn;
-  try { fn = new Function(...keys, 'return (' + code + ')'); }
-  catch { fn = new Function(...keys, code); }
-  const result = fn(...vals);
-  return result;
+  try {
+    fn = new Function('__sb__', ...keys, `var __r__ = (${code}); ${returnKeys} return __r__;`);
+  } catch {
+    fn = new Function('__sb__', ...keys, `${code}\n${returnKeys}`);
+  }
+  return fn(sandbox, ...vals);
 }
 
 function runInContext(code, context, options) {

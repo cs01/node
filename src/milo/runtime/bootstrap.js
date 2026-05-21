@@ -215,11 +215,31 @@
   const _requireStack = [];
   globalThis._requireStack = _requireStack;
 
+  function _resolveExport(exp) {
+    if (typeof exp === 'string') return exp;
+    if (exp && typeof exp === 'object') {
+      if (exp.require) return _resolveExport(exp.require);
+      if (exp.node) return _resolveExport(exp.node);
+      if (exp.default) return _resolveExport(exp.default);
+    }
+    return null;
+  }
+
   function _resolveFile(p) {
     if (_fs.existsSync(p)) {
       try { if (_fs.statSync(p).isDirectory()) {
         const pkg = _path.join(p, 'package.json');
-        if (_fs.existsSync(pkg)) { try { const m = JSON.parse(_fs.readFileSync(pkg)).main; if (m) { const mp = _resolveFile(_path.resolve(p, m)); if (mp) return mp; } } catch {} }
+        if (_fs.existsSync(pkg)) {
+          try {
+            const pj = JSON.parse(_fs.readFileSync(pkg));
+            if (pj.exports) {
+              const entry = pj.exports['.'] || pj.exports;
+              const target = _resolveExport(entry);
+              if (target) { const mp = _resolveFile(_path.resolve(p, target)); if (mp) return mp; }
+            }
+            if (pj.main) { const mp = _resolveFile(_path.resolve(p, pj.main)); if (mp) return mp; }
+          } catch {}
+        }
         if (_fs.existsSync(_path.join(p, 'index.js'))) return _path.join(p, 'index.js');
         if (_fs.existsSync(_path.join(p, 'index.json'))) return _path.join(p, 'index.json');
         return null;
@@ -232,12 +252,36 @@
     return null;
   }
 
+  function _resolveExportSubpath(pkgDir, subpath) {
+    const pkg = _path.join(pkgDir, 'package.json');
+    if (!_fs.existsSync(pkg)) return null;
+    try {
+      const pj = JSON.parse(_fs.readFileSync(pkg));
+      if (!pj.exports || typeof pj.exports !== 'object') return null;
+      const key = './' + subpath;
+      const entry = pj.exports[key];
+      if (entry) { const target = _resolveExport(entry); if (target) return _resolveFile(_path.resolve(pkgDir, target)); }
+    } catch {}
+    return null;
+  }
+
   function _resolveNodeModules(id, startDir) {
     let dir = startDir;
+    const slashIdx = id.indexOf('/');
+    const pkgName = slashIdx >= 0 ? (id.startsWith('@') ? id.slice(0, id.indexOf('/', slashIdx + 1)) : id.slice(0, slashIdx)) : id;
+    const subpath = slashIdx >= 0 ? id.slice(pkgName.length + 1) : null;
     while (dir && dir !== '/') {
-      const candidate = _path.join(dir, 'node_modules', id);
-      const resolved = _resolveFile(candidate);
-      if (resolved) return resolved;
+      const pkgDir = _path.join(dir, 'node_modules', pkgName);
+      if (subpath && _fs.existsSync(pkgDir)) {
+        const exported = _resolveExportSubpath(pkgDir, subpath);
+        if (exported) return exported;
+        const direct = _resolveFile(_path.join(pkgDir, subpath));
+        if (direct) return direct;
+      }
+      if (!subpath) {
+        const resolved = _resolveFile(_path.join(dir, 'node_modules', id));
+        if (resolved) return resolved;
+      }
       dir = _path.dirname(dir);
     }
     return null;
@@ -253,79 +297,70 @@
     return null;
   }
 
-  globalThis.require = function require(id) {
-    if (id.startsWith('node:')) id = id.slice(5);
-    const flatId = id.replace(/\//g, '_');
-    if (_moduleWrappers[id]) return _moduleWrappers[id].exports;
-    if (moduleCache[id]) return moduleCache[id];
+  function _loadModule(id, resolved, fileSrc) {
+    const mod = { exports: {} };
+    _moduleWrappers[resolved] = mod;
+    const isBare = !id.startsWith('./') && !id.startsWith('../') && !id.startsWith('/');
+    if (isBare && id !== resolved) _moduleWrappers[id] = mod;
+    const dname = _path.dirname(resolved);
+    const modRequire = _makeRequire(dname);
+    mod.require = modRequire;
+    if (resolved.endsWith('.json')) { mod.exports = JSON.parse(fileSrc); }
+    else { (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', fileSrc))(mod.exports, modRequire, mod, resolved, dname, primordials); }
+    moduleCache[resolved] = mod.exports;
+    if (isBare && id !== resolved) moduleCache[id] = mod.exports;
+    delete _moduleWrappers[resolved];
+    if (isBare && id !== resolved) delete _moduleWrappers[id];
+    return mod.exports;
+  }
 
-    let src = _tryMiloLib(id) || _tryMiloLib(flatId) || __loadBuiltin(id);
-    if (src !== undefined) {
-      const mod = { exports: {} };
-      _moduleWrappers[id] = mod;
-      const fname = _path.join(_miloLibDir, id + '.js');
-      const dname = _path.dirname(fname);
-      _requireStack.push(dname);
-      try { (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src))(mod.exports, require, mod, fname, dname, primordials); }
-      finally { _requireStack.pop(); }
-      moduleCache[id] = mod.exports;
-      delete _moduleWrappers[id];
-      return mod.exports;
+  function _makeRequire(parentDir) {
+    function require(id) {
+      if (id.startsWith('node:')) id = id.slice(5);
+      const flatId = id.replace(/\//g, '_');
+      if (_moduleWrappers[id]) return _moduleWrappers[id].exports;
+      if (moduleCache[id]) return moduleCache[id];
+
+      const isRelative = id.startsWith('./') || id.startsWith('../') || id.startsWith('/');
+      let src = isRelative ? undefined : (_tryMiloLib(id) || _tryMiloLib(flatId) || __loadBuiltin(id));
+      if (src !== undefined) {
+        const fname = _path.join(_miloLibDir, id + '.js');
+        return _loadModule(id, fname, src);
+      }
+
+      const resolved = _resolve(id, parentDir);
+      if (_moduleWrappers[resolved]) return _moduleWrappers[resolved].exports;
+      if (resolved && moduleCache[resolved]) return moduleCache[resolved];
+      if (resolved) return _loadModule(id, resolved, _fs.readFileSync(resolved));
+
+      const searchDir = parentDir || (process.cwd ? process.cwd() : '');
+      const nmResolved = _resolveNodeModules(id, searchDir);
+      if (nmResolved) {
+        if (moduleCache[nmResolved]) return moduleCache[nmResolved];
+        return _loadModule(id, nmResolved, _fs.readFileSync(nmResolved));
+      }
+
+      try { const b = _nativeBinding(id); moduleCache[id] = b; return b; } catch {}
+      throw new Error("Cannot find module '" + id + "'");
     }
 
-    const parentDir = _requireStack.length > 0 ? _requireStack[_requireStack.length - 1] : '';
-    const resolved = _resolve(id, parentDir);
-    if (_moduleWrappers[resolved]) return _moduleWrappers[resolved].exports;
-    if (resolved && moduleCache[resolved]) return moduleCache[resolved];
-    if (resolved) {
-      const fileSrc = _fs.readFileSync(resolved);
-      const mod = { exports: {} };
-      _moduleWrappers[resolved] = mod;
-      if (id !== resolved) _moduleWrappers[id] = mod;
-      const dname = _path.dirname(resolved);
-      _requireStack.push(dname);
-      try {
-        if (resolved.endsWith('.json')) mod.exports = JSON.parse(fileSrc);
-        else (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', fileSrc))(mod.exports, require, mod, resolved, dname, primordials);
-      } finally { _requireStack.pop(); }
-      moduleCache[resolved] = mod.exports;
-      if (id !== resolved) moduleCache[id] = mod.exports;
-      delete _moduleWrappers[resolved]; delete _moduleWrappers[id];
-      return mod.exports;
-    }
+    require.resolve = function(id) {
+      if (id.startsWith('node:')) id = id.slice(5);
+      const flatId = id.replace(/\//g, '_');
+      if (moduleCache[id] || _tryMiloLib(id) || _tryMiloLib(flatId) || __loadBuiltin(id)) return id;
+      const resolved = _resolve(id, parentDir);
+      if (resolved) return resolved;
+      const searchDir = parentDir || (process.cwd ? process.cwd() : '');
+      const nmResolved = _resolveNodeModules(id, searchDir);
+      if (nmResolved) return nmResolved;
+      throw new Error("Cannot find module '" + id + "'");
+    };
+    require.cache = moduleCache;
+    require.main = null;
+    return require;
+  }
 
-    // bare specifier that isn't a builtin — try node_modules
-    const parentDir2 = _requireStack.length > 0 ? _requireStack[_requireStack.length - 1] : process.cwd ? process.cwd() : '';
-    const nmResolved = _resolveNodeModules(id, parentDir2);
-    if (nmResolved) {
-      if (moduleCache[nmResolved]) return moduleCache[nmResolved];
-      const fileSrc2 = _fs.readFileSync(nmResolved);
-      const mod2 = { exports: {} };
-      _moduleWrappers[nmResolved] = mod2;
-      const dname2 = _path.dirname(nmResolved);
-      _requireStack.push(dname2);
-      try {
-        if (nmResolved.endsWith('.json')) mod2.exports = JSON.parse(fileSrc2);
-        else (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', fileSrc2))(mod2.exports, require, mod2, nmResolved, dname2, primordials);
-      } finally { _requireStack.pop(); }
-      moduleCache[nmResolved] = mod2.exports;
-      moduleCache[id] = mod2.exports;
-      delete _moduleWrappers[nmResolved];
-      return mod2.exports;
-    }
-
-    try { const b = _nativeBinding(id); moduleCache[id] = b; return b; } catch {}
-    throw new Error("Cannot find module '" + id + "'");
-  };
-
-  require.resolve = function(id) {
-    const parentDir = _requireStack.length > 0 ? _requireStack[_requireStack.length - 1] : '';
-    const resolved = _resolve(id, parentDir);
-    if (resolved) return resolved;
-    throw new Error("Cannot find module '" + id + "'");
-  };
-  require.cache = moduleCache;
-  require.main = null;
+  globalThis.require = _makeRequire('');
 
   // --- load internal init modules (order matters) ---
   require('_console_init');

@@ -9,23 +9,32 @@ const _fmt = (a) => typeof a === 'string' ? a : _util.inspect(a, { colors: false
 // process.stdout / process.stderr / process.stdin
 const _isTTY = _con.isatty ? (fd) => !!_con.isatty(fd) : () => false;
 const { Readable, Writable } = require('stream');
+const tty = require('tty');
 
-process.stdout = new Writable({
-  write(chunk, enc, cb) { _con.write(typeof chunk === 'string' ? chunk : chunk.toString()); if (cb) cb(); }
-});
-process.stdout.fd = 1;
-process.stdout.isTTY = _isTTY(1);
-process.stdout.columns = 80;
-process.stdout.rows = 24;
+if (_isTTY(1)) {
+  process.stdout = new tty.WriteStream(1);
+} else {
+  process.stdout = new Writable({
+    write(chunk, enc, cb) { _con.write(typeof chunk === 'string' ? chunk : chunk.toString()); if (cb) cb(); }
+  });
+  process.stdout.fd = 1;
+  process.stdout.isTTY = false;
+}
 
-process.stderr = new Writable({
-  write(chunk, enc, cb) { _con.writeError(typeof chunk === 'string' ? chunk : chunk.toString()); if (cb) cb(); }
-});
-process.stderr.fd = 2;
-process.stderr.isTTY = _isTTY(2);
+if (_isTTY(2)) {
+  process.stderr = new tty.WriteStream(2);
+} else {
+  process.stderr = new Writable({
+    write(chunk, enc, cb) { _con.writeError(typeof chunk === 'string' ? chunk : chunk.toString()); if (cb) cb(); }
+  });
+  process.stderr.fd = 2;
+  process.stderr.isTTY = false;
+}
+
 const _stdin = new Readable({ read() {} });
 _stdin.fd = 0;
 _stdin.isTTY = _isTTY(0);
+if (_isTTY(0)) _stdin.setRawMode = (mode) => { _con.setRawMode(0, mode ? 1 : 0); _stdin.isRaw = !!mode; return _stdin; };
 _stdin._started = false;
 _stdin.resume = function() {
   Readable.prototype.resume.call(this);

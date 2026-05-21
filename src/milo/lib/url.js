@@ -53,6 +53,11 @@ function parse(urlStr, parseQueryString, slashesDenoteHost) {
     rest = rest.slice(0, searchIdx);
   }
 
+  if (parseQueryString) {
+    const qs = require('querystring');
+    result.query = qs.parse(result.query || '');
+  }
+
   result.pathname = rest || (result.slashes ? '/' : null);
   result.path = (result.pathname || '') + (result.search || '');
   result.href = format(result);
@@ -114,8 +119,23 @@ function urlToHttpOptions(url) {
   };
 }
 
+function Url() {
+  this.protocol = null;
+  this.slashes = null;
+  this.auth = null;
+  this.host = null;
+  this.port = null;
+  this.hostname = null;
+  this.hash = null;
+  this.search = null;
+  this.query = null;
+  this.pathname = null;
+  this.path = null;
+  this.href = null;
+}
+
 module.exports = {
   URL: globalThis.URL, URLSearchParams: globalThis.URLSearchParams,
   parse, resolve, resolveObject, format, pathToFileURL, fileURLToPath, urlToHttpOptions,
-  Url: parse, domainToASCII: (d) => d, domainToUnicode: (d) => d,
+  Url, domainToASCII: (d) => d, domainToUnicode: (d) => d,
 };

@@ -77,10 +77,21 @@ const _startTime = Date.now();
 if (!process.uptime) process.uptime = () => (Date.now() - _startTime) / 1000;
 if (!process.title) process.title = 'milo-node';
 if (!process.execPath) process.execPath = process.argv[0] || '';
+if (!process.argv0) process.argv0 = process.argv[0] || '';
 if (!process.execArgv) process.execArgv = [];
 if (!process.allowedNodeEnvironmentFlags) process.allowedNodeEnvironmentFlags = new Set();
 if (!process.kill) process.kill = () => {};
+if (!process.abort) process.abort = () => { process.exit(134); };
 if (!process.binding) process.binding = (name) => { throw new Error('process.binding is not supported'); };
+
+const _osB = internalBinding('os');
+if (!process.getuid) process.getuid = () => _osB.getUid();
+if (!process.getgid) process.getgid = () => _osB.getGid();
+if (!process.geteuid) process.geteuid = () => _osB.getEuid();
+if (!process.getegid) process.getegid = () => _osB.getEgid();
+if (!process.getgroups) process.getgroups = () => [];
+if (!process.setuid) process.setuid = () => {};
+if (!process.setgid) process.setgid = () => {};
 
 let _uncaughtExceptionCallback = null;
 process.setUncaughtExceptionCaptureCallback = (fn) => {
@@ -95,4 +106,8 @@ if (!process.memoryUsage) {
   process.memoryUsage.rss = () => _pmb.memoryUsage().rss;
 }
 if (!process.cpuUsage) process.cpuUsage = () => ({ user: 0, system: 0 });
+if (!process.debugPort) process.debugPort = 9229;
+if (!process.report) process.report = { getReport: () => ({}) };
+if (!process.domain) process.domain = null;
+if (!process.connected) process.connected = false;
 if (!process.resourceUsage) process.resourceUsage = () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: 0, sharedMemorySize: 0, unsharedDataSize: 0, unsharedStackSize: 0, minorPageFault: 0, majorPageFault: 0, swappedOut: 0, fsRead: 0, fsWrite: 0, ipcSent: 0, ipcReceived: 0, signalsCount: 0, voluntaryContextSwitches: 0, involuntaryContextSwitches: 0 });
