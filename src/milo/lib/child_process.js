@@ -126,6 +126,30 @@ function exec(command, options, cb) {
   return child;
 }
 
+function execFile(file, args, options, cb) {
+  if (typeof args === 'function') { cb = args; args = []; options = {}; }
+  if (typeof options === 'function') { cb = options; options = {}; }
+  const opts = options || {};
+  const child = spawn(file, args || [], opts);
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (d) => { stdout += d.toString(); });
+  child.stderr.on('data', (d) => { stderr += d.toString(); });
+  child.on('close', (code) => {
+    if (cb) {
+      if (code !== 0) {
+        const err = new Error('Command failed: ' + file);
+        err.code = code;
+        cb(err, stdout, stderr);
+      } else {
+        cb(null, stdout, stderr);
+      }
+    }
+  });
+  child.on('error', (err) => { if (cb) cb(err, stdout, stderr); });
+  return child;
+}
+
 function fork() {
   throw new Error('child_process.fork() not supported in milo-node');
 }
@@ -136,5 +160,6 @@ module.exports = {
   execFileSync,
   spawn,
   exec,
+  execFile,
   fork,
 };

@@ -3,6 +3,7 @@
 from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
 
 extern fn nm_dns_lookup(hostname: *u8, family: i32, outIp: *u8, outLen: i32, outFamily: *i32): i32
+extern fn nm_dns_reverse(ip: *u8, outHostname: *u8, outLen: i32): i32
 extern fn strlen(s: *u8): i64
 
 // lookup(hostname, family) → { address, family } or null
@@ -35,10 +36,31 @@ fn dnsLookup(info: *u8, _ud: *u8): void {
     }
 }
 
+fn dnsReverse(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 1 { return }
+    let iso = ci.isolate()
+    unsafe {
+        var ipBuf: [u8; 64] = [0; 64]
+        let ilen = ci.arg(0).writeUtf8(iso, ipBuf as *u8, 64)
+        if ilen <= 0 { return }
+
+        var hostBuf: [u8; 256] = [0; 256]
+        let r = nm_dns_reverse(ipBuf as *u8, hostBuf as *u8, 256)
+        if r != 0 {
+            ci.retI32(-1)
+            return
+        }
+        let hlen = strlen(hostBuf as *u8)
+        ci.retStrLen(hostBuf as *u8, hlen as i32)
+    }
+}
+
 fn nm_init_dns(_iso: *u8, ctxPtr: *u8, exports: i32): void {
     let ctx = Context { ptr: ctxPtr }
     let exp = Value { slot: exports }
     unsafe {
         ctx.setMethod(exp, "lookup" as *u8, dnsLookup as *u8)
+        ctx.setMethod(exp, "reverse" as *u8, dnsReverse as *u8)
     }
 }

@@ -39,8 +39,7 @@ Full build: `bash src/milo/build.sh`
 - [ ] `net.SocketAddress` class
 
 ### dns
-- [ ] MX, TXT, SRV, NS, CNAME, PTR record queries
-- [ ] `dns.reverse()` — reverse lookup
+- [ ] MX, TXT, SRV, NS, CNAME, PTR record queries (need libresolv or manual DNS protocol)
 
 
 ### os

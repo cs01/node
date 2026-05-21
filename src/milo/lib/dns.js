@@ -64,7 +64,16 @@ const dns = {
   resolveSrv: (h, cb) => process.nextTick(() => cb(null, [])),
   resolveNs: (h, cb) => process.nextTick(() => cb(null, [])),
   resolveCname: (h, cb) => process.nextTick(() => cb(null, [])),
-  reverse: (ip, cb) => process.nextTick(() => cb(null, [])),
+  reverse: (ip, cb) => process.nextTick(() => {
+    const result = b.reverse(ip);
+    if (result === -1 || typeof result !== 'string') {
+      const err = new Error('getHostByAddr ENOTFOUND ' + ip);
+      err.code = 'ENOTFOUND';
+      cb(err);
+    } else {
+      cb(null, [result]);
+    }
+  }),
   setServers: () => {},
   getServers: () => [],
   NODATA, FORMERR, SERVFAIL, NOTFOUND, NOTIMP, REFUSED, BADQUERY, BADNAME, BADFAMILY,

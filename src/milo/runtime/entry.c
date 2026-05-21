@@ -125,6 +125,31 @@ int nm_net_interfaces(char* out, int out_len) {
     return count;
 }
 
+// dns reverse lookup
+int nm_dns_reverse(const char* ip, char* out_hostname, int out_len) {
+    struct sockaddr_in sa4;
+    struct sockaddr_in6 sa6;
+    struct sockaddr* sa;
+    socklen_t sa_len;
+
+    memset(&sa4, 0, sizeof(sa4));
+    memset(&sa6, 0, sizeof(sa6));
+
+    if (inet_pton(AF_INET, ip, &sa4.sin_addr) == 1) {
+        sa4.sin_family = AF_INET;
+        sa = (struct sockaddr*)&sa4;
+        sa_len = sizeof(sa4);
+    } else if (inet_pton(AF_INET6, ip, &sa6.sin6_addr) == 1) {
+        sa6.sin6_family = AF_INET6;
+        sa = (struct sockaddr*)&sa6;
+        sa_len = sizeof(sa6);
+    } else {
+        return -1;
+    }
+
+    return getnameinfo(sa, sa_len, out_hostname, out_len, NULL, 0, 0);
+}
+
 // userinfo helper — getpwuid
 #include <pwd.h>
 
