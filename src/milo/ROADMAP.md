@@ -6,14 +6,11 @@ Full build: `bash src/milo/build.sh`
 
 ## critical — wrong values or crashes
 
-- [ ] `fs.statSync` missing `dev`, `ino`, `nlink`, `uid`, `gid`, `atimeMs`, `ctimeMs`, `birthtimeMs`, `mtime` Date
+(none remaining)
 
 ## high — missing functionality npm packages depend on
 
-- [ ] no `node_modules` resolution in require — `runtime/bootstrap.js:189-198`
-- [ ] missing `require.resolve`, `require.cache`, `require.main`
 - [ ] `fs.createReadStream`/`createWriteStream` throw
-- [ ] stream flowing mode broken — `on('data')` doesn't trigger `resume()` — `lib/stream.js`
 - [ ] `child_process` entirely stubbed
 - [ ] `http.request()`/`http.get()` throw, `createServer` is fake
 - [ ] `AsyncLocalStorage` doesn't propagate across async boundaries — `lib/async_hooks.js:20-25`
@@ -68,3 +65,7 @@ Full build: `bash src/milo/build.sh`
 - [x] `crypto.randomBytes` — secure random via `getentropy`
 - [x] `crypto.createHmac` — real HMAC implementation
 - [x] `process.env` — `Object.keys()` enumerates native environ
+- [x] `fs.statSync` — full fields: dev, ino, nlink, uid, gid, atimeMs, ctimeMs, birthtimeMs, Date objects
+- [x] `node_modules` resolution — walk up dir tree, read package.json main
+- [x] `require.resolve`, `require.cache`, `require.main`
+- [x] stream flowing mode — `on('data')` triggers `resume()`, `push()` emits in flowing mode

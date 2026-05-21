@@ -143,28 +143,61 @@ fn fsStat(info: *u8, _ud: *u8): void {
         let iso = ci.isolate()
         let ctx = ci.context()
         let obj = iso.object()
+        let s = statBuf as *u8
 
-        // macOS arm64 struct stat offsets:
-        // st_mode: offset 4 (u16), st_size: offset 96 (i64)
-        // st_atimespec: offset 32, st_mtimespec: offset 48, st_ctimespec: offset 64
-        let mode = (statBuf as *i32)[1] & 65535
-        let size = (statBuf as *i64)[12]
+        // macOS arm64 struct stat offsets (from offsetof):
+        // st_dev:0 st_mode:4(u16) st_nlink:6(u16) st_ino:8 st_uid:16 st_gid:20
+        // st_atimespec:32 st_mtimespec:48 st_ctimespec:64 st_birthtimespec:80
+        // st_size:96 st_blocks:104 st_blksize:112
+        let dev = (s as *i32)[0]
+        let mode = (s as *i32)[1] & 65535
+        let nlink = ((s as *i32)[1] >> 16) & 65535
+        let ino = (s as *i64)[1]
+        let uid = *((s as i64 + 16) as *u32)
+        let gid = *((s as i64 + 20) as *u32)
+        let size = *((s as i64 + 96) as *i64)
+        let blocks = *((s as i64 + 104) as *i64)
+        let blksize = *((s as i64 + 112) as *i32)
 
-        let mtimeSec = (statBuf as *i64)[6]
-        let mtimeNs = (statBuf as *i64)[7]
+        let atimeSec = *((s as i64 + 32) as *i64)
+        let atimeNs = *((s as i64 + 40) as *i64)
+        let atimeMs = atimeSec as f64 * 1000.0 + atimeNs as f64 / 1000000.0
+
+        let mtimeSec = *((s as i64 + 48) as *i64)
+        let mtimeNs = *((s as i64 + 56) as *i64)
         let mtimeMs = mtimeSec as f64 * 1000.0 + mtimeNs as f64 / 1000000.0
 
+        let ctimeSec = *((s as i64 + 64) as *i64)
+        let ctimeNs = *((s as i64 + 72) as *i64)
+        let ctimeMs = ctimeSec as f64 * 1000.0 + ctimeNs as f64 / 1000000.0
+
+        let birthtimeSec = *((s as i64 + 80) as *i64)
+        let birthtimeNs = *((s as i64 + 88) as *i64)
+        let birthtimeMs = birthtimeSec as f64 * 1000.0 + birthtimeNs as f64 / 1000000.0
+
+        ctx.objectSet(obj, "dev" as *u8, iso.number(dev as f64))
         ctx.objectSet(obj, "mode" as *u8, iso.number(mode as f64))
+        ctx.objectSet(obj, "nlink" as *u8, iso.number(nlink as f64))
+        ctx.objectSet(obj, "ino" as *u8, iso.number(ino as f64))
+        ctx.objectSet(obj, "uid" as *u8, iso.number(uid as f64))
+        ctx.objectSet(obj, "gid" as *u8, iso.number(gid as f64))
         ctx.objectSet(obj, "size" as *u8, iso.number(size as f64))
+        ctx.objectSet(obj, "blocks" as *u8, iso.number(blocks as f64))
+        ctx.objectSet(obj, "blksize" as *u8, iso.number(blksize as f64))
+        ctx.objectSet(obj, "atimeMs" as *u8, iso.number(atimeMs))
         ctx.objectSet(obj, "mtimeMs" as *u8, iso.number(mtimeMs))
+        ctx.objectSet(obj, "ctimeMs" as *u8, iso.number(ctimeMs))
+        ctx.objectSet(obj, "birthtimeMs" as *u8, iso.number(birthtimeMs))
 
         // S_IFMT=0170000=61440, S_IFREG=0100000=32768, S_IFDIR=0040000=16384
         let fmt = mode & 61440
         let isFile = fmt == 32768
         let isDir = fmt == 16384
+        let isSymlink = fmt == 40960
 
         ctx.objectSet(obj, "isFile" as *u8, iso.number(isFile as i32 as f64))
         ctx.objectSet(obj, "isDirectory" as *u8, iso.number(isDir as i32 as f64))
+        ctx.objectSet(obj, "isSymbolicLink" as *u8, iso.number(isSymlink as i32 as f64))
 
         ci.ret(obj)
     }

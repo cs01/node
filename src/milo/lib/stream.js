@@ -53,12 +53,28 @@ class Readable extends Stream {
 
   push(chunk, encoding) {
     const state = this._readableState;
-    if (chunk === null) { state.ended = true; return false; }
+    if (chunk === null) { state.ended = true; if (state.flowing) this.emit('end'); return false; }
     if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
-    state.buffer.push(chunk);
-    state.length += chunk.length || 1;
+    if (state.flowing) {
+      this.emit('data', chunk);
+    } else {
+      state.buffer.push(chunk);
+      state.length += chunk.length || 1;
+    }
     return state.length < state.highWaterMark;
   }
+
+  on(ev, fn) {
+    super.on(ev, fn);
+    if (ev === 'data') {
+      if (this._readableState.flowing !== false) this.resume();
+    } else if (ev === 'readable') {
+      this._readableState.flowing = false;
+    }
+    return this;
+  }
+
+  addListener(ev, fn) { return this.on(ev, fn); }
 
   setEncoding(enc) { this._readableState.encoding = enc; return this; }
   resume() {

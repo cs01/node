@@ -31,7 +31,16 @@ function appendFileSync(path, data) {
 function statSync(path) {
   const s = b.stat(String(path));
   if (s === -1) throw _fsError('ENOENT', 'stat', path, 'no such file or directory');
-  return { ...s, isFile: () => !!s.isFile, isDirectory: () => !!s.isDirectory, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false };
+  return {
+    dev: s.dev || 0, ino: s.ino || 0, mode: s.mode || 0, nlink: s.nlink || 0,
+    uid: s.uid || 0, gid: s.gid || 0, rdev: 0, size: s.size || 0,
+    blksize: s.blksize || 4096, blocks: s.blocks || 0,
+    atimeMs: s.atimeMs || 0, mtimeMs: s.mtimeMs || 0, ctimeMs: s.ctimeMs || 0, birthtimeMs: s.birthtimeMs || 0,
+    atime: new Date(s.atimeMs || 0), mtime: new Date(s.mtimeMs || 0), ctime: new Date(s.ctimeMs || 0), birthtime: new Date(s.birthtimeMs || 0),
+    isFile: () => !!s.isFile, isDirectory: () => !!s.isDirectory,
+    isSymbolicLink: () => !!s.isSymbolicLink, isBlockDevice: () => false,
+    isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
+  };
 }
 
 function existsSync(path) { return !!b.exists(String(path)); }
