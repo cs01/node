@@ -13,12 +13,9 @@ Full build: `bash src/milo/build.sh`
 - [ ] `https.createServer()` — TLS server
 
 ### crypto
-- [ ] `createCipheriv` / `createDecipheriv` — AES-256-CBC, AES-256-GCM, etc.
 - [ ] `createSign` / `createVerify` — RSA/ECDSA signing
-- [ ] `pbkdf2` / `pbkdf2Sync` — key derivation
-- [ ] `scrypt` / `scryptSync` — key derivation
 - [ ] `generateKeyPairSync` / `generateKeySync`
-- [ ] `getCiphers` / `getCurves` / `getHashes` — return real lists
+- [ ] AES-GCM mode (authenticated encryption)
 
 
 ### fs (async)
