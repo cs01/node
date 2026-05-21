@@ -178,8 +178,77 @@ int nm_userinfo(int uid, char* out, int out_len) {
     return (n >= 0 && n < out_len) ? 0 : -1;
 }
 
-// AES-GCM via OpenSSL EVP
+// OpenSSL
 #include <openssl/evp.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <fcntl.h>
+
+static SSL_CTX* g_ssl_client_ctx = NULL;
+
+static void nm_ssl_ensure_init(void) {
+    if (g_ssl_client_ctx) return;
+    g_ssl_client_ctx = SSL_CTX_new(TLS_client_method());
+    SSL_CTX_set_default_verify_paths(g_ssl_client_ctx);
+    SSL_CTX_set_min_proto_version(g_ssl_client_ctx, TLS1_2_VERSION);
+}
+
+// Connect TLS over an already-connected fd. Blocks during handshake.
+// Returns SSL* as i64, or 0 on failure.
+long long nm_ssl_connect(int fd, const char* hostname) {
+    nm_ssl_ensure_init();
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+
+    SSL* ssl = SSL_new(g_ssl_client_ctx);
+    SSL_set_fd(ssl, fd);
+    if (hostname && hostname[0]) SSL_set_tlsext_host_name(ssl, hostname);
+    int ret = SSL_connect(ssl);
+
+    fcntl(fd, F_SETFL, flags);
+
+    if (ret != 1) {
+        SSL_free(ssl);
+        return 0;
+    }
+    return (long long)ssl;
+}
+
+int nm_ssl_read(long long ssl_ptr, char* buf, int len) {
+    SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
+    int n = SSL_read(ssl, buf, len);
+    if (n <= 0) {
+        int err = SSL_get_error(ssl, n);
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) return -2;
+        if (err == SSL_ERROR_ZERO_RETURN) return 0;
+        return -1;
+    }
+    return n;
+}
+
+int nm_ssl_write(long long ssl_ptr, const char* data, int len) {
+    SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
+    int n = SSL_write(ssl, data, len);
+    if (n <= 0) {
+        int err = SSL_get_error(ssl, n);
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) return -2;
+        return -1;
+    }
+    return n;
+}
+
+int nm_ssl_pending(long long ssl_ptr) {
+    SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
+    return SSL_pending(ssl);
+}
+
+void nm_ssl_shutdown(long long ssl_ptr) {
+    SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+}
+
+// AES-GCM via OpenSSL EVP
 
 int nm_aes_gcm_crypt(int encrypt,
                       const unsigned char* key, int key_len,

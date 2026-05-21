@@ -31,6 +31,13 @@ extern fn getsockname(fd: i32, addr: *u8, addrlen: *i32): i32
 extern fn shutdown(fd: i32, how: i32): i32
 extern fn nm_fs_open(path: *u8, flags: i32, mode: i32): i32
 
+// TLS via OpenSSL (helpers in entry.c)
+extern fn nm_ssl_connect(fd: i32, hostname: *u8): i64
+extern fn nm_ssl_read(ssl: i64, buf: *u8, len: i32): i32
+extern fn nm_ssl_write(ssl: i64, data: *u8, len: i32): i32
+extern fn nm_ssl_pending(ssl: i64): i32
+extern fn nm_ssl_shutdown(ssl: i64): void
+
 // macOS constants
 // AF_INET=2, SOCK_STREAM=1, SOL_SOCKET=0xffff, SO_REUSEADDR=4
 // F_SETFL=4, F_GETFL=3, O_NONBLOCK=4
@@ -465,6 +472,98 @@ fn tcpSetKeepAlive(info: *u8, _ud: *u8): void {
     }
 }
 
+// --- TLS ---
+// sslConnect(fd, hostname) → ssl handle (i64), or 0 on failure
+fn sslConnect(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let iso = ci.isolate()
+    unsafe {
+        var hostBuf: [u8; 256] = [0; 256]
+        if ci.length() > 1 {
+            let arg = ci.arg(1)
+            arg.writeUtf8(iso, hostBuf as *u8, 255)
+        }
+        let ssl = nm_ssl_connect(fd, hostBuf as *u8)
+        ci.retF64(ssl as f64)
+    }
+}
+
+// sslRead(sslHandle) → string or undefined (closed) or empty string (EAGAIN)
+fn sslRead(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let iso = ci.isolate()
+        let sslArg = ci.arg(0)
+        var sslVal: [f64; 1] = [0.0]
+        sslArg.toF64(iso, sslVal as *f64)
+        let ssl = sslVal[0] as i64
+        let buf = calloc(1, 65536)
+        let n = nm_ssl_read(ssl, buf, 65535)
+        if n > 0 {
+            ci.retStrLen(buf, n)
+        } else if n == 0 {
+            ci.retUndefined()
+        } else {
+            ci.retStr("" as *u8)
+        }
+        free(buf)
+    }
+}
+
+// sslWrite(sslHandle, data) → bytes written
+fn sslWrite(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    unsafe {
+        let sslArg = ci.arg(0)
+        var sslVal: [f64; 1] = [0.0]
+        sslArg.toF64(iso, sslVal as *f64)
+        let ssl = sslVal[0] as i64
+        let buf = calloc(1, 65536)
+        let arg = ci.arg(1)
+        var len = arg.writeUtf8(iso, buf, 65536)
+        if len > 0 {
+            let last = (buf as i64 + (len - 1) as i64) as *u8
+            if last[0] == 0 { len = len - 1 }
+        }
+        if len <= 0 {
+            free(buf)
+            ci.retI32(0)
+            return
+        }
+        let n = nm_ssl_write(ssl, buf, len)
+        free(buf)
+        ci.retI32(n)
+    }
+}
+
+// sslPending(sslHandle) → bytes pending in SSL buffer
+fn sslPending(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    unsafe {
+        let sslArg = ci.arg(0)
+        var sslVal: [f64; 1] = [0.0]
+        sslArg.toF64(iso, sslVal as *f64)
+        let ssl = sslVal[0] as i64
+        ci.retI32(nm_ssl_pending(ssl))
+    }
+}
+
+// sslShutdown(sslHandle)
+fn sslShutdown(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    unsafe {
+        let sslArg = ci.arg(0)
+        var sslVal: [f64; 1] = [0.0]
+        sslArg.toF64(iso, sslVal as *f64)
+        let ssl = sslVal[0] as i64
+        nm_ssl_shutdown(ssl)
+    }
+}
+
 fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
@@ -487,6 +586,11 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "setKeepAlive" as *u8, tcpSetKeepAlive as *u8)
         c.setMethod(exp, "watchFile" as *u8, tcpWatchFile as *u8)
         c.setMethod(exp, "unwatchFile" as *u8, tcpUnwatchFile as *u8)
+        c.setMethod(exp, "sslConnect" as *u8, sslConnect as *u8)
+        c.setMethod(exp, "sslRead" as *u8, sslRead as *u8)
+        c.setMethod(exp, "sslWrite" as *u8, sslWrite as *u8)
+        c.setMethod(exp, "sslPending" as *u8, sslPending as *u8)
+        c.setMethod(exp, "sslShutdown" as *u8, sslShutdown as *u8)
 
         // constants
         let i = Isolate { ptr: _iso }
