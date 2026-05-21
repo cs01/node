@@ -183,6 +183,23 @@ extern "C" v8c_isolate* v8c_isolate_new(void) {
     return reinterpret_cast<v8c_isolate*>(iso);
 }
 
+extern "C" v8c_isolate* v8c_isolate_new_with_heap_limit(size_t max_heap_mb) {
+    v8::Isolate::CreateParams params;
+    params.array_buffer_allocator =
+        v8::ArrayBuffer::Allocator::NewDefaultAllocator();
+    params.constraints.ConfigureDefaultsFromHeapSize(0, max_heap_mb * 1024 * 1024);
+    v8::Isolate* iso = v8::Isolate::New(params);
+
+    auto* ht = new HandleTable(iso);
+    auto* tt = new TemplateTable(iso);
+    auto* pt = new PrivateTable(iso);
+    iso->SetData(kHandleTableSlot, ht);
+    iso->SetData(kHandleTableSlot + 1, tt);
+    iso->SetData(kPrivateTableSlot, pt);
+
+    return reinterpret_cast<v8c_isolate*>(iso);
+}
+
 extern "C" void v8c_isolate_dispose(v8c_isolate* iso) {
     auto* i = ISO(iso);
     auto* ht = get_ht(iso);

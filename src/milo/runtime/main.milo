@@ -18,6 +18,7 @@ extern fn getpid(): i32
 extern fn isatty(fd: i32): i32
 extern fn getppid(): i32
 extern fn getcwd(buf: *u8, size: i64): *u8
+extern fn atoi(s: *u8): i32
 extern fn tcgetattr(fd: i32, termios: *u8): i32
 extern fn tcsetattr(fd: i32, actions: i32, termios: *u8): i32
 extern fn cfmakeraw(termios: *u8): void
@@ -45,6 +46,7 @@ extern fn nm_init_zlib(iso: *u8, ctx: *u8, exports: i32): void
 extern fn v8c_platform_init(execPath: *u8): i32
 extern fn v8c_platform_shutdown(): void
 extern fn v8c_isolate_new(): *u8
+extern fn v8c_isolate_new_with_heap_limit(maxHeapMb: i64): *u8
 extern fn v8c_isolate_enter(iso: *u8): void
 extern fn v8c_isolate_exit(iso: *u8): void
 extern fn v8c_isolate_dispose(iso: *u8): void
@@ -412,10 +414,37 @@ fn nm_init_console(_iso: *u8, ctx_ptr: *u8, exports: i32): void {
 }
 
 fn milo_node_main(argc: i32, argv: *i64): i32 {
-    // Convert C argc/argv to Vec<string> for stdlib argparse
+    // Convert C argc/argv to Vec<string>, splitting --key=value into two args
     var argVec: Vec<string> = Vec.new()
     for ai in 0..argc as i64 {
-        unsafe { argVec.push(_cstrToString(argv[ai] as *u8)) }
+        unsafe {
+            let arg = _cstrToString(argv[ai] as *u8)
+            let argPtr = arg.cstr()
+            let argLen = strlen(argPtr)
+            var eqPos = argLen + 1
+            if argLen > 2 && argPtr[0] == 45 && argPtr[1] == 45 {
+                var si: i64 = 2
+                while si < argLen {
+                    if argPtr[si] == 61 {
+                        eqPos = si
+                        si = argLen
+                    }
+                    si = si + 1
+                }
+            }
+            if eqPos < argLen {
+                var keyBuf: [u8; 256] = [0; 256]
+                var vi: i64 = 0
+                while vi < eqPos {
+                    keyBuf[vi] = argPtr[vi]
+                    vi = vi + 1
+                }
+                argVec.push(_cstrToString(keyBuf as *u8))
+                argVec.push(_cstrToString((argPtr as i64 + eqPos + 1) as *u8))
+            } else {
+                argVec.push(arg)
+            }
+        }
     }
 
     var parser = newParser("milo-node", "Node.js runtime on Milo (" + miloNodeVersion() + ")")
@@ -424,6 +453,7 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
     parser.addString("require", "r", "Preload module before running", "")
     parser.addBool("interactive", "i", "Start REPL (read-eval-print loop)")
     parser.addBool("version", "v", "Print version and exit")
+    parser.addString("max-old-space-size", "", "V8 heap limit in MB (default: 512)", "")
     parser.addOptionalPositional("file", "JavaScript file to execute")
     parser.enableTrailingArgs()
 
@@ -438,6 +468,13 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
     var scriptFile: *u8 = 0 as *u8
     var printResult = false
     var preloadModule: *u8 = 0 as *u8
+    // Default 512MB heap limit; override with --max-old-space-size=N
+    var maxHeapMb: i64 = 512
+    if parsed.has("max-old-space-size") {
+        let heapStr = parsed.getString("max-old-space-size")
+        maxHeapMb = atoi(heapStr.cstr()) as i64
+        if maxHeapMb <= 0 { maxHeapMb = 512 }
+    }
 
     if parsed.has("require") {
         preloadModule = parsed.getString("require").cstr()
@@ -535,7 +572,7 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
             return 1
         }
 
-        let isoPtr = v8c_isolate_new()
+        let isoPtr = v8c_isolate_new_with_heap_limit(maxHeapMb)
         if isoPtr as i64 == 0 {
             printErr("error: v8c_isolate_new failed\n" as *u8)
             return 1

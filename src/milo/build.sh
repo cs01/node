@@ -5,45 +5,105 @@ set -e
 MILO_DIR="${MILO_DIR:-$HOME/git/milo}"
 NODE_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$NODE_DIR/out/Release"
+JOBS="${JOBS:-8}"
 
-echo "=== generating version ==="
+# Generate version.milo with embedded git hash
 GIT_HASH=$(cd "$NODE_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-cat > "$NODE_DIR/src/milo/runtime/version.milo" <<MILO
-fn miloNodeVersion(): string {
-    return "0.1.0+${GIT_HASH}"
+VERSION_FILE="$NODE_DIR/src/milo/runtime/version.milo"
+VERSION_CONTENT="fn miloNodeVersion(): string {
+    return \"0.1.0+${GIT_HASH}\"
+}"
+if [ ! -f "$VERSION_FILE" ] || [ "$(cat "$VERSION_FILE")" != "$VERSION_CONTENT" ]; then
+    echo "$VERSION_CONTENT" > "$VERSION_FILE"
+fi
+
+# needs_rebuild: skip if .o is newer than .milo source
+needs_rebuild() {
+    local src="$1" obj="$2"
+    [ ! -f "$obj" ] || [ "$src" -nt "$obj" ]
 }
-MILO
+
+# Compile one Milo file if changed
+compile_milo() {
+    local src="$1" obj="$2" label="$3"
+    if needs_rebuild "$src" "$obj"; then
+        cd "$MILO_DIR"
+        bun src/main.ts emit-obj --no-entry "$src" -o "$obj"
+        cd "$NODE_DIR"
+    fi
+}
+
+MILO_SOURCES=(
+    "src/milo/runtime/version.milo:milo_version"
+    "src/milo/runtime/main.milo:milo_main"
+    "src/milo/runtime/binding_registry.milo:milo_binding_registry"
+    "src/milo/v8/v8.milo:milo_v8"
+    "src/milo/bindings/os.milo:milo_os"
+    "src/milo/bindings/env.milo:milo_env"
+    "src/milo/bindings/process.milo:milo_process"
+    "src/milo/bindings/fs.milo:milo_fs"
+    "src/milo/bindings/util.milo:milo_util"
+    "src/milo/bindings/buffer.milo:milo_buffer"
+    "src/milo/bindings/timers.milo:milo_timers"
+    "src/milo/bindings/tcp.milo:milo_tcp"
+    "src/milo/bindings/crypto.milo:milo_crypto"
+    "src/milo/bindings/spawn.milo:milo_spawn"
+    "src/milo/bindings/dns.milo:milo_dns"
+    "src/milo/bindings/zlib.milo:milo_zlib"
+)
 
 echo "=== compiling milo sources ==="
-cd "$MILO_DIR"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/runtime/version.milo" -o "$OUT/milo_version.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/runtime/main.milo" -o "$OUT/milo_main.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/runtime/binding_registry.milo" -o "$OUT/milo_binding_registry.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/v8/v8.milo" -o "$OUT/milo_v8.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/os.milo" -o "$OUT/milo_os.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/env.milo" -o "$OUT/milo_env.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/process.milo" -o "$OUT/milo_process.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/fs.milo" -o "$OUT/milo_fs.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/util.milo" -o "$OUT/milo_util.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/buffer.milo" -o "$OUT/milo_buffer.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/timers.milo" -o "$OUT/milo_timers.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/tcp.milo" -o "$OUT/milo_tcp.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/crypto.milo" -o "$OUT/milo_crypto.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/spawn.milo" -o "$OUT/milo_spawn.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/dns.milo" -o "$OUT/milo_dns.o"
-bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/zlib.milo" -o "$OUT/milo_zlib.o"
-cd "$NODE_DIR"
+PIDS=()
+RUNNING=0
+for entry in "${MILO_SOURCES[@]}"; do
+    src="${entry%%:*}"
+    name="${entry##*:}"
+    if needs_rebuild "$NODE_DIR/$src" "$OUT/${name}.o"; then
+        (
+            cd "$MILO_DIR"
+            bun src/main.ts emit-obj --no-entry "$NODE_DIR/$src" -o "$OUT/${name}.o"
+        ) &
+        PIDS+=($!)
+        RUNNING=$((RUNNING + 1))
+        # Throttle to $JOBS parallel compilations
+        if [ "$RUNNING" -ge "$JOBS" ]; then
+            wait "${PIDS[0]}"
+            PIDS=("${PIDS[@]:1}")
+            RUNNING=$((RUNNING - 1))
+        fi
+    fi
+done
+# Wait for remaining
+for pid in "${PIDS[@]}"; do
+    wait "$pid" || exit 1
+done
 
 OPENSSL_PREFIX="$(brew --prefix openssl@3 2>/dev/null || echo /opt/homebrew/opt/openssl@3)"
 
-echo "=== compiling c helpers ==="
-clang -c -I"$NODE_DIR/deps/v8/include" -I"$OPENSSL_PREFIX/include" -o "$OUT/entry.o" src/milo/runtime/entry.c
-clang -c -o "$OUT/binding_registry_c.o" src/milo/runtime/binding_registry.c
-
-echo "=== compiling v8capi ==="
-clang++ -c -std=c++20 \
-  -I"$NODE_DIR/deps/v8/include" -I"$NODE_DIR/deps/v8capi/include" \
-  -o "$OUT/v8capi.o" deps/v8capi/src/v8capi.cc
+echo "=== compiling c/c++ ==="
+# C helpers + v8capi in parallel, incremental
+(
+    if needs_rebuild "$NODE_DIR/src/milo/runtime/entry.c" "$OUT/entry.o"; then
+        clang -c -I"$NODE_DIR/deps/v8/include" -I"$OPENSSL_PREFIX/include" -o "$OUT/entry.o" src/milo/runtime/entry.c
+    fi
+) &
+P1=$!
+(
+    if needs_rebuild "$NODE_DIR/src/milo/runtime/binding_registry.c" "$OUT/binding_registry_c.o"; then
+        clang -c -o "$OUT/binding_registry_c.o" src/milo/runtime/binding_registry.c
+    fi
+) &
+P2=$!
+(
+    if needs_rebuild "$NODE_DIR/deps/v8capi/src/v8capi.cc" "$OUT/v8capi.o" || \
+       needs_rebuild "$NODE_DIR/deps/v8capi/include/v8capi.h" "$OUT/v8capi.o"; then
+        clang++ -c -std=c++20 \
+          -I"$NODE_DIR/deps/v8/include" -I"$NODE_DIR/deps/v8capi/include" \
+          -o "$OUT/v8capi.o" deps/v8capi/src/v8capi.cc
+    fi
+) &
+P3=$!
+wait $P1 $P2 $P3 || exit 1
 
 echo "=== linking milo-node ==="
 clang++ -o "$OUT/milo-node" \

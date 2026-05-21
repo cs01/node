@@ -57,6 +57,7 @@ int32_t   v8c_platform_init(const char* exec_path);
 void      v8c_platform_shutdown(void);
 
 v8c_isolate* v8c_isolate_new(void);
+v8c_isolate* v8c_isolate_new_with_heap_limit(size_t max_heap_mb);
 void         v8c_isolate_dispose(v8c_isolate* iso);
 void         v8c_isolate_enter(v8c_isolate* iso);
 void         v8c_isolate_exit(v8c_isolate* iso);
