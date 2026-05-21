@@ -1609,6 +1609,19 @@ static void set_fast_method(v8::Isolate* iso, v8::Local<v8::Context> context,
     obj->Set(context, key, ft->GetFunction(context).ToLocalChecked()).Check();
 }
 
+// ---- _fastApiStats() → {slow, fast} for perf verification ----
+
+static void SlowFastApiStats(const FCI& info) {
+    auto* iso = info.GetIsolate();
+    auto ctx = iso->GetCurrentContext();
+    auto obj = v8::Object::New(iso);
+    obj->Set(ctx, v8::String::NewFromUtf8(iso, "slow").ToLocalChecked(),
+             v8::Number::New(iso, static_cast<double>(g_slow_count))).Check();
+    obj->Set(ctx, v8::String::NewFromUtf8(iso, "fast").ToLocalChecked(),
+             v8::Number::New(iso, static_cast<double>(g_fast_count))).Check();
+    info.GetReturnValue().Set(obj);
+}
+
 extern "C" void v8c_register_buffer_fast_ops(v8c_context* ctx, v8c_value exports) {
     auto* i = ctx_isolate(ctx);
     auto context = ctx_local(ctx);
@@ -1620,4 +1633,9 @@ extern "C" void v8c_register_buffer_fast_ops(v8c_context* ctx, v8c_value exports
     set_fast_method(i, context, obj, "copy",         SlowCopy,        &cf_copy);
     set_fast_method(i, context, obj, "fill",         SlowFill,        &cf_fill);
     set_fast_method(i, context, obj, "fillRange",    SlowFillRange,   &cf_fill_range);
+
+    // stats for verifying fast path activation
+    auto ft = v8::FunctionTemplate::New(i, SlowFastApiStats);
+    auto key = v8::String::NewFromUtf8(i, "_fastApiStats").ToLocalChecked();
+    obj->Set(context, key, ft->GetFunction(context).ToLocalChecked()).Check();
 }

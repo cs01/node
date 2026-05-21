@@ -6,8 +6,17 @@ MILO_DIR="${MILO_DIR:-$HOME/git/milo}"
 NODE_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$NODE_DIR/out/Release"
 
+echo "=== generating version ==="
+GIT_HASH=$(cd "$NODE_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+cat > "$NODE_DIR/src/milo/runtime/version.milo" <<MILO
+fn miloNodeVersion(): string {
+    return "0.1.0+${GIT_HASH}"
+}
+MILO
+
 echo "=== compiling milo sources ==="
 cd "$MILO_DIR"
+bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/runtime/version.milo" -o "$OUT/milo_version.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/runtime/main.milo" -o "$OUT/milo_main.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/runtime/binding_registry.milo" -o "$OUT/milo_binding_registry.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/v8/v8.milo" -o "$OUT/milo_v8.o"
@@ -40,6 +49,7 @@ echo "=== linking milo-node ==="
 clang++ -o "$OUT/milo-node" \
   "$OUT/entry.o" \
   "$OUT/binding_registry_c.o" \
+  "$OUT/milo_version.o" \
   "$OUT/milo_main.o" \
   "$OUT/milo_binding_registry.o" \
   "$OUT/milo_v8.o" \

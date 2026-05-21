@@ -9,22 +9,6 @@ extern fn free(ptr: *u8): void
 
 // V8 Fast API — buffer ops registered directly in C for JIT inlining
 extern fn v8c_register_buffer_fast_ops(ctx: *u8, exports: i32): void
-extern fn v8c_fast_api_stats(slow: *i64, fast: *i64): void
-
-fn bufFastApiStats(info: *u8, _ud: *u8): void {
-    let ci = CallbackInfo { ptr: info }
-    let iso = ci.isolate()
-    var slow: i64 = 0
-    var fast: i64 = 0
-    unsafe {
-        v8c_fast_api_stats(&slow, &fast)
-        let result = iso.object()
-        let ctx = ci.context()
-        ctx.objectSet(result, "slow" as *u8, iso.number(slow as f64))
-        ctx.objectSet(result, "fast" as *u8, iso.number(fast as f64))
-        ci.ret(result)
-    }
-}
 
 fn bufCreateUnsafeArrayBuffer(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
@@ -299,7 +283,6 @@ fn nm_init_buffer(_iso: *u8, ctx: *u8, exports: i32): void {
 
         // fast buffer ops via V8 Fast API (JIT-inlined C, bypasses FCI overhead)
         v8c_register_buffer_fast_ops(ctx, exports)
-        c.setMethod(exp, "_fastApiStats" as *u8, bufFastApiStats as *u8)
         c.setMethod(exp, "hexEncode" as *u8, bufHexEncode as *u8)
         c.setMethod(exp, "hexDecode" as *u8, bufHexDecode as *u8)
         c.setMethod(exp, "base64Encode" as *u8, bufBase64Encode as *u8)

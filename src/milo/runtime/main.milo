@@ -2,6 +2,7 @@
 
 from "../v8/v8" import { Isolate, Context, Value, CallbackInfo, HandleScope, TryCatch }
 from "std/argparse" import { newParser, ArgParser, ParsedArgs }
+from "version" import { miloNodeVersion }
 
 // POSIX
 extern fn write(fd: i32, buf: *u8, len: i64): i64
@@ -417,19 +418,34 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         unsafe { argVec.push(_cstrToString(argv[ai] as *u8)) }
     }
 
-    var parser = newParser("milo-node", "Node.js runtime on Milo")
+    var parser = newParser("milo-node", "Node.js runtime on Milo (" + miloNodeVersion() + ")")
     parser.addString("eval", "e", "Evaluate JavaScript string", "")
     parser.addString("print", "p", "Evaluate and print result", "")
+    parser.addString("require", "r", "Preload module before running", "")
+    parser.addBool("interactive", "i", "Start REPL (read-eval-print loop)")
+    parser.addBool("version", "v", "Print version and exit")
     parser.addOptionalPositional("file", "JavaScript file to execute")
     parser.enableTrailingArgs()
 
     let parsed = parser.parseFrom(argVec)
 
+    if parsed.has("version") {
+        print(miloNodeVersion())
+        return 0
+    }
+
     var script: *u8 = 0 as *u8
     var scriptFile: *u8 = 0 as *u8
     var printResult = false
+    var preloadModule: *u8 = 0 as *u8
 
-    if parsed.has("eval") {
+    if parsed.has("require") {
+        preloadModule = parsed.getString("require").cstr()
+    }
+
+    if parsed.has("interactive") {
+        script = "const repl = require('repl'); repl.start('> ')".cstr()
+    } else if parsed.has("eval") {
         let evalStr = parsed.getString("eval")
         script = evalStr.cstr()
     } else if parsed.has("print") {
@@ -569,6 +585,33 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
             return 1
         }
         v8c_try_catch_delete(tc)
+
+        // Preload --require module if specified
+        if preloadModule as i64 != 0 {
+            var reqCode: [u8; 2048] = [0; 2048]
+            let prefix = "require('"
+            let suffix = "')"
+            var ri: i64 = 0
+            var rj: i64 = 0
+            while rj < strlen(prefix) {
+                reqCode[ri] = prefix[rj]
+                ri = ri + 1
+                rj = rj + 1
+            }
+            rj = 0
+            while rj < strlen(preloadModule) {
+                reqCode[ri] = preloadModule[rj]
+                ri = ri + 1
+                rj = rj + 1
+            }
+            rj = 0
+            while rj < strlen(suffix) {
+                reqCode[ri] = suffix[rj]
+                ri = ri + 1
+                rj = rj + 1
+            }
+            ctx.compileRun(reqCode as *u8, ri as i32, "[require]" as *u8)
+        }
 
         // Run user script
         let scriptLen = strlen(script) as i32
