@@ -262,6 +262,76 @@ function appendFile(path, data, opts, cb) {
 }
 function exists(path, cb) { process.nextTick(() => cb(existsSync(path))); }
 
+// --- fs.watch / watchFile / unwatchFile via kqueue EVFILT_VNODE ---
+const EventEmitter = require('events');
+const tcp = internalBinding('tcp');
+const net = require('net');
+const path = require('path');
+
+// NOTE_DELETE=1, NOTE_WRITE=2, NOTE_EXTEND=4, NOTE_ATTRIB=8, NOTE_RENAME=32
+class FSWatcher extends EventEmitter {
+  constructor(filename, options) {
+    super();
+    this._filename = filename;
+    net._ensurePoll();
+    this._fd = tcp.watchFile(filename);
+    if (this._fd < 0) {
+      process.nextTick(() => this.emit('error', new Error('watch ' + filename + ' failed')));
+      return;
+    }
+    net._fileWatchers.set(this._fd, this);
+  }
+  _onEvent(fflags) {
+    const isRename = !!(fflags & 32);
+    const eventType = isRename ? 'rename' : 'change';
+    this.emit('change', eventType, path.basename(this._filename));
+  }
+  close() {
+    if (this._fd >= 0) {
+      net._fileWatchers.delete(this._fd);
+      tcp.unwatchFile(this._fd);
+      this._fd = -1;
+    }
+    this.emit('close');
+  }
+  ref() { return this; }
+  unref() { return this; }
+}
+
+function watch(filename, options, listener) {
+  if (typeof options === 'function') { listener = options; options = {}; }
+  const watcher = new FSWatcher(String(filename), options);
+  if (listener) watcher.on('change', listener);
+  return watcher;
+}
+
+const _watchFileTimers = new Map();
+
+function watchFile(filename, options, listener) {
+  if (typeof options === 'function') { listener = options; options = {}; }
+  const interval = (options && options.interval) || 5007;
+  const fname = String(filename);
+  let prev = null;
+  try { prev = statSync(fname); } catch {}
+  const timer = setInterval(() => {
+    let curr = null;
+    try { curr = statSync(fname); } catch {}
+    if (prev && curr && prev.mtimeMs !== curr.mtimeMs) {
+      listener(curr, prev);
+    } else if (!prev && curr) {
+      listener(curr, prev || curr);
+    }
+    prev = curr;
+  }, interval);
+  _watchFileTimers.set(fname, timer);
+}
+
+function unwatchFile(filename, listener) {
+  const fname = String(filename);
+  const timer = _watchFileTimers.get(fname);
+  if (timer) { clearInterval(timer); _watchFileTimers.delete(fname); }
+}
+
 const promises = {
   readFile: (path, opts) => Promise.resolve(readFileSync(path, opts)),
   writeFile: (path, data) => Promise.resolve(writeFileSync(path, data)),
@@ -284,6 +354,7 @@ module.exports = {
   symlinkSync, lstatSync, readlinkSync,
   openSync, closeSync, fstatSync, writeSync, readSync,
   createReadStream, createWriteStream,
+  watch, watchFile, unwatchFile, FSWatcher,
   promises,
   constants: internalBinding('constants').fs,
 };

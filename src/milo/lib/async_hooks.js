@@ -1,29 +1,134 @@
-// async_hooks module — stub
+// async_hooks module — AsyncLocalStorage with real async propagation
 'use strict';
+
+// Global registry of all active AsyncLocalStorage instances and their current stores
+const _stores = new Map();
+
+class AsyncLocalStorage {
+  constructor() {
+    this._id = AsyncLocalStorage._nextId++;
+  }
+  getStore() { return _stores.get(this._id); }
+  run(store, fn, ...args) {
+    const prev = _stores.get(this._id);
+    _stores.set(this._id, store);
+    try { return fn(...args); }
+    finally {
+      if (prev === undefined) _stores.delete(this._id);
+      else _stores.set(this._id, prev);
+    }
+  }
+  exit(fn, ...args) {
+    const prev = _stores.get(this._id);
+    _stores.delete(this._id);
+    try { return fn(...args); }
+    finally {
+      if (prev === undefined) _stores.delete(this._id);
+      else _stores.set(this._id, prev);
+    }
+  }
+  enterWith(store) { _stores.set(this._id, store); }
+  disable() { _stores.delete(this._id); }
+  static snapshot() {
+    const snapshot = new Map(_stores);
+    return (fn, ...args) => {
+      const prev = new Map(_stores);
+      for (const [k, v] of snapshot) _stores.set(k, v);
+      for (const k of _stores.keys()) { if (!snapshot.has(k)) _stores.delete(k); }
+      try { return fn(...args); }
+      finally {
+        _stores.clear();
+        for (const [k, v] of prev) _stores.set(k, v);
+      }
+    };
+  }
+}
+AsyncLocalStorage._nextId = 1;
+
+// Capture current async context as a snapshot
+function _captureContext() {
+  return new Map(_stores);
+}
+
+// Restore a captured context, run fn, then put back previous
+function _runInContext(snapshot, fn, args) {
+  const prev = new Map(_stores);
+  _stores.clear();
+  for (const [k, v] of snapshot) _stores.set(k, v);
+  try { return fn.apply(undefined, args); }
+  finally {
+    _stores.clear();
+    for (const [k, v] of prev) _stores.set(k, v);
+  }
+}
+
+// Wrap a callback to carry its creation-time async context
+function _wrapCallback(fn) {
+  if (typeof fn !== 'function') return fn;
+  const snapshot = _captureContext();
+  return function(...args) { return _runInContext(snapshot, fn, args); };
+}
+
+// Patch setTimeout/setInterval/process.nextTick to propagate context
+const _origSetTimeout = globalThis.setTimeout;
+const _origSetInterval = globalThis.setInterval;
+
+globalThis.setTimeout = function(fn, delay, ...args) {
+  return _origSetTimeout.call(globalThis, _wrapCallback(fn), delay, ...args);
+};
+globalThis.setTimeout.__proto__ = _origSetTimeout;
+
+globalThis.setInterval = function(fn, delay, ...args) {
+  return _origSetInterval.call(globalThis, _wrapCallback(fn), delay, ...args);
+};
+globalThis.setInterval.__proto__ = _origSetInterval;
+
+if (typeof process !== 'undefined' && process.nextTick) {
+  const _origNextTick = process.nextTick;
+  process.nextTick = function(fn, ...args) {
+    return _origNextTick.call(process, _wrapCallback(fn), ...args);
+  };
+}
+
+// Patch Promise.prototype.then/catch/finally to propagate context
+const _origThen = Promise.prototype.then;
+Promise.prototype.then = function(onFulfilled, onRejected) {
+  return _origThen.call(this,
+    onFulfilled ? _wrapCallback(onFulfilled) : onFulfilled,
+    onRejected ? _wrapCallback(onRejected) : onRejected
+  );
+};
 
 class AsyncResource {
   constructor(type, opts) {
     this.type = type;
-    this.asyncId = AsyncResource._nextId++;
-    this.triggerAsyncId = (opts && opts.triggerAsyncId) || 0;
+    this._asyncId = AsyncResource._nextId++;
+    this._triggerAsyncId = (opts && opts.triggerAsyncId) || 0;
+    this._snapshot = _captureContext();
   }
-  runInAsyncScope(fn, thisArg, ...args) { return fn.apply(thisArg, args); }
+  runInAsyncScope(fn, thisArg, ...args) {
+    const prev = new Map(_stores);
+    _stores.clear();
+    for (const [k, v] of this._snapshot) _stores.set(k, v);
+    try { return fn.apply(thisArg, args); }
+    finally {
+      _stores.clear();
+      for (const [k, v] of prev) _stores.set(k, v);
+    }
+  }
   emitDestroy() { return this; }
-  asyncId() { return this.asyncId; }
-  triggerAsyncId() { return this.triggerAsyncId; }
-  bind(fn) { return fn; }
-  static bind(fn) { return fn; }
+  asyncId() { return this._asyncId; }
+  triggerAsyncId() { return this._triggerAsyncId; }
+  bind(fn) {
+    const resource = this;
+    return function(...args) { return resource.runInAsyncScope(fn, this, ...args); };
+  }
+  static bind(fn) {
+    const resource = new AsyncResource('bound');
+    return resource.bind(fn);
+  }
 }
 AsyncResource._nextId = 1;
-
-class AsyncLocalStorage {
-  constructor() { this._store = undefined; }
-  getStore() { return this._store; }
-  run(store, fn, ...args) { const prev = this._store; this._store = store; try { return fn(...args); } finally { this._store = prev; } }
-  exit(fn, ...args) { const prev = this._store; this._store = undefined; try { return fn(...args); } finally { this._store = prev; } }
-  enterWith(store) { this._store = store; }
-  disable() { this._store = undefined; }
-}
 
 function createHook(callbacks) {
   return { enable() { return this; }, disable() { return this; } };

@@ -18,7 +18,8 @@ Full build: `bash src/milo/build.sh`
 
 
 ### fs
-- [ ] `fs.watch()` / `watchFile()` / `unwatchFile()` — kqueue-based file watching
+- [ ] `fs.watch()` recursive option — watch entire directory trees
+- [ ] `fs.createReadStream` / `createWriteStream` — seek/position support
 
 ### tls
 - [ ] `tls.connect()` — TLS client via SecureTransport or OpenSSL

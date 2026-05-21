@@ -34,6 +34,8 @@ extern fn nm_cpu_speed(): i64
 extern fn nm_cpu_times(outTimes: *u32, maxCpus: i32): i32
 extern fn nm_net_interfaces(out: *u8, outLen: i32): i32
 extern fn nm_userinfo(uid: i32, out: *u8, outLen: i32): i32
+extern fn nm_uname_machine(out: *u8, outLen: i32): i32
+extern fn nm_uname_sysname(out: *u8, outLen: i32): i32
 
 fn osGetHostname(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
@@ -262,6 +264,8 @@ fn nm_init_os(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "getEuid" as *u8, osGetEuid as *u8)
         c.setMethod(exp, "getEgid" as *u8, osGetEgid as *u8)
         c.setMethod(exp, "getUserInfo" as *u8, osGetUserInfo as *u8)
+        c.setMethod(exp, "getMachine" as *u8, osGetMachine as *u8)
+        c.setMethod(exp, "getSysname" as *u8, osGetSysname as *u8)
     }
 }
 
@@ -278,6 +282,30 @@ fn osGetGid(info: *u8, _ud: *u8): void {
 fn osGetEuid(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     unsafe { ci.retU32(geteuid()) }
+}
+
+fn osGetMachine(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    var buf: [u8; 64] = [0; 64]
+    unsafe {
+        if nm_uname_machine(buf as *u8, 64) == 0 {
+            ci.retStr(buf as *u8)
+        } else {
+            ci.retStr("unknown" as *u8)
+        }
+    }
+}
+
+fn osGetSysname(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    var buf: [u8; 64] = [0; 64]
+    unsafe {
+        if nm_uname_sysname(buf as *u8, 64) == 0 {
+            ci.retStr(buf as *u8)
+        } else {
+            ci.retStr("Darwin" as *u8)
+        }
+    }
 }
 
 fn osGetUserInfo(info: *u8, _ud: *u8): void {

@@ -29,6 +29,7 @@ extern fn inet_pton(af: i32, src: *u8, dst: *u8): i32
 extern fn inet_ntop(af: i32, src: *u8, dst: *u8, size: i32): *u8
 extern fn getsockname(fd: i32, addr: *u8, addrlen: *i32): i32
 extern fn shutdown(fd: i32, how: i32): i32
+extern fn nm_fs_open(path: *u8, flags: i32, mode: i32): i32
 
 // macOS constants
 // AF_INET=2, SOCK_STREAM=1, SOL_SOCKET=0xffff, SO_REUSEADDR=4
@@ -72,6 +73,35 @@ fn kevent_set(buf: *u8, ident: i64, filter: i32, flags: i32): void {
         dp[0] = 0
         let up = (p as i64 + 24) as *i64
         up[0] = 0
+    }
+}
+
+fn kevent_set_vnode(buf: *u8, ident: i64, flags: i32, fflags: i32): void {
+    unsafe {
+        (buf as *i64)[0] = ident
+        // filter = EVFILT_VNODE = -4
+        let fp = (buf as i64 + 8) as *u8
+        fp[0] = 0xfc as u8
+        fp[1] = 0xff as u8
+        // flags
+        let flp = (buf as i64 + 10) as *u8
+        flp[0] = (flags & 0xff) as u8
+        flp[1] = ((flags >> 8) & 0xff) as u8
+        // fflags (NOTE_* flags)
+        let ffp = (buf as i64 + 12) as *i32
+        ffp[0] = fflags
+        // data, udata = 0
+        let dp = (buf as i64 + 16) as *i64
+        dp[0] = 0
+        let up = (buf as i64 + 24) as *i64
+        up[0] = 0
+    }
+}
+
+fn kevent_get_fflags(buf: *u8): i32 {
+    unsafe {
+        let ffp = (buf as i64 + 12) as *i32
+        return ffp[0]
     }
 }
 
@@ -345,15 +375,65 @@ fn pollWait(info: *u8, _ud: *u8): void {
             let filter = kevent_get_filter(ev_ptr)
             let flags = kevent_get_flags(ev_ptr)
 
+            let fflags = kevent_get_fflags(ev_ptr)
             let obj = iso.object()
             ctx.objectSet(obj, "fd" as *u8, iso.int32(ident as i32))
             ctx.objectSet(obj, "filter" as *u8, iso.int32(filter))
             ctx.objectSet(obj, "flags" as *u8, iso.int32(flags))
+            ctx.objectSet(obj, "fflags" as *u8, iso.int32(fflags))
             ctx.objectSetIndex(arr, i as u32, obj)
             i = i + 1
         }
         free(events)
         ci.ret(arr)
+    }
+}
+
+// --- file watching via kqueue EVFILT_VNODE ---
+// NOTE_DELETE=1, NOTE_WRITE=2, NOTE_EXTEND=4, NOTE_ATTRIB=8, NOTE_LINK=16, NOTE_RENAME=32, NOTE_REVOKE=64
+// EV_ADD=1, EV_ENABLE=4, EV_CLEAR=0x20
+
+// watchFile(path) -> fd (or -1 on error)
+fn tcpWatchFile(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    unsafe {
+        var pathBuf: [u8; 4096] = [0; 4096]
+        let plen = ci.arg(0).writeUtf8(iso, pathBuf as *u8, 4096)
+        if plen <= 0 {
+            ci.retI32(-1)
+            return
+        }
+        // O_EVTONLY = 0x8000 — open for kqueue monitoring only
+        let fd = nm_fs_open(pathBuf as *u8, 0x8000, 0)
+        if fd < 0 {
+            ci.retI32(-1)
+            return
+        }
+        if kq_fd < 0 {
+            kq_fd = kqueue()
+        }
+        var ev: [u8; 32] = [0; 32]
+        // EV_ADD | EV_ENABLE | EV_CLEAR = 1 | 4 | 0x20 = 0x25
+        // NOTE_DELETE|NOTE_WRITE|NOTE_EXTEND|NOTE_ATTRIB|NOTE_RENAME = 1|2|4|8|32 = 47
+        kevent_set_vnode(ev as *u8, fd as i64, 0x25, 47)
+        kevent(kq_fd, ev as *u8, 1, 0 as *u8, 0, 0 as *u8)
+        ci.retI32(fd)
+    }
+}
+
+// unwatchFile(fd)
+fn tcpUnwatchFile(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    unsafe {
+        if fd >= 0 {
+            // EV_DELETE = 2
+            var ev: [u8; 32] = [0; 32]
+            kevent_set_vnode(ev as *u8, fd as i64, 2, 0)
+            kevent(kq_fd, ev as *u8, 1, 0 as *u8, 0, 0 as *u8)
+            close(fd)
+        }
     }
 }
 
@@ -400,6 +480,8 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "pollWait" as *u8, pollWait as *u8)
         c.setMethod(exp, "setNoDelay" as *u8, tcpSetNoDelay as *u8)
         c.setMethod(exp, "setKeepAlive" as *u8, tcpSetKeepAlive as *u8)
+        c.setMethod(exp, "watchFile" as *u8, tcpWatchFile as *u8)
+        c.setMethod(exp, "unwatchFile" as *u8, tcpUnwatchFile as *u8)
 
         // constants
         let i = Isolate { ptr: _iso }

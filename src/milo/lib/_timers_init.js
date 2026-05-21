@@ -102,6 +102,7 @@ globalThis.__hasIO = function() {
   try {
     const net = require('net');
     return (net.Server._servers && net.Server._servers.size > 0) ||
-           (net.Socket._sockets && net.Socket._sockets.size > 0);
+           (net.Socket._sockets && net.Socket._sockets.size > 0) ||
+           (net._fileWatchers && net._fileWatchers.size > 0);
   } catch { return false; }
 };

@@ -7,6 +7,7 @@ const tcp = internalBinding('tcp');
 const EVFILT_READ = tcp.EVFILT_READ;   // -1
 const EVFILT_WRITE = tcp.EVFILT_WRITE; // -2
 const EV_EOF = tcp.EV_EOF;             // 0x8000
+const EVFILT_VNODE = -4;
 
 let pollInited = false;
 function ensurePoll() {
@@ -251,6 +252,13 @@ function _pollOnce(timeout) {
     const filter = ev.filter;
     const flags = ev.flags;
 
+    // file watcher vnode events
+    if (filter === EVFILT_VNODE) {
+      const watcher = _fileWatchers.get(fd);
+      if (watcher) watcher._onEvent(ev.fflags || 0);
+      continue;
+    }
+
     // server accept
     const server = Server._servers.get(fd);
     if (server && filter === EVFILT_READ) {
@@ -276,6 +284,9 @@ function _pollOnce(timeout) {
   }
   return events.length;
 }
+
+// --- file watcher registry (used by fs.watch) ---
+const _fileWatchers = new Map();
 
 function createServer(options, connectionListener) {
   return new Server(options, connectionListener);
@@ -346,5 +357,7 @@ module.exports = {
   isIPv6: (s) => { if (typeof s !== 'string' && s != null) try { s = '' + s; } catch { return false; } return isIP(s) === 6; },
   setDefaultAutoSelectFamilyAttemptTimeout: () => {},
   getDefaultAutoSelectFamilyAttemptTimeout: () => 5000,
+  _fileWatchers,
+  _ensurePoll: ensurePoll,
   _pollOnce,
 };

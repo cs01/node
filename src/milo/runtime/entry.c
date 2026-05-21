@@ -150,6 +150,23 @@ int nm_dns_reverse(const char* ip, char* out_hostname, int out_len) {
     return getnameinfo(sa, sa_len, out_hostname, out_len, NULL, 0, 0);
 }
 
+// uname helper — machine architecture string
+#include <sys/utsname.h>
+
+int nm_uname_machine(char* out, int out_len) {
+    struct utsname u;
+    if (uname(&u) != 0) return -1;
+    int n = snprintf(out, out_len, "%s", u.machine);
+    return (n >= 0 && n < out_len) ? 0 : -1;
+}
+
+int nm_uname_sysname(char* out, int out_len) {
+    struct utsname u;
+    if (uname(&u) != 0) return -1;
+    int n = snprintf(out, out_len, "%s", u.sysname);
+    return (n >= 0 && n < out_len) ? 0 : -1;
+}
+
 // userinfo helper — getpwuid
 #include <pwd.h>
 
