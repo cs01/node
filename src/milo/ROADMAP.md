@@ -26,15 +26,8 @@ Full build: `bash src/milo/build.sh`
 - [ ] `fork()` with IPC messaging
 - [ ] stdio option: `pipe`, `inherit`, `ignore`
 
-### net
-- [ ] `net.BlockList` — IP blocking
-- [ ] `net.SocketAddress` class
-
 ### dns
 - [ ] MX, TXT, SRV, NS, CNAME, PTR record queries (need libresolv or manual DNS protocol)
-
-### os
-- [ ] `os.networkInterfaces()` — MAC addresses (currently all zeros)
 
 ### process
 - [ ] `process.send()` / IPC when forked

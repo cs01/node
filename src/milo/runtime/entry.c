@@ -90,6 +90,22 @@ int nm_cpu_times(unsigned int* out_times, int max_cpus) {
 // Get network interfaces: fills a buffer with entries
 // Format per entry: name\0family(4|6)\0address\0netmask\0mac\0\0
 // Returns number of entries
+// Lookup MAC address for an interface name from AF_LINK entries
+#include <net/if_dl.h>
+static void _get_mac(struct ifaddrs* ifap, const char* name, char* mac, int mac_len) {
+    for (struct ifaddrs* ifa = ifap; ifa; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_LINK) continue;
+        if (strcmp(ifa->ifa_name, name) != 0) continue;
+        struct sockaddr_dl* sdl = (struct sockaddr_dl*)ifa->ifa_addr;
+        if (sdl->sdl_alen == 6) {
+            unsigned char* m = (unsigned char*)LLADDR(sdl);
+            snprintf(mac, mac_len, "%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5]);
+            return;
+        }
+    }
+    snprintf(mac, mac_len, "00:00:00:00:00:00");
+}
+
 int nm_net_interfaces(char* out, int out_len) {
     struct ifaddrs *ifap, *ifa;
     if (getifaddrs(&ifap) != 0) return 0;
@@ -98,7 +114,7 @@ int nm_net_interfaces(char* out, int out_len) {
         if (!ifa->ifa_addr) continue;
         if (ifa->ifa_addr->sa_family != AF_INET && ifa->ifa_addr->sa_family != AF_INET6) continue;
         int fam = ifa->ifa_addr->sa_family == AF_INET ? 4 : 6;
-        char addr[64] = {0}, mask[64] = {0};
+        char addr[64] = {0}, mask[64] = {0}, mac[24] = {0};
         if (fam == 4) {
             struct sockaddr_in *sa = (struct sockaddr_in*)ifa->ifa_addr;
             inet_ntop(AF_INET, &sa->sin_addr, addr, sizeof(addr));
@@ -114,8 +130,9 @@ int nm_net_interfaces(char* out, int out_len) {
                 inet_ntop(AF_INET6, &nm->sin6_addr, mask, sizeof(mask));
             }
         }
-        // Write: name|family|address|netmask\n
-        int n = snprintf(out + pos, out_len - pos, "%s|%d|%s|%s\n", ifa->ifa_name, fam, addr, mask);
+        _get_mac(ifap, ifa->ifa_name, mac, sizeof(mac));
+        // Write: name|family|address|netmask|mac\n
+        int n = snprintf(out + pos, out_len - pos, "%s|%d|%s|%s|%s\n", ifa->ifa_name, fam, addr, mask, mac);
         if (n < 0 || pos + n >= out_len) break;
         pos += n;
         count++;

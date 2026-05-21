@@ -350,6 +350,49 @@ function isIP(s) {
   return 0;
 }
 
+class SocketAddress {
+  constructor(options) {
+    if (typeof options === 'string') options = { address: options };
+    this.address = options.address || '127.0.0.1';
+    this.port = options.port || 0;
+    this.family = options.family || (isIP(this.address) === 6 ? 'IPv6' : 'IPv4');
+    this.flowlabel = options.flowlabel || 0;
+  }
+}
+
+class BlockList {
+  constructor() { this._rules = []; }
+  addAddress(address, family) {
+    this._rules.push({ type: 'address', address, family: family || 'ipv4' });
+  }
+  addRange(start, end, family) {
+    this._rules.push({ type: 'range', start, end, family: family || 'ipv4' });
+  }
+  addSubnet(network, prefix, family) {
+    this._rules.push({ type: 'subnet', network, prefix, family: family || 'ipv4' });
+  }
+  check(address, family) {
+    for (const rule of this._rules) {
+      if (rule.type === 'address' && rule.address === address) return true;
+      if (rule.type === 'range') {
+        const a = _ipToNum(address), s = _ipToNum(rule.start), e = _ipToNum(rule.end);
+        if (a >= s && a <= e) return true;
+      }
+      if (rule.type === 'subnet') {
+        const mask = ~((1 << (32 - rule.prefix)) - 1) >>> 0;
+        if ((_ipToNum(address) & mask) === (_ipToNum(rule.network) & mask)) return true;
+      }
+    }
+    return false;
+  }
+  get rules() { return [...this._rules]; }
+}
+
+function _ipToNum(ip) {
+  const p = ip.split('.').map(Number);
+  return ((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]) >>> 0;
+}
+
 module.exports = {
   Socket,
   Server,
@@ -359,6 +402,8 @@ module.exports = {
   isIP,
   isIPv4: (s) => { if (typeof s !== 'string' && s != null) try { s = '' + s; } catch { return false; } return isIP(s) === 4; },
   isIPv6: (s) => { if (typeof s !== 'string' && s != null) try { s = '' + s; } catch { return false; } return isIP(s) === 6; },
+  SocketAddress,
+  BlockList,
   setDefaultAutoSelectFamilyAttemptTimeout: () => {},
   getDefaultAutoSelectFamilyAttemptTimeout: () => 5000,
   _fileWatchers,

@@ -29,11 +29,11 @@ function networkInterfaces() {
     if (!line) continue;
     const parts = line.split('|');
     if (parts.length < 4) continue;
-    const [name, fam, address, netmask] = parts;
+    const [name, fam, address, netmask, mac] = parts;
     const family = fam === '4' ? 'IPv4' : 'IPv6';
     const internal = address === '127.0.0.1' || address === '::1';
     if (!result[name]) result[name] = [];
-    result[name].push({ address, netmask, family, mac: '00:00:00:00:00:00', internal, cidr: address + '/' + netmaskToCidr(netmask, family) });
+    result[name].push({ address, netmask, family, mac: mac || '00:00:00:00:00:00', internal, cidr: address + '/' + netmaskToCidr(netmask, family) });
   }
   return result;
 }
