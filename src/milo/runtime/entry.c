@@ -125,6 +125,17 @@ int nm_net_interfaces(char* out, int out_len) {
     return count;
 }
 
+// userinfo helper — getpwuid
+#include <pwd.h>
+
+// Fills "username|homedir|shell" into out buffer
+int nm_userinfo(int uid, char* out, int out_len) {
+    struct passwd* pw = getpwuid(uid);
+    if (!pw) return -1;
+    int n = snprintf(out, out_len, "%s|%s|%s", pw->pw_name, pw->pw_dir, pw->pw_shell);
+    return (n >= 0 && n < out_len) ? 0 : -1;
+}
+
 // zlib helpers — gzip/gunzip/deflate/inflate
 #include <zlib.h>
 

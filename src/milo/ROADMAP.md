@@ -43,13 +43,9 @@ Full build: `bash src/milo/build.sh`
 - [ ] `dns.reverse()` — reverse lookup
 
 
-### util
-- [ ] `util.toUSVString()`
-- [ ] `util.aborted()` — AbortSignal watch
-
 ### os
 - [ ] `os.networkInterfaces()` — MAC addresses (currently all zeros)
-- [ ] `os.userInfo()` — use `getpwuid` for username/homedir/shell instead of env vars
+- [ ] `os.machine()` — hardware architecture string
 
 ### process
 - [ ] `process.send()` / IPC when forked
@@ -57,7 +53,7 @@ Full build: `bash src/milo/build.sh`
 
 ### stream
 - [ ] `stream.Readable` async iterator — event loop doesn't keep alive for `for await` on streams
-- [ ] `stream.addAbortSignal()`
+- [ ] `stream.Writable.toWeb()` / `Readable.toWeb()` — web stream interop
 
 ## low
 
@@ -65,7 +61,6 @@ Full build: `bash src/milo/build.sh`
 - [ ] `cluster` module
 - [ ] `worker_threads` — `Worker`, `MessageChannel`, `MessagePort`
 - [ ] `vm` — proper sandbox isolation via V8 contexts
-- [ ] `readline` — interactive stdin input, Interface class
 - [ ] `perf_hooks` — `monitorEventLoopDelay` real histogram, `eventLoopUtilization`
 - [ ] `readline` — real terminal raw mode, completion, history
 - [ ] `process.nextTick` — proper implementation (currently microtask-based, fragile)

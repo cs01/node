@@ -237,10 +237,22 @@ class MIMEParams {
   }
 }
 
+// Replace lone surrogates with U+FFFD
+function toUSVString(str) {
+  return String(str).replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�');
+}
+
+function aborted(signal, resource) {
+  return new Promise((resolve) => {
+    if (signal.aborted) { resolve(); return; }
+    signal.addEventListener('abort', () => resolve(), { once: true });
+  });
+}
+
 module.exports = {
   inspect, format, formatWithOptions, inherits, deprecate,
   promisify, callbackify, debuglog, types, isDeepStrictEqual,
   getCallSites, stripVTControlCharacters, parseEnv, styleText,
-  MIMEType, MIMEParams,
+  MIMEType, MIMEParams, toUSVString, aborted,
   TextEncoder: globalThis.TextEncoder, TextDecoder: globalThis.TextDecoder,
 };

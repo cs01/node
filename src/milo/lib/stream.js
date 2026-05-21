@@ -397,4 +397,9 @@ module.exports.PassThrough = PassThrough;
 module.exports.pipeline = pipeline;
 module.exports.finished = finished;
 module.exports.compose = compose;
+module.exports.addAbortSignal = function addAbortSignal(signal, stream) {
+  if (signal.aborted) { stream.destroy(new DOMException('The operation was aborted', 'AbortError')); }
+  else { signal.addEventListener('abort', () => stream.destroy(new DOMException('The operation was aborted', 'AbortError')), { once: true }); }
+  return stream;
+};
 module.exports.promises = promises;

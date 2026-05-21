@@ -59,13 +59,16 @@ function netmaskToCidr(mask, family) {
 }
 
 function userInfo(options) {
-  return {
-    uid: b.getUid(),
-    gid: b.getGid(),
-    username: process.env.USER || '',
-    homedir: process.env.HOME || '/',
-    shell: process.env.SHELL || '/bin/zsh',
-  };
+  const uid = b.getUid();
+  const gid = b.getGid();
+  const raw = b.getUserInfo();
+  if (raw) {
+    const parts = raw.split('|');
+    if (parts.length >= 3) {
+      return { uid, gid, username: parts[0], homedir: parts[1], shell: parts[2] };
+    }
+  }
+  return { uid, gid, username: process.env.USER || '', homedir: process.env.HOME || '/', shell: process.env.SHELL || '/bin/zsh' };
 }
 
 module.exports = {
