@@ -49,9 +49,6 @@ Full build: `bash src/milo/build.sh`
 - [ ] MX, TXT, SRV, NS, CNAME, PTR record queries
 - [ ] `dns.reverse()` — reverse lookup
 
-### console
-- [ ] `console.log` use `util.inspect` instead of JSON.stringify
-- [ ] `console.table()` — formatted table output
 
 ### util
 - [ ] `styleText` — ANSI styling
