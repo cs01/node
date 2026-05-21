@@ -413,10 +413,8 @@ fn fsFdRead(info: *u8, _ud: *u8): void {
         let ab = iso.arraybufferNew(n)
         let arr = iso.uint8arrayNew(ab, 0, n as i32)
         let ptr = arr.typedArrayData(iso)
-        var i: i64 = 0
-        while i < n {
+        for i in 0..n {
             ptr[i] = buf[i]
-            i = i + 1
         }
         free(buf)
         ci.ret(arr)

@@ -47,13 +47,11 @@ fn timerSchedule(info: *u8, _ud: *u8): void {
         next_id = next_id + 1
 
         var slot: i32 = -1
-        var i: i32 = 0
-        while i < 256 {
+        for i in 0..256 {
             if t_active[i as i64] == 0 {
-                slot = i
+                slot = i as i32
                 break
             }
-            i = i + 1
         }
         if slot < 0 {
             ci.retI32(0)
@@ -84,14 +82,12 @@ fn timerClear(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let id = ci.i32Arg(0, 0)
     unsafe {
-        var i: i32 = 0
-        while i < 256 {
+        for i in 0..256 {
             if t_active[i as i64] != 0 && t_id[i as i64] == id {
                 t_active[i as i64] = 0
                 timer_count = timer_count - 1
                 break
             }
-            i = i + 1
         }
     }
 }
@@ -113,15 +109,13 @@ fn timerMsUntilNext(info: *u8, _ud: *u8): void {
         var ts: [i64; 2] = [0, 0]
         clock_gettime(6, ts as *u8)
         var min_ms: i64 = 999999999
-        var i: i32 = 0
-        while i < 256 {
+        for i in 0..256 {
             if t_active[i as i64] != 0 {
                 let ds = t_dsec[i as i64] - ts[0]
                 let dns = t_dnsec[i as i64] - ts[1]
                 let ms = ds * 1000 + dns / 1000000
                 if ms < min_ms { min_ms = ms }
             }
-            i = i + 1
         }
         if min_ms < 0 { min_ms = 0 }
         ci.retI32(min_ms as i32)
@@ -139,8 +133,7 @@ fn timerFireDue(info: *u8, _ud: *u8): void {
         let iso = Isolate { ptr: stored_iso }
         let undef = iso.undefined()
 
-        var i: i32 = 0
-        while i < 256 {
+        for i in 0..256 {
             if t_active[i as i64] != 0 {
                 if t_dsec[i as i64] < now_s || (t_dsec[i as i64] == now_s && t_dnsec[i as i64] <= now_ns) {
                     v8c_function_call(stored_ctx, t_cb[i as i64], undef.slot, 0, 0 as *i32)
@@ -158,7 +151,6 @@ fn timerFireDue(info: *u8, _ud: *u8): void {
                     }
                 }
             }
-            i = i + 1
         }
     }
     ci.retI32(fired)

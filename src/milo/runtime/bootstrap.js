@@ -225,6 +225,227 @@
     return null;
   }
 
+  // --- ESM support: detect and transform import/export to CJS ---
+  const _pkgJsonCache = {};
+  function _findPkgJson(dir) {
+    if (_pkgJsonCache[dir] !== undefined) return _pkgJsonCache[dir];
+    const p = _path.join(dir, 'package.json');
+    if (_fs.existsSync(p)) {
+      try { const pj = JSON.parse(_fs.readFileSync(p)); _pkgJsonCache[dir] = pj; return pj; } catch {}
+    }
+    const parent = _path.dirname(dir);
+    if (parent === dir) { _pkgJsonCache[dir] = null; return null; }
+    const result = _findPkgJson(parent);
+    _pkgJsonCache[dir] = result;
+    return result;
+  }
+  function _findPkgJsonDir(dir) {
+    const p = _path.join(dir, 'package.json');
+    if (_fs.existsSync(p)) return dir;
+    const parent = _path.dirname(dir);
+    if (parent === dir) return null;
+    return _findPkgJsonDir(parent);
+  }
+
+  function _isESM(resolved) {
+    if (resolved.endsWith('.mjs')) return true;
+    if (resolved.endsWith('.cjs')) return false;
+    const dir = _path.dirname(resolved);
+    const pj = _findPkgJson(dir);
+    return pj && pj.type === 'module';
+  }
+
+  // Resolve #imports specifiers (package.json "imports" field)
+  function _resolveHashImport(specifier, fromDir) {
+    const pkgDir = _findPkgJsonDir(fromDir);
+    if (!pkgDir) return null;
+    const pj = _findPkgJson(pkgDir);
+    if (!pj || !pj.imports) return null;
+    const mapping = pj.imports[specifier];
+    if (!mapping) return null;
+    const target = _resolveExport(mapping) || (typeof mapping === 'string' ? mapping : null);
+    if (target) return _resolveFile(_path.resolve(pkgDir, target));
+    return null;
+  }
+
+  function _esmToCjs(src, filePath) {
+    const lines = src.split('\n');
+    const imports = [];
+    const exports = [];
+    const transformed = [];
+    let hasDefaultExport = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i];
+      let handled = false;
+
+      // import X, { A, B } from 'source' (combined default + named)
+      let m = line.match(/^\s*import\s+(\w+)\s*,\s*\{([^}]*)\}\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
+      if (m) {
+        const names = m[2].split(',').map(s => s.trim().replace(/\s+as\s+/g, ': ')).filter(Boolean).join(', ');
+        transformed.push(`const __imp_${i} = require('${m[3]}'); const ${m[1]} = __imp_${i} && __imp_${i}.__esModule ? __imp_${i}.default : __imp_${i}; const { ${names} } = __imp_${i};`);
+        handled = true;
+      }
+
+      // import X from 'source'
+      if (!handled) {
+        m = line.match(/^\s*import\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
+        if (m) { transformed.push(`const __imp_${i} = require('${m[2]}'); const ${m[1]} = __imp_${i} && __imp_${i}.__esModule ? __imp_${i}.default : __imp_${i};`); handled = true; }
+      }
+
+      // import { A, B } from 'source' (possibly multi-line start)
+      if (!handled) {
+        m = line.match(/^\s*import\s+\{([^}]*)\}\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
+        if (m) {
+          const names = m[1].split(',').map(s => s.trim().replace(/\s+as\s+/g, ': ')).filter(Boolean).join(', ');
+          transformed.push(`const { ${names} } = require('${m[2]}');`);
+          handled = true;
+        }
+      }
+
+      // import { \n ... } from 'source' (multi-line — brace may be followed by comment)
+      if (!handled) {
+        m = line.match(/^\s*import\s+\{.*$/);
+        if (m && !line.includes('}') && !line.includes(' from ')) {
+          let braceContent = '';
+          let j = i + 1;
+          while (j < lines.length && !lines[j].includes('}')) { braceContent += lines[j].trim() + ' '; j++; }
+          if (j < lines.length) {
+            const closeLine = lines[j];
+            const fromMatch = closeLine.match(/\}\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
+            if (fromMatch) {
+              const beforeBrace = closeLine.match(/^([^}]*)\}/);
+              if (beforeBrace && beforeBrace[1].trim()) braceContent += beforeBrace[1].trim() + ' ';
+              const names = braceContent.split(',').map(s => s.trim().replace(/\s+as\s+/g, ': ')).filter(Boolean).join(', ');
+              transformed.push(`const { ${names} } = require('${fromMatch[1]}');`);
+              i = j;
+              handled = true;
+            }
+          }
+        }
+      }
+
+      // import * as X from 'source'
+      if (!handled) {
+        m = line.match(/^\s*import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
+        if (m) { transformed.push(`const ${m[1]} = require('${m[2]}');`); handled = true; }
+      }
+
+      // import 'source' (side-effect only)
+      if (!handled) {
+        m = line.match(/^\s*import\s+['"]([^'"]+)['"]\s*;?\s*$/);
+        if (m) { transformed.push(`require('${m[1]}');`); handled = true; }
+      }
+
+      // export default function/class — strip prefix, defer assignment to end of file
+      if (!handled) {
+        m = line.match(/^\s*export\s+default\s+function\s+(\w+)/);
+        if (m) { transformed.push(line.replace(/^\s*export\s+default\s+/, '')); exports.push(`exports.default = ${m[1]};`); hasDefaultExport = true; handled = true; }
+      }
+      if (!handled) {
+        m = line.match(/^\s*export\s+default\s+class\s+(\w+)/);
+        if (m) { transformed.push(line.replace(/^\s*export\s+default\s+/, '')); exports.push(`exports.default = ${m[1]};`); hasDefaultExport = true; handled = true; }
+      }
+      if (!handled) {
+        m = line.match(/^\s*export\s+default\s+/);
+        if (m) { transformed.push(line.replace(/^\s*export\s+default\s+/, 'exports.default = ')); hasDefaultExport = true; handled = true; }
+      }
+
+      // export { default as X } from 'source' / export { X } from 'source' / export { X, Y }
+      if (!handled) {
+        m = line.match(/^\s*export\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
+        if (m) {
+          const source = m[2];
+          const specs = m[1].split(',').map(s => s.trim()).filter(Boolean);
+          const tmpVar = '__reexport_' + i;
+          transformed.push(`const ${tmpVar} = require('${source}');`);
+          for (const spec of specs) {
+            const asMatch = spec.match(/^(\w+)\s+as\s+(\w+)$/);
+            if (asMatch) {
+              if (asMatch[1] === 'default') transformed.push(`Object.defineProperty(exports, '${asMatch[2]}', { enumerable: true, get() { return ${tmpVar} && ${tmpVar}.__esModule ? ${tmpVar}.default : ${tmpVar}; } });`);
+              else transformed.push(`Object.defineProperty(exports, '${asMatch[2]}', { enumerable: true, get() { return ${tmpVar}.${asMatch[1]}; } });`);
+            } else {
+              transformed.push(`Object.defineProperty(exports, '${spec}', { enumerable: true, get() { return ${tmpVar}.${spec}; } });`);
+            }
+          }
+          handled = true;
+        }
+      }
+
+      // export { X, Y } (local re-export, no from)
+      if (!handled) {
+        m = line.match(/^\s*export\s+\{([^}]+)\}\s*;?\s*$/);
+        if (m) {
+          const specs = m[1].split(',').map(s => s.trim()).filter(Boolean);
+          for (const spec of specs) {
+            const asMatch = spec.match(/^(\w+)\s+as\s+(\w+)$/);
+            if (asMatch) transformed.push(`Object.defineProperty(exports, '${asMatch[2]}', { enumerable: true, get() { return ${asMatch[1]}; } });`);
+            else transformed.push(`Object.defineProperty(exports, '${spec}', { enumerable: true, get() { return ${spec}; } });`);
+          }
+          handled = true;
+        }
+      }
+
+      // Multi-line export { ... } from 'source' or export { ... }
+      if (!handled) {
+        m = line.match(/^\s*export\s+\{\s*$/);
+        if (m) {
+          let braceContent = '';
+          let j = i + 1;
+          while (j < lines.length && !lines[j].includes('}')) { braceContent += lines[j].replace(/\/\/.*$/, '').trim() + ' '; j++; }
+          if (j < lines.length) {
+            const closeLine = lines[j];
+            const beforeBrace = closeLine.match(/^([^}]*)\}/);
+            if (beforeBrace && beforeBrace[1].trim()) braceContent += beforeBrace[1].replace(/\/\/.*$/, '').trim() + ' ';
+            const fromMatch = closeLine.match(/\}\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
+            const specs = braceContent.split(',').map(s => s.trim().replace(/\/\/.*$/, '').trim()).filter(Boolean);
+            if (fromMatch) {
+              const source = fromMatch[1];
+              const tmpVar = '__reexport_' + i;
+              transformed.push(`const ${tmpVar} = require('${source}');`);
+              for (const spec of specs) {
+                const asMatch = spec.match(/^(\w+)\s+as\s+(\w+)$/);
+                if (asMatch) {
+                  if (asMatch[1] === 'default') transformed.push(`Object.defineProperty(exports, '${asMatch[2]}', { enumerable: true, get() { return ${tmpVar} && ${tmpVar}.__esModule ? ${tmpVar}.default : ${tmpVar}; } });`);
+                  else transformed.push(`Object.defineProperty(exports, '${asMatch[2]}', { enumerable: true, get() { return ${tmpVar}.${asMatch[1]}; } });`);
+                } else {
+                  transformed.push(`Object.defineProperty(exports, '${spec}', { enumerable: true, get() { return ${tmpVar}.${spec}; } });`);
+                }
+              }
+            } else {
+              for (const spec of specs) {
+                const asMatch = spec.match(/^(\w+)\s+as\s+(\w+)$/);
+                if (asMatch) transformed.push(`Object.defineProperty(exports, '${asMatch[2]}', { enumerable: true, get() { return ${asMatch[1]}; } });`);
+                else transformed.push(`Object.defineProperty(exports, '${spec}', { enumerable: true, get() { return ${spec}; } });`);
+              }
+            }
+            i = j;
+            handled = true;
+          }
+        }
+      }
+
+      // export function/class — strip and defer assignment
+      if (!handled) {
+        m = line.match(/^\s*export\s+(function|class)\s+(\w+)/);
+        if (m) { transformed.push(line.replace(/^\s*export\s+/, '')); exports.push(`exports.${m[2]} = ${m[2]};`); handled = true; }
+      }
+      // export const/let/var — inline assignment is safe (single statement)
+      if (!handled) {
+        m = line.match(/^\s*export\s+(const|let|var)\s+(\w+)/);
+        if (m) { transformed.push(line.replace(/^\s*export\s+/, '')); exports.push(`exports.${m[2]} = ${m[2]};`); handled = true; }
+      }
+
+      if (!handled) transformed.push(line);
+    }
+
+    let result = 'Object.defineProperty(exports, "__esModule", { value: true });\n' + transformed.join('\n');
+    if (exports.length) result += '\n' + exports.join('\n');
+    // If module has a default export, make require() return the default with named exports
+    if (hasDefaultExport) result += '\nif (exports.default != null && (typeof exports.default === "function" || typeof exports.default === "object")) { const __def = exports.default; for (const __k of Object.keys(exports)) { if (__k !== "default" && __k !== "__esModule") try { Object.defineProperty(__def, __k, Object.getOwnPropertyDescriptor(exports, __k) || { value: exports[__k], enumerable: true }); } catch {} } __def.__esModule = true; __def.default = __def; module.exports = __def; }';
+    return result;
+  }
+
   function _resolveFile(p) {
     if (_fs.existsSync(p)) {
       try { if (_fs.statSync(p).isDirectory()) {
@@ -242,9 +463,10 @@
         }
         if (_fs.existsSync(_path.join(p, 'index.js'))) return _path.join(p, 'index.js');
         if (_fs.existsSync(_path.join(p, 'index.json'))) return _path.join(p, 'index.json');
-        return null;
+        // directory exists but no entry point — fall through to try .js/.json extensions
       }} catch {}
-      return p;
+      // only return bare path if it's a file, not an unresolvable directory
+      try { if (!_fs.statSync(p).isDirectory()) return p; } catch { return p; }
     }
     if (_fs.existsSync(p + '.js')) return p + '.js';
     if (_fs.existsSync(p + '.json')) return p + '.json';
@@ -288,7 +510,7 @@
   }
 
   function _resolve(id, parentDir) {
-    if (id.startsWith('./') || id.startsWith('../') || id.startsWith('/')) {
+    if (id === '.' || id === '..' || id.startsWith('./') || id.startsWith('../') || id.startsWith('/')) {
       const base = parentDir ? _path.resolve(parentDir, id) : _path.resolve(id);
       return _resolveFile(base);
     }
@@ -300,13 +522,17 @@
   function _loadModule(id, resolved, fileSrc) {
     const mod = { exports: {} };
     _moduleWrappers[resolved] = mod;
-    const isBare = !id.startsWith('./') && !id.startsWith('../') && !id.startsWith('/');
+    const isBare = !id.startsWith('./') && !id.startsWith('../') && !id.startsWith('/') && id !== '.' && id !== '..';
     if (isBare && id !== resolved) _moduleWrappers[id] = mod;
     const dname = _path.dirname(resolved);
     const modRequire = _makeRequire(dname);
     mod.require = modRequire;
     if (resolved.endsWith('.json')) { mod.exports = JSON.parse(fileSrc); }
-    else { (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', fileSrc))(mod.exports, modRequire, mod, resolved, dname, primordials); }
+    else {
+      let src = fileSrc;
+      if (_isESM(resolved)) src = _esmToCjs(src, resolved);
+      (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src))(mod.exports, modRequire, mod, resolved, dname, primordials);
+    }
     moduleCache[resolved] = mod.exports;
     if (isBare && id !== resolved) moduleCache[id] = mod.exports;
     delete _moduleWrappers[resolved];
@@ -329,7 +555,16 @@
         if (parent[sub]) { moduleCache[id] = parent[sub]; return parent[sub]; }
       }
 
-      const isRelative = id.startsWith('./') || id.startsWith('../') || id.startsWith('/');
+      // Resolve #imports specifiers (package.json "imports" field)
+      if (id.startsWith('#')) {
+        const hashResolved = _resolveHashImport(id, parentDir);
+        if (hashResolved) {
+          if (moduleCache[hashResolved]) return moduleCache[hashResolved];
+          return _loadModule(id, hashResolved, _fs.readFileSync(hashResolved));
+        }
+      }
+
+      const isRelative = id === '.' || id === '..' || id.startsWith('./') || id.startsWith('../') || id.startsWith('/');
       let src = isRelative ? undefined : (_tryMiloLib(id) || _tryMiloLib(flatId) || __loadBuiltin(id));
       if (src !== undefined) {
         const fname = _path.join(_miloLibDir, id + '.js');
@@ -368,6 +603,7 @@
     return require;
   }
 
+  globalThis._makeRequire = _makeRequire;
   globalThis.require = _makeRequire('');
 
   // --- load internal init modules (order matters) ---
@@ -375,4 +611,6 @@
   require('_process_init');
   require('_timers_init');
   try { const _b = require('buffer'); globalThis.Buffer = _b.Buffer || _b; } catch {}
+  // Expose WebCrypto API as globalThis.crypto (Node 19+)
+  try { const _c = require('crypto'); if (_c.webcrypto) globalThis.crypto = _c.webcrypto; } catch {}
 })();

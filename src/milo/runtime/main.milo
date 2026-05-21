@@ -282,11 +282,9 @@ fn setupProcessObject(iso: Isolate, ctx: Context, argc: i32, argv: *i64): Value 
         ctx.objectSet(proc, "versions" as *u8, versions)
 
         let arr = iso.array(argc)
-        var i: i32 = 0
-        while i < argc {
+        for i in 0..argc {
             let arg = (argv as *i64)[i as i64] as *u8
             ctx.objectSetIndex(arr, i as u32, iso.string(arg))
-            i = i + 1
         }
         ctx.objectSet(proc, "argv" as *u8, arr)
 
@@ -354,10 +352,8 @@ fn ttySetRawMode(info: *u8, _ud: *u8): void {
         unsafe { tcgetattr(fd, _savedTermios as *u8) }
         _termiosSaved = 1
         var raw: [u8; 128] = [0; 128]
-        var i: i64 = 0
-        while i < 128 {
+        for i in 0..128 {
             raw[i] = _savedTermios[i]
-            i = i + 1
         }
         unsafe {
             cfmakeraw(raw as *u8)
@@ -417,10 +413,8 @@ fn nm_init_console(_iso: *u8, ctx_ptr: *u8, exports: i32): void {
 fn milo_node_main(argc: i32, argv: *i64): i32 {
     // Convert C argc/argv to Vec<string> for stdlib argparse
     var argVec: Vec<string> = Vec.new()
-    var ai: i64 = 0
-    while ai < argc as i64 {
+    for ai in 0..argc as i64 {
         unsafe { argVec.push(_cstrToString(argv[ai] as *u8)) }
-        ai = ai + 1
     }
 
     var parser = newParser("milo-node", "Node.js runtime on Milo")
@@ -582,7 +576,7 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         var result = Value { slot: -1 }
         if scriptFile as i64 != 0 {
             ctx.objectSet(global, "__filename" as *u8, iso.string(scriptFile))
-            let setCtx = "(function(){const p=require('path');const f=p.resolve(__filename);globalThis.__filename=f;globalThis.__dirname=p.dirname(f);globalThis._requireStack.push(p.dirname(f));})()"
+            let setCtx = "(function(){const p=require('path');const f=p.resolve(__filename);globalThis.__filename=f;globalThis.__dirname=p.dirname(f);globalThis._requireStack.push(p.dirname(f));if(globalThis._makeRequire)globalThis.require=globalThis._makeRequire(p.dirname(f));})()"
             ctx.compileRun(setCtx as *u8, strlen(setCtx) as i32, "[setup]" as *u8)
             result = ctx.compileRun(script, scriptLen, scriptFile)
         } else {

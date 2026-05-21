@@ -435,8 +435,7 @@ fn pollWait(info: *u8, _ud: *u8): void {
         }
 
         let arr = iso.array(n)
-        var i: i32 = 0
-        while i < n {
+        for i in 0..n {
             let ev_ptr = (events as i64 + (i as i64) * 32) as *u8
             let ident = kevent_get_ident(ev_ptr)
             let filter = kevent_get_filter(ev_ptr)
@@ -449,7 +448,6 @@ fn pollWait(info: *u8, _ud: *u8): void {
             ctx.objectSet(obj, "flags" as *u8, iso.int32(flags))
             ctx.objectSet(obj, "fflags" as *u8, iso.int32(fflags))
             ctx.objectSetIndex(arr, i as u32, obj)
-            i = i + 1
         }
         free(events)
         ci.ret(arr)

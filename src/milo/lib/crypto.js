@@ -393,12 +393,51 @@ function createPrivateKey(key) {
   return new KeyObject('private', str);
 }
 
+// WebCrypto subtle API — digest, importKey, sign backed by our native crypto
+const WEBCRYPTO_HASH = { 'SHA-1': 'sha1', 'SHA-256': 'sha256', 'SHA-384': 'sha384', 'SHA-512': 'sha512', 'MD5': 'md5' };
+
+const subtle = {
+  async digest(algorithm, data) {
+    const name = typeof algorithm === 'string' ? algorithm : algorithm.name;
+    const hashName = WEBCRYPTO_HASH[name];
+    if (!hashName) throw new Error(`Unrecognized algorithm name: ${name}`);
+    const buf = data instanceof ArrayBuffer ? Buffer.from(data) : Buffer.from(data.buffer || data, data.byteOffset || 0, data.byteLength || data.length);
+    const result = createHash(hashName).update(buf).digest();
+    return result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength);
+  },
+  async importKey(format, keyData, algorithm, extractable, keyUsages) {
+    const buf = keyData instanceof ArrayBuffer ? Buffer.from(keyData) : Buffer.from(keyData.buffer || keyData, keyData.byteOffset || 0, keyData.byteLength || keyData.length);
+    const algoName = typeof algorithm === 'string' ? algorithm : algorithm.name;
+    const hashName = algorithm.hash ? (typeof algorithm.hash === 'string' ? algorithm.hash : algorithm.hash.name) : 'SHA-256';
+    return { type: 'secret', _buf: buf, _algorithm: algoName, _hash: hashName, extractable, usages: keyUsages };
+  },
+  async sign(algorithm, key, data) {
+    const algoName = typeof algorithm === 'string' ? algorithm : algorithm.name;
+    const buf = data instanceof ArrayBuffer ? Buffer.from(data) : Buffer.from(data.buffer || data, data.byteOffset || 0, data.byteLength || data.length);
+    if (algoName === 'HMAC') {
+      const hashName = WEBCRYPTO_HASH[key._hash] || 'sha256';
+      const result = createHmac(hashName, key._buf).update(buf).digest();
+      return result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength);
+    }
+    throw new Error(`Unsupported algorithm: ${algoName}`);
+  },
+  async verify(algorithm, key, signature, data) {
+    const sig = await this.sign(algorithm, key, data);
+    const sigBuf = Buffer.from(sig);
+    const expectedBuf = signature instanceof ArrayBuffer ? Buffer.from(signature) : Buffer.from(signature.buffer || signature, signature.byteOffset || 0, signature.byteLength || signature.length);
+    return timingSafeEqual(sigBuf, expectedBuf);
+  },
+};
+
+const webcrypto = { subtle, getRandomValues(buf) { randomFillSync(buf); return buf; } };
+
 module.exports = {
   randomBytes, randomFillSync, randomFill, randomUUID, randomInt, createHash, createHmac, timingSafeEqual,
   createCipheriv, createDecipheriv,
   pbkdf2, pbkdf2Sync, scrypt, scryptSync,
   createSign, createVerify, generateKeyPairSync, generateKeySync,
   KeyObject, createSecretKey, createPublicKey, createPrivateKey,
+  webcrypto, subtle,
   constants: {},
   getHashes: () => ['md5', 'sha1', 'sha256', 'sha384', 'sha512'],
   getCiphers: () => [...Object.keys(CIPHER_MAP), ...Object.keys(GCM_MAP)],

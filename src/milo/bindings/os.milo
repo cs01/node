@@ -209,15 +209,13 @@ fn osGetCpuTimes(info: *u8, _ud: *u8): void {
             return
         }
         let arr = iso.array(ncpu)
-        var i: i32 = 0
-        while i < ncpu {
+        for i in 0..ncpu {
             let cpuObj = iso.object()
             ctx.objectSet(cpuObj, "user" as *u8, iso.number(times[(i * 4) as i64] as f64 * 10.0))
             ctx.objectSet(cpuObj, "sys" as *u8, iso.number(times[(i * 4 + 1) as i64] as f64 * 10.0))
             ctx.objectSet(cpuObj, "idle" as *u8, iso.number(times[(i * 4 + 2) as i64] as f64 * 10.0))
             ctx.objectSet(cpuObj, "nice" as *u8, iso.number(times[(i * 4 + 3) as i64] as f64 * 10.0))
             ctx.objectSetIndex(arr, i as u32, cpuObj)
-            i = i + 1
         }
         ci.ret(arr)
     }

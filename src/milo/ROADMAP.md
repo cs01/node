@@ -28,7 +28,6 @@ Full build: `bash src/milo/build.sh`
 - [ ] `perf_hooks` — `monitorEventLoopDelay` real histogram
 - [ ] Buffer pooling optimization
 - [ ] `domain` module (deprecated but some packages use it)
-- [ ] ESM module support (`import`/`export`)
 
 ## done
 
@@ -52,3 +51,11 @@ Full build: `bash src/milo/build.sh`
 - [x] per-module require with exports map support
 - [x] express 4 full compat (GET/POST/JSON/params/status)
 - [x] stream async iterator + Readable.from
+- [x] ESM module support — import/export transform, default/named/re-exports, multi-line, #imports
+- [x] require('.') and require('..') resolution
+- [x] directory-with-same-name-as-file resolution in require
+- [x] crypto.webcrypto.subtle — digest, importKey, sign, verify
+- [x] globalThis.crypto (WebCrypto API)
+- [x] zlib decompression for high-compression-ratio data (progressive buffer sizing)
+- [x] pg (postgres) client loads
+- [x] 38+ npm packages verified: express, ws, uuid, chalk, nanoid, pg, redis, ioredis, knex, etc.

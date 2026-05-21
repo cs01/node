@@ -58,28 +58,28 @@ fn zlibOp(info: *u8, _ud: *u8): void {
             let ab = iso.arraybufferNew(written as i64)
             let result = iso.uint8arrayNew(ab, 0, written)
             let resultData = result.typedArrayData(iso)
-            var i: i64 = 0
-            while i < written as i64 {
+            for i in 0..written as i64 {
                 resultData[i] = outBuf[i]
-                i = i + 1
             }
             free(outBuf)
             ci.ret(result)
         } else {
-            // Decompress: output may be much larger, start with 4x input, retry if needed
+            // Decompress: output may be much larger — keep doubling until it fits
             var outSize: i32 = inputLen * 4 + 1024
-            if outSize < 4096 { outSize = 4096 }
+            if outSize < 16384 { outSize = 16384 }
             var outBuf = malloc(outSize as i64)
             if outBuf as i64 == 0 { return }
 
             var written = nm_zlib_inflate(inputData, inputLen, outBuf, outSize, windowBits)
-            // Retry with larger buffer if it failed (data might expand a lot)
-            if written < 0 {
+            // Retry with progressively larger buffers (high compression ratios need this)
+            var attempts = 0
+            while written < 0 and attempts < 8 {
                 free(outBuf)
-                outSize = outSize * 8
+                outSize = outSize * 4
                 outBuf = malloc(outSize as i64)
                 if outBuf as i64 == 0 { return }
                 written = nm_zlib_inflate(inputData, inputLen, outBuf, outSize, windowBits)
+                attempts = attempts + 1
             }
             if written < 0 {
                 free(outBuf)
@@ -89,10 +89,8 @@ fn zlibOp(info: *u8, _ud: *u8): void {
             let ab = iso.arraybufferNew(written as i64)
             let result = iso.uint8arrayNew(ab, 0, written)
             let resultData = result.typedArrayData(iso)
-            var i: i64 = 0
-            while i < written as i64 {
+            for i in 0..written as i64 {
                 resultData[i] = outBuf[i]
-                i = i + 1
             }
             free(outBuf)
             ci.ret(result)
