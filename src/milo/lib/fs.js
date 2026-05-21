@@ -192,6 +192,67 @@ function createWriteStream(path, opts) {
   return ws;
 }
 
+// Async callback wrappers — run sync on next tick to match Node.js API shape
+function _async(syncFn, args, cb) {
+  process.nextTick(() => { try { const r = syncFn(...args); cb(null, r); } catch (e) { cb(e); } });
+}
+
+function readFile(path, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _async(readFileSync, [path, opts], cb);
+}
+
+function writeFile(path, data, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _async(writeFileSync, [path, data], (err) => cb(err));
+}
+
+function stat(path, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _async(statSync, [path], cb);
+}
+
+function lstat(path, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _async(lstatSync, [path], cb);
+}
+
+function mkdir(path, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _async(mkdirSync, [path, opts], cb);
+}
+
+function readdir(path, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _async(readdirSync, [path], cb);
+}
+
+function unlink(path, cb) { _async(unlinkSync, [path], (err) => cb(err)); }
+function rmdir(path, cb) { _async(rmdirSync, [path], (err) => cb(err)); }
+function rename(oldPath, newPath, cb) { _async(renameSync, [oldPath, newPath], (err) => cb(err)); }
+function chmod(path, mode, cb) { _async(chmodSync, [path, mode], (err) => cb(err)); }
+function access(path, mode, cb) {
+  if (typeof mode === 'function') { cb = mode; mode = undefined; }
+  _async(accessSync, [path, mode], (err) => cb(err));
+}
+function rm(path, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _async(rmSync, [path, opts], (err) => cb(err));
+}
+function copyFile(src, dest, flags, cb) {
+  if (typeof flags === 'function') { cb = flags; flags = 0; }
+  _async(copyFileSync, [src, dest], (err) => cb(err));
+}
+function realpath(path, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _async(realpathSync, [path], cb);
+}
+function appendFile(path, data, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _async(appendFileSync, [path, data], (err) => cb(err));
+}
+function exists(path, cb) { process.nextTick(() => cb(existsSync(path))); }
+
 const promises = {
   readFile: (path, opts) => Promise.resolve(readFileSync(path, opts)),
   writeFile: (path, data) => Promise.resolve(writeFileSync(path, data)),
@@ -205,6 +266,8 @@ const promises = {
 };
 
 module.exports = {
+  readFile, writeFile, appendFile, stat, lstat, mkdir, readdir,
+  unlink, rmdir, rename, chmod, access, rm, copyFile, realpath, exists,
   readFileSync, writeFileSync, appendFileSync, statSync, existsSync,
   mkdirSync, unlinkSync, rmdirSync, renameSync,
   readdirSync, realpathSync, chmodSync,

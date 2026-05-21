@@ -24,7 +24,6 @@ Full build: `bash src/milo/build.sh`
 - [ ] Real gzip/gunzip/deflate/inflate via zlib C library (currently pass-through)
 
 ### fs (async)
-- [ ] Async callback versions: `readFile`, `writeFile`, `stat`, `mkdir`, `readdir`, `unlink`, `rename`
 - [ ] `fs.watch()` / `watchFile()` / `unwatchFile()` — kqueue-based file watching
 - [ ] `fs.fstatSync` — real implementation
 
