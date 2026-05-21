@@ -20,8 +20,6 @@ Full build: `bash src/milo/build.sh`
 - [ ] `generateKeyPairSync` / `generateKeySync`
 - [ ] `getCiphers` / `getCurves` / `getHashes` — return real lists
 
-### zlib
-- [ ] Real gzip/gunzip/deflate/inflate via zlib C library (currently pass-through)
 
 ### fs (async)
 - [ ] `fs.watch()` / `watchFile()` / `unwatchFile()` — kqueue-based file watching

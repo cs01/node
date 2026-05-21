@@ -42,6 +42,39 @@ int nm_dns_lookup(const char* hostname, int family, char* out_ip, int out_len, i
     return 0;
 }
 
+// zlib helpers — gzip/gunzip/deflate/inflate
+#include <zlib.h>
+
+// Returns compressed size, or -1 on error. Output buffer must be pre-allocated.
+int nm_zlib_deflate(const unsigned char* in, int in_len, unsigned char* out, int out_len, int level, int windowBits) {
+    z_stream strm;
+    memset(&strm, 0, sizeof(strm));
+    if (deflateInit2(&strm, level, Z_DEFLATED, windowBits, 8, Z_DEFAULT_STRATEGY) != Z_OK) return -1;
+    strm.next_in = (unsigned char*)in;
+    strm.avail_in = in_len;
+    strm.next_out = out;
+    strm.avail_out = out_len;
+    int ret = deflate(&strm, Z_FINISH);
+    int written = out_len - strm.avail_out;
+    deflateEnd(&strm);
+    return (ret == Z_STREAM_END) ? written : -1;
+}
+
+// Returns decompressed size, or -1 on error.
+int nm_zlib_inflate(const unsigned char* in, int in_len, unsigned char* out, int out_len, int windowBits) {
+    z_stream strm;
+    memset(&strm, 0, sizeof(strm));
+    if (inflateInit2(&strm, windowBits) != Z_OK) return -1;
+    strm.next_in = (unsigned char*)in;
+    strm.avail_in = in_len;
+    strm.next_out = out;
+    strm.avail_out = out_len;
+    int ret = inflate(&strm, Z_FINISH);
+    int written = out_len - strm.avail_out;
+    inflateEnd(&strm);
+    return (ret == Z_STREAM_END || ret == Z_OK) ? written : -1;
+}
+
 int main(int argc, char** argv) {
     return milo_node_main(argc, argv);
 }

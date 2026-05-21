@@ -1,0 +1,109 @@
+// zlib bindings — deflate/inflate via system zlib through C helpers
+
+from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
+
+// C helpers in entry.c
+// windowBits: 15=deflate, 15+16=gzip, -15=raw deflate
+extern fn nm_zlib_deflate(input: *u8, inputLen: i32, output: *u8, outputLen: i32, level: i32, windowBits: i32): i32
+extern fn nm_zlib_inflate(input: *u8, inputLen: i32, output: *u8, outputLen: i32, windowBits: i32): i32
+extern fn malloc(size: i64): *u8
+extern fn free(ptr: *u8): void
+
+// zlibOp(inputUint8Array, mode, level) → Uint8Array
+// mode: 0=gzip, 1=gunzip, 2=deflate, 3=inflate, 4=deflateRaw, 5=inflateRaw
+fn zlibOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 2 { return }
+    let iso = ci.isolate()
+
+    unsafe {
+        let inputArr = ci.arg(0)
+        let inputData = inputArr.typedArrayData(iso)
+        let inputLen = inputArr.typedArrayByteLength(iso) as i32
+        if inputData as i64 == 0 { return }
+
+        let mode = ci.i32Arg(1, 0)
+        let level = ci.i32Arg(2, -1)
+
+        var windowBits: i32 = 15
+        var isCompress = true
+        if mode == 0 { windowBits = 15 + 16 }
+        if mode == 1 {
+            windowBits = 15 + 32
+            isCompress = false
+        }
+        if mode == 2 { windowBits = 15 }
+        if mode == 3 {
+            windowBits = 15 + 32
+            isCompress = false
+        }
+        if mode == 4 { windowBits = 0 - 15 }
+        if mode == 5 {
+            windowBits = 0 - 15
+            isCompress = false
+        }
+
+        if isCompress {
+            // Output buffer: input size + 128 for headers (generous for small inputs)
+            let outSize = inputLen + inputLen / 10 + 256
+            let outBuf = malloc(outSize as i64)
+            if outBuf as i64 == 0 { return }
+
+            let written = nm_zlib_deflate(inputData, inputLen, outBuf, outSize, level, windowBits)
+            if written < 0 {
+                free(outBuf)
+                return
+            }
+
+            let ab = iso.arraybufferNew(written as i64)
+            let result = iso.uint8arrayNew(ab, 0, written)
+            let resultData = result.typedArrayData(iso)
+            var i: i64 = 0
+            while i < written as i64 {
+                resultData[i] = outBuf[i]
+                i = i + 1
+            }
+            free(outBuf)
+            ci.ret(result)
+        } else {
+            // Decompress: output may be much larger, start with 4x input, retry if needed
+            var outSize: i32 = inputLen * 4 + 1024
+            if outSize < 4096 { outSize = 4096 }
+            var outBuf = malloc(outSize as i64)
+            if outBuf as i64 == 0 { return }
+
+            var written = nm_zlib_inflate(inputData, inputLen, outBuf, outSize, windowBits)
+            // Retry with larger buffer if it failed (data might expand a lot)
+            if written < 0 {
+                free(outBuf)
+                outSize = outSize * 8
+                outBuf = malloc(outSize as i64)
+                if outBuf as i64 == 0 { return }
+                written = nm_zlib_inflate(inputData, inputLen, outBuf, outSize, windowBits)
+            }
+            if written < 0 {
+                free(outBuf)
+                return
+            }
+
+            let ab = iso.arraybufferNew(written as i64)
+            let result = iso.uint8arrayNew(ab, 0, written)
+            let resultData = result.typedArrayData(iso)
+            var i: i64 = 0
+            while i < written as i64 {
+                resultData[i] = outBuf[i]
+                i = i + 1
+            }
+            free(outBuf)
+            ci.ret(result)
+        }
+    }
+}
+
+fn nm_init_zlib(_iso: *u8, ctxPtr: *u8, exports: i32): void {
+    let ctx = Context { ptr: ctxPtr }
+    let exp = Value { slot: exports }
+    unsafe {
+        ctx.setMethod(exp, "zlibOp" as *u8, zlibOp as *u8)
+    }
+}

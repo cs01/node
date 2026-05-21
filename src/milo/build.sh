@@ -22,6 +22,7 @@ bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/tcp.milo" -o "$
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/crypto.milo" -o "$OUT/milo_crypto.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/spawn.milo" -o "$OUT/milo_spawn.o"
 bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/dns.milo" -o "$OUT/milo_dns.o"
+bun src/main.ts emit-obj --no-entry "$NODE_DIR/src/milo/bindings/zlib.milo" -o "$OUT/milo_zlib.o"
 cd "$NODE_DIR"
 
 echo "=== compiling c helpers ==="
@@ -51,6 +52,7 @@ clang++ -o "$OUT/milo-node" \
   "$OUT/milo_crypto.o" \
   "$OUT/milo_spawn.o" \
   "$OUT/milo_dns.o" \
+  "$OUT/milo_zlib.o" \
   "$OUT/v8capi.o" \
   -L"$OUT" -L"$OUT/gen/release" \
   -lv8_base_without_compiler -lv8_compiler -lv8_libplatform -lv8_libbase \
@@ -58,7 +60,7 @@ clang++ -o "$OUT/milo-node" \
   -lsimdutf -lsimdjson -lnode_crates \
   -licuucx -licui18n -licudata \
   -framework CoreFoundation -framework Security \
-  -lc++ -lpthread -ldl
+  -lc++ -lpthread -ldl -lz
 
 echo "=== done: $OUT/milo-node ==="
 "$OUT/milo-node" -e "console.log('milo-node ok:', require('path').join('a','b'))"
