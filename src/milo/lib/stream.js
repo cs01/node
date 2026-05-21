@@ -53,7 +53,8 @@ class Readable extends Stream {
 
   push(chunk, encoding) {
     const state = this._readableState;
-    if (chunk === null) { state.ended = true; if (state.flowing) this.emit('end'); return false; }
+    this._didPush = true;
+    if (chunk === null) { state.ended = true; return false; }
     if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
     if (state.flowing) {
       this.emit('data', chunk);
@@ -81,23 +82,27 @@ class Readable extends Stream {
     const state = this._readableState;
     if (!state.flowing) {
       state.flowing = true;
-      // Flush buffered chunks first
-      while (state.buffer.length > 0) {
-        const chunk = state.buffer.shift();
-        state.length -= chunk.length || 1;
-        this.emit('data', chunk);
-      }
-      // Then pull new data
-      if (!state.ended) this._read(state.highWaterMark);
-      // Flush anything _read pushed
-      while (state.buffer.length > 0) {
-        const chunk = state.buffer.shift();
-        state.length -= chunk.length || 1;
-        this.emit('data', chunk);
-      }
-      if (state.ended) this.emit('end');
+      // Defer read to next tick so all listeners can be attached first
+      process.nextTick(() => this._flow());
     }
     return this;
+  }
+
+  _flow() {
+    const state = this._readableState;
+    if (!state.flowing) return;
+    while (state.flowing && !state.ended) {
+      while (state.buffer.length > 0 && state.flowing) {
+        const chunk = state.buffer.shift();
+        state.length -= chunk.length || 1;
+        this.emit('data', chunk);
+      }
+      if (state.ended || !state.flowing) break;
+      this._didPush = false;
+      this._read(state.highWaterMark);
+      if (!this._didPush) break;
+    }
+    if (state.ended) this.emit('end');
   }
   pause() { this._readableState.flowing = false; return this; }
   isPaused() { return this._readableState.flowing === false; }
@@ -160,8 +165,9 @@ class Writable extends Stream {
     if (typeof encoding === 'function') { cb = encoding; encoding = null; }
     if (chunk != null) this.write(chunk, encoding);
     this._writableState.ended = true;
-    if (this._final) this._final(() => { this._writableState.finished = true; this.emit('finish'); if (cb) cb(); });
-    else { this._writableState.finished = true; this.emit('finish'); if (cb) cb(); }
+    const done = () => { this._writableState.finished = true; process.nextTick(() => { this.emit('finish'); if (cb) cb(); }); };
+    if (this._final) this._final(done);
+    else done();
     return this;
   }
 
@@ -203,15 +209,13 @@ class Transform extends Duplex {
   end(chunk, encoding, cb) {
     if (typeof chunk === 'function') { cb = chunk; chunk = null; }
     if (chunk != null) this.write(chunk, encoding);
+    const done = (err) => { this._writableState.ended = true; this._writableState.finished = true; process.nextTick(() => { this.emit('finish'); if (cb) cb(err); }); };
     if (this._flush) this._flush((err, data) => {
       if (data != null) this.push(data);
       this.push(null);
-      this._writableState.ended = true;
-      this._writableState.finished = true;
-      this.emit('finish');
-      if (cb) cb(err);
+      done(err);
     });
-    else { this.push(null); this._writableState.ended = true; this._writableState.finished = true; this.emit('finish'); if (cb) cb(); }
+    else { this.push(null); done(); }
     return this;
   }
 }

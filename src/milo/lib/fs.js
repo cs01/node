@@ -70,11 +70,48 @@ function chmodSync(path, mode) { b.chmod(String(path), mode); }
 function symlinkSync(target, path) { b.symlink(String(target), String(path)); }
 function lstatSync(path) { return statSync(path); }
 function readlinkSync(path) { return b.readlink ? b.readlink(String(path)) : String(path); }
-function openSync() { throw new Error('openSync not implemented'); }
-function closeSync() {}
-function fstatSync() { return { isFile: () => true, isDirectory: () => false, size: 0 }; }
-function writeSync() { return 0; }
-function readSync() { return 0; }
+// POSIX open flags
+const O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0x200, O_TRUNC = 0x400, O_APPEND = 0x8, O_EXCL = 0x800;
+const FLAG_MAP = {
+  'r': O_RDONLY, 'r+': O_RDWR, 'w': O_WRONLY | O_CREAT | O_TRUNC,
+  'w+': O_RDWR | O_CREAT | O_TRUNC, 'a': O_WRONLY | O_CREAT | O_APPEND,
+  'a+': O_RDWR | O_CREAT | O_APPEND, 'wx': O_WRONLY | O_CREAT | O_TRUNC | O_EXCL,
+  'ax': O_WRONLY | O_CREAT | O_APPEND | O_EXCL,
+};
+
+function openSync(path, flags, mode) {
+  const f = typeof flags === 'string' ? (FLAG_MAP[flags] ?? 0) : (flags || 0);
+  const fd = b.open(String(path), f, mode || 0o666);
+  if (fd < 0) throw _fsError('ENOENT', 'open', path, 'no such file or directory');
+  return fd;
+}
+
+function closeSync(fd) { b.close(fd); }
+
+function fstatSync(fd) {
+  // No fstat native yet — return minimal
+  return { isFile: () => true, isDirectory: () => false, size: 0 };
+}
+
+function readSync(fd, buffer, offset, length, position) {
+  offset = offset || 0;
+  length = length || buffer.length - offset;
+  if (position != null) b.fdSeek(fd, position, 0);
+  const result = b.fdRead(fd, length);
+  if (typeof result === 'number') return 0;
+  const bytes = new Uint8Array(result.buffer || result);
+  for (let i = 0; i < bytes.length; i++) buffer[offset + i] = bytes[i];
+  return bytes.length;
+}
+
+function writeSync(fd, data, offset, length, position) {
+  if (typeof data === 'string') data = Buffer.from(data);
+  offset = offset || 0;
+  length = length || data.length - offset;
+  if (position != null) b.fdSeek(fd, position, 0);
+  const slice = data.slice(offset, offset + length);
+  return b.fdWrite(fd, slice, slice.length);
+}
 
 function rmSync(path, opts) {
   try {
@@ -117,8 +154,43 @@ function copyFileSync(src, dest) {
   writeFileSync(dest, data);
 }
 
-function createReadStream() { throw new Error('createReadStream not implemented'); }
-function createWriteStream() { throw new Error('createWriteStream not implemented'); }
+function createReadStream(path, opts) {
+  const { Readable } = require('stream');
+  const highWaterMark = (opts && opts.highWaterMark) || 65536;
+  const encoding = opts && opts.encoding;
+  const fd = openSync(path, (opts && opts.flags) || 'r');
+  let pos = (opts && opts.start) || 0;
+  const end = opts && opts.end;
+  const rs = new Readable({
+    highWaterMark,
+    read(size) {
+      const toRead = end != null ? Math.min(size, end - pos + 1) : size;
+      if (toRead <= 0) { this.push(null); closeSync(fd); return; }
+      const buf = Buffer.alloc(toRead);
+      const n = readSync(fd, buf, 0, toRead, pos);
+      if (n <= 0) { this.push(null); closeSync(fd); return; }
+      pos += n;
+      const chunk = n < toRead ? buf.slice(0, n) : buf;
+      this.push(encoding ? chunk.toString(encoding) : chunk);
+    },
+  });
+  rs.path = path;
+  return rs;
+}
+
+function createWriteStream(path, opts) {
+  const { Writable } = require('stream');
+  const flags = (opts && opts.flags) || 'w';
+  const fd = openSync(path, flags);
+  const ws = new Writable({
+    write(chunk, encoding, cb) {
+      try { writeSync(fd, chunk); cb(); } catch (e) { cb(e); }
+    },
+    final(cb) { closeSync(fd); cb(); },
+  });
+  ws.path = path;
+  return ws;
+}
 
 const promises = {
   readFile: (path, opts) => Promise.resolve(readFileSync(path, opts)),

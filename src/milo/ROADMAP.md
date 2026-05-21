@@ -10,7 +10,6 @@ Full build: `bash src/milo/build.sh`
 
 ## high — missing functionality npm packages depend on
 
-- [ ] `fs.createReadStream`/`createWriteStream` throw
 - [ ] `child_process` entirely stubbed
 - [ ] `http.request()`/`http.get()` throw, `createServer` is fake
 - [ ] `AsyncLocalStorage` doesn't propagate across async boundaries — `lib/async_hooks.js:20-25`
@@ -20,7 +19,7 @@ Full build: `bash src/milo/build.sh`
 ## medium
 
 - [ ] `fs.watch()`/`watchFile()`/`unwatchFile()` missing
-- [ ] `fs.openSync`/`readSync`/`writeSync`/`fstatSync` are stubs
+- [ ] `fs.fstatSync` is a stub
 - [ ] `process.memoryUsage()` returns all zeros
 - [ ] `process.stdin` is undefined
 - [ ] `process.stdout.isTTY` always false
@@ -69,3 +68,6 @@ Full build: `bash src/milo/build.sh`
 - [x] `node_modules` resolution — walk up dir tree, read package.json main
 - [x] `require.resolve`, `require.cache`, `require.main`
 - [x] stream flowing mode — `on('data')` triggers `resume()`, `push()` emits in flowing mode
+- [x] `fs.createReadStream`/`createWriteStream` — real fd-backed streams with pipe support
+- [x] `fs.openSync`/`readSync`/`writeSync`/`closeSync` — native fd operations
+- [x] `Writable.end()` defers 'finish' emit via nextTick (matches Node.js behavior)
