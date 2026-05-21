@@ -248,6 +248,88 @@ void nm_ssl_shutdown(long long ssl_ptr) {
     SSL_free(ssl);
 }
 
+// RSA/ECDSA signing/verification via OpenSSL EVP
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
+
+// Sign data with a PEM private key. Returns signature length, -1 on error.
+int nm_sign(const char* algorithm, const char* pem_key, int pem_len,
+            const unsigned char* data, int data_len,
+            unsigned char* sig_out, int sig_out_len) {
+    const EVP_MD* md = EVP_get_digestbyname(algorithm);
+    if (!md) return -1;
+
+    BIO* bio = BIO_new_mem_buf(pem_key, pem_len);
+    if (!bio) return -1;
+    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
+    BIO_free(bio);
+    if (!pkey) return -1;
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    size_t siglen = sig_out_len;
+    int ok = 1;
+    if (EVP_DigestSignInit(ctx, NULL, md, NULL, pkey) != 1) ok = 0;
+    if (ok && EVP_DigestSignUpdate(ctx, data, data_len) != 1) ok = 0;
+    if (ok && EVP_DigestSignFinal(ctx, sig_out, &siglen) != 1) ok = 0;
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(pkey);
+    return ok ? (int)siglen : -1;
+}
+
+// Verify signature with a PEM public key (or cert). Returns 1 if valid, 0 if invalid, -1 on error.
+int nm_verify(const char* algorithm, const char* pem_key, int pem_len,
+              const unsigned char* data, int data_len,
+              const unsigned char* sig, int sig_len) {
+    const EVP_MD* md = EVP_get_digestbyname(algorithm);
+    if (!md) return -1;
+
+    BIO* bio = BIO_new_mem_buf(pem_key, pem_len);
+    if (!bio) return -1;
+    EVP_PKEY* pkey = PEM_read_bio_PUBKEY(bio, NULL, NULL, NULL);
+    if (!pkey) {
+        BIO_reset(bio);
+        pkey = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
+    }
+    BIO_free(bio);
+    if (!pkey) return -1;
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    int ok = 1;
+    if (EVP_DigestVerifyInit(ctx, NULL, md, NULL, pkey) != 1) ok = 0;
+    if (ok && EVP_DigestVerifyUpdate(ctx, data, data_len) != 1) ok = 0;
+    int result = ok ? EVP_DigestVerifyFinal(ctx, sig, sig_len) : -1;
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(pkey);
+    return result;
+}
+
+// Generate RSA key pair. Returns 0 on success, -1 on error.
+int nm_generate_rsa_keypair(int bits, char* pub_out, int pub_len, int* pub_written,
+                             char* priv_out, int priv_len, int* priv_written) {
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+    if (!ctx) return -1;
+    if (EVP_PKEY_keygen_init(ctx) != 1) { EVP_PKEY_CTX_free(ctx); return -1; }
+    if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, bits) != 1) { EVP_PKEY_CTX_free(ctx); return -1; }
+    EVP_PKEY* pkey = NULL;
+    if (EVP_PKEY_keygen(ctx, &pkey) != 1) { EVP_PKEY_CTX_free(ctx); return -1; }
+    EVP_PKEY_CTX_free(ctx);
+
+    BIO* pub_bio = BIO_new(BIO_s_mem());
+    PEM_write_bio_PUBKEY(pub_bio, pkey);
+    int plen = BIO_read(pub_bio, pub_out, pub_len);
+    *pub_written = plen > 0 ? plen : 0;
+    BIO_free(pub_bio);
+
+    BIO* priv_bio = BIO_new(BIO_s_mem());
+    PEM_write_bio_PrivateKey(priv_bio, pkey, NULL, NULL, 0, NULL, NULL);
+    int klen = BIO_read(priv_bio, priv_out, priv_len);
+    *priv_written = klen > 0 ? klen : 0;
+    BIO_free(priv_bio);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
 // AES-GCM via OpenSSL EVP
 
 int nm_aes_gcm_crypt(int encrypt,

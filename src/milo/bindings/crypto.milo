@@ -14,8 +14,13 @@ extern fn CCCrypt(op: u32, alg: u32, options: u32, key: *u8, keyLen: i64, iv: *u
 // CCKeyDerivationPBKDF(algo, password, passLen, salt, saltLen, prf, rounds, derivedKey, derivedKeyLen) → i32
 extern fn CCKeyDerivationPBKDF(algo: u32, password: *u8, passLen: i64, salt: *u8, saltLen: i64, prf: u32, rounds: u32, derivedKey: *u8, derivedKeyLen: i64): i32
 
-// AES-GCM via CommonCrypto helper in entry.c
+// AES-GCM via OpenSSL helper in entry.c
 extern fn nm_aes_gcm_crypt(encrypt: i32, key: *u8, keyLen: i32, iv: *u8, ivLen: i32, aad: *u8, aadLen: i32, input: *u8, inputLen: i32, output: *u8, tagBuf: *u8, tagLen: i32): i32
+
+// RSA/ECDSA sign/verify + key generation
+extern fn nm_sign(algo: *u8, pemKey: *u8, pemLen: i32, data: *u8, dataLen: i32, sigOut: *u8, sigOutLen: i32): i32
+extern fn nm_verify(algo: *u8, pemKey: *u8, pemLen: i32, data: *u8, dataLen: i32, sig: *u8, sigLen: i32): i32
+extern fn nm_generate_rsa_keypair(bits: i32, pubOut: *u8, pubLen: i32, pubWritten: *i32, privOut: *u8, privLen: i32, privWritten: *i32): i32
 
 extern fn malloc(size: i64): *u8
 extern fn free(ptr: *u8): void
@@ -231,6 +236,107 @@ fn gcmCrypt(info: *u8, _ud: *u8): void {
     }
 }
 
+// sign(algorithm, pemKeyStr, dataUint8) → Uint8Array signature
+fn signOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 3 { return }
+    let iso = ci.isolate()
+    unsafe {
+        var algoBuf: [u8; 64] = [0; 64]
+        let algoArg = ci.arg(0)
+        algoArg.writeUtf8(iso, algoBuf as *u8, 63)
+
+        var pemBuf: [u8; 8192] = [0; 8192]
+        let pemArg = ci.arg(1)
+        let pemLen = pemArg.writeUtf8(iso, pemBuf as *u8, 8191)
+
+        let dataArr = ci.arg(2)
+        let dataPtr = dataArr.typedArrayData(iso)
+        let dataLen = dataArr.typedArrayByteLength(iso) as i32
+
+        let sigBuf = malloc(1024)
+        if sigBuf as i64 == 0 { return }
+
+        let sigLen = nm_sign(algoBuf as *u8, pemBuf as *u8, pemLen, dataPtr, dataLen, sigBuf, 1024)
+        if sigLen < 0 {
+            free(sigBuf)
+            ci.retI32(sigLen)
+            return
+        }
+
+        let ab = iso.arraybufferNew(sigLen as i64)
+        let result = iso.uint8arrayNew(ab, 0, sigLen)
+        let resultPtr = result.typedArrayData(iso)
+        memcpy(resultPtr, sigBuf, sigLen as i64)
+        free(sigBuf)
+        ci.ret(result)
+    }
+}
+
+// verify(algorithm, pemKeyStr, dataUint8, signatureUint8) → 1=valid, 0=invalid, -1=error
+fn verifyOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 4 { return }
+    let iso = ci.isolate()
+    unsafe {
+        var algoBuf: [u8; 64] = [0; 64]
+        let algoArg = ci.arg(0)
+        algoArg.writeUtf8(iso, algoBuf as *u8, 63)
+
+        var pemBuf: [u8; 8192] = [0; 8192]
+        let pemArg = ci.arg(1)
+        let pemLen = pemArg.writeUtf8(iso, pemBuf as *u8, 8191)
+
+        let dataArr = ci.arg(2)
+        let dataPtr = dataArr.typedArrayData(iso)
+        let dataLen = dataArr.typedArrayByteLength(iso) as i32
+
+        let sigArr = ci.arg(3)
+        let sigPtr = sigArr.typedArrayData(iso)
+        let sigLen = sigArr.typedArrayByteLength(iso) as i32
+
+        let result = nm_verify(algoBuf as *u8, pemBuf as *u8, pemLen, dataPtr, dataLen, sigPtr, sigLen)
+        ci.retI32(result)
+    }
+}
+
+// generateRsaKeyPair(bits) → { publicKey: string, privateKey: string }
+fn generateKeyPair(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    let bits = ci.i32Arg(0, 2048)
+    unsafe {
+        let pubBuf = malloc(8192)
+        let privBuf = malloc(8192)
+        if pubBuf as i64 == 0 { return }
+        if privBuf as i64 == 0 {
+            free(pubBuf)
+            return
+        }
+
+        var pubLen: [i32; 1] = [0]
+        var privLen: [i32; 1] = [0]
+
+        let status = nm_generate_rsa_keypair(bits, pubBuf, 8192, pubLen as *i32, privBuf, 8192, privLen as *i32)
+        if status != 0 {
+            free(pubBuf)
+            free(privBuf)
+            ci.retI32(-1)
+            return
+        }
+
+        let result = iso.object()
+        let pubKey = iso.stringLen(pubBuf, pubLen[0])
+        let privKey = iso.stringLen(privBuf, privLen[0])
+        ctx.objectSet(result, "publicKey" as *u8, pubKey)
+        ctx.objectSet(result, "privateKey" as *u8, privKey)
+        free(pubBuf)
+        free(privBuf)
+        ci.ret(result)
+    }
+}
+
 fn nm_init_crypto(_iso: *u8, ctx: *u8, exports: i32): void {
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
@@ -240,5 +346,8 @@ fn nm_init_crypto(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "crypt" as *u8, cryptOp as *u8)
         c.setMethod(exp, "pbkdf2" as *u8, pbkdf2Op as *u8)
         c.setMethod(exp, "gcmCrypt" as *u8, gcmCrypt as *u8)
+        c.setMethod(exp, "sign" as *u8, signOp as *u8)
+        c.setMethod(exp, "verify" as *u8, verifyOp as *u8)
+        c.setMethod(exp, "generateKeyPair" as *u8, generateKeyPair as *u8)
     }
 }

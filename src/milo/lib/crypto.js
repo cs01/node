@@ -256,16 +256,72 @@ function _createGCMDecipher(algorithm, key, iv) {
   };
 }
 
-const stub = (name) => () => { throw new Error(`crypto.${name} not implemented`); };
+// Sign/Verify via OpenSSL
+const DIGEST_MAP = { RSA_SHA256: 'SHA256', RSA_SHA384: 'SHA384', RSA_SHA512: 'SHA512', sha256: 'SHA256', sha384: 'SHA384', sha512: 'SHA512', SHA256: 'SHA256', SHA384: 'SHA384', SHA512: 'SHA512' };
+
+function createSign(algorithm) {
+  const algo = DIGEST_MAP[algorithm] || algorithm;
+  let chunks = [];
+  return {
+    update(data, encoding) {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, encoding);
+      chunks.push(buf);
+      return this;
+    },
+    sign(privateKey, outputEncoding) {
+      const keyStr = typeof privateKey === 'string' ? privateKey : (privateKey.key || privateKey.toString());
+      const data = Buffer.concat(chunks);
+      const result = b.sign(algo, keyStr, new Uint8Array(data));
+      if (typeof result === 'number') throw new Error('Sign failed: ' + result);
+      const sig = Buffer.from(result.buffer, result.byteOffset, result.byteLength);
+      if (outputEncoding === 'hex') return sig.toString('hex');
+      if (outputEncoding === 'base64') return sig.toString('base64');
+      return sig;
+    },
+  };
+}
+
+function createVerify(algorithm) {
+  const algo = DIGEST_MAP[algorithm] || algorithm;
+  let chunks = [];
+  return {
+    update(data, encoding) {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, encoding);
+      chunks.push(buf);
+      return this;
+    },
+    verify(publicKey, signature, sigEncoding) {
+      const keyStr = typeof publicKey === 'string' ? publicKey : (publicKey.key || publicKey.toString());
+      const data = Buffer.concat(chunks);
+      const sigBuf = Buffer.isBuffer(signature) ? signature : Buffer.from(signature, sigEncoding || 'hex');
+      const result = b.verify(algo, keyStr, new Uint8Array(data), new Uint8Array(sigBuf));
+      return result === 1;
+    },
+  };
+}
+
+function generateKeyPairSync(type, options) {
+  if (type !== 'rsa') throw new Error('Only RSA key generation supported');
+  const bits = (options && options.modulusLength) || 2048;
+  const result = b.generateKeyPair(bits);
+  if (typeof result === 'number') throw new Error('Key generation failed');
+  const pubFormat = options && options.publicKeyEncoding;
+  const privFormat = options && options.privateKeyEncoding;
+  let publicKey = result.publicKey;
+  let privateKey = result.privateKey;
+  if (pubFormat && pubFormat.type === 'pkcs1') publicKey = result.publicKey;
+  if (privFormat && privFormat.type === 'pkcs8') privateKey = result.privateKey;
+  return { publicKey, privateKey };
+}
 
 module.exports = {
   randomBytes, randomUUID, randomInt, createHash, createHmac, timingSafeEqual,
   createCipheriv, createDecipheriv,
   pbkdf2, pbkdf2Sync, scrypt, scryptSync,
-  createSign: stub('createSign'), createVerify: stub('createVerify'),
-  generateKeyPairSync: stub('generateKeyPairSync'), generateKeySync: stub('generateKeySync'),
+  createSign, createVerify, generateKeyPairSync,
+  generateKeySync: () => { throw new Error('crypto.generateKeySync not implemented'); },
   constants: {},
-  getHashes: () => ['md5', 'sha1', 'sha256', 'sha512'],
+  getHashes: () => ['md5', 'sha1', 'sha256', 'sha384', 'sha512'],
   getCiphers: () => [...Object.keys(CIPHER_MAP), ...Object.keys(GCM_MAP)],
   getCurves: () => [],
 };

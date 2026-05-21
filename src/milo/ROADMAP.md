@@ -10,8 +10,8 @@ Full build: `bash src/milo/build.sh`
 - [ ] `https.createServer()` — TLS server (client done)
 
 ### crypto
-- [ ] `createSign` / `createVerify` — RSA/ECDSA signing
-- [ ] `generateKeyPairSync` / `generateKeySync`
+- [ ] `generateKeySync` — symmetric key generation
+- [ ] ECDSA key generation (RSA done)
 
 ### fs
 - [ ] `fs.watch()` recursive option — watch entire directory trees
