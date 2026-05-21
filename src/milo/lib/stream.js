@@ -54,7 +54,11 @@ class Readable extends Stream {
   push(chunk, encoding) {
     const state = this._readableState;
     this._didPush = true;
-    if (chunk === null) { state.ended = true; return false; }
+    if (chunk === null) {
+      state.ended = true;
+      if (state.flowing) process.nextTick(() => this.emit('end'));
+      return false;
+    }
     if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
     if (state.flowing) {
       this.emit('data', chunk);
@@ -127,6 +131,121 @@ class Readable extends Stream {
     };
   }
 }
+
+Readable.prototype.toArray = function() {
+  return new Promise((resolve, reject) => {
+    const arr = [];
+    this.on('data', (chunk) => arr.push(chunk));
+    this.on('end', () => resolve(arr));
+    this.on('error', reject);
+    if (this._readableState.flowing === null) this.resume();
+  });
+};
+
+Readable.prototype.map = function(fn, options) {
+  const dest = new Readable({ objectMode: true, read() {} });
+  this.on('data', (chunk) => dest.push(fn(chunk)));
+  this.on('end', () => dest.push(null));
+  if (this._readableState.flowing === null) this.resume();
+  return dest;
+};
+
+Readable.prototype.filter = function(fn, options) {
+  const dest = new Readable({ objectMode: true, read() {} });
+  this.on('data', (chunk) => { if (fn(chunk)) dest.push(chunk); });
+  this.on('end', () => dest.push(null));
+  if (this._readableState.flowing === null) this.resume();
+  return dest;
+};
+
+Readable.prototype.reduce = function(fn, initial) {
+  return new Promise((resolve, reject) => {
+    let acc = initial;
+    let first = acc === undefined;
+    this.on('data', (chunk) => {
+      if (first) { acc = chunk; first = false; }
+      else acc = fn(acc, chunk);
+    });
+    this.on('end', () => resolve(acc));
+    this.on('error', reject);
+    if (this._readableState.flowing === null) this.resume();
+  });
+};
+
+Readable.prototype.forEach = function(fn) {
+  return new Promise((resolve, reject) => {
+    this.on('data', (chunk) => fn(chunk));
+    this.on('end', () => resolve());
+    this.on('error', reject);
+    if (this._readableState.flowing === null) this.resume();
+  });
+};
+
+Readable.prototype.some = function(fn) {
+  return new Promise((resolve, reject) => {
+    this.on('data', (chunk) => { if (fn(chunk)) { resolve(true); this.destroy(); } });
+    this.on('end', () => resolve(false));
+    this.on('error', reject);
+    if (this._readableState.flowing === null) this.resume();
+  });
+};
+
+Readable.prototype.every = function(fn) {
+  return new Promise((resolve, reject) => {
+    this.on('data', (chunk) => { if (!fn(chunk)) { resolve(false); this.destroy(); } });
+    this.on('end', () => resolve(true));
+    this.on('error', reject);
+    if (this._readableState.flowing === null) this.resume();
+  });
+};
+
+Readable.prototype.find = function(fn) {
+  return new Promise((resolve, reject) => {
+    this.on('data', (chunk) => { if (fn(chunk)) { resolve(chunk); this.destroy(); } });
+    this.on('end', () => resolve(undefined));
+    this.on('error', reject);
+    if (this._readableState.flowing === null) this.resume();
+  });
+};
+
+Readable.prototype.flatMap = function(fn, options) {
+  const dest = new Readable({ objectMode: true, read() {} });
+  this.on('data', (chunk) => {
+    const mapped = fn(chunk);
+    if (mapped && typeof mapped[Symbol.iterator] === 'function') {
+      for (const item of mapped) dest.push(item);
+    } else {
+      dest.push(mapped);
+    }
+  });
+  this.on('end', () => dest.push(null));
+  if (this._readableState.flowing === null) this.resume();
+  return dest;
+};
+
+Readable.prototype.take = function(limit) {
+  const dest = new Readable({ objectMode: true, read() {} });
+  let count = 0;
+  this.on('data', (chunk) => {
+    if (count < limit) { dest.push(chunk); count++; }
+    if (count >= limit) { dest.push(null); this.destroy(); }
+  });
+  this.on('end', () => { if (count < limit) dest.push(null); });
+  if (this._readableState.flowing === null) this.resume();
+  return dest;
+};
+
+Readable.prototype.drop = function(limit) {
+  const dest = new Readable({ objectMode: true, read() {} });
+  let count = 0;
+  this.on('data', (chunk) => {
+    if (count >= limit) dest.push(chunk);
+    count++;
+  });
+  this.on('end', () => dest.push(null));
+  if (this._readableState.flowing === null) this.resume();
+  return dest;
+};
 
 Readable.from = function(iterable, opts) {
   const r = new Readable(opts);
@@ -247,6 +366,22 @@ function finished(stream, opts, cb) {
   function cleanup() { stream.removeListener('finish', onFinish); stream.removeListener('end', onEnd); stream.removeListener('error', onError); }
 }
 
+function compose(...streams) {
+  if (streams.length === 0) throw new Error('compose requires at least one stream');
+  if (streams.length === 1) return streams[0];
+  const first = streams[0];
+  for (let i = 0; i < streams.length - 1; i++) streams[i].pipe(streams[i + 1]);
+  const last = streams[streams.length - 1];
+  const composed = new Duplex({
+    write(chunk, enc, cb) { first.write(chunk, enc, cb); },
+    final(cb) { first.end(); last.once('end', cb); },
+    read() {},
+  });
+  last.on('data', (chunk) => composed.push(chunk));
+  last.on('end', () => composed.push(null));
+  return composed;
+}
+
 const promises = {
   pipeline: (...streams) => new Promise((resolve, reject) => pipeline(...streams, (err) => err ? reject(err) : resolve())),
   finished: (stream, opts) => new Promise((resolve, reject) => finished(stream, opts, (err) => err ? reject(err) : resolve())),
@@ -261,4 +396,5 @@ module.exports.Transform = Transform;
 module.exports.PassThrough = PassThrough;
 module.exports.pipeline = pipeline;
 module.exports.finished = finished;
+module.exports.compose = compose;
 module.exports.promises = promises;

@@ -17,9 +17,8 @@ Full build: `bash src/milo/build.sh`
 - [ ] AES-GCM mode (authenticated encryption)
 
 
-### fs (async)
+### fs
 - [ ] `fs.watch()` / `watchFile()` / `unwatchFile()` — kqueue-based file watching
-- [ ] `fs.fstatSync` — real implementation
 
 ### tls
 - [ ] `tls.connect()` — TLS client via SecureTransport or OpenSSL
@@ -45,8 +44,8 @@ Full build: `bash src/milo/build.sh`
 
 
 ### util
-- [ ] `styleText` — ANSI styling
-- [ ] `MIMEType` class
+- [ ] `util.toUSVString()`
+- [ ] `util.aborted()` — AbortSignal watch
 
 ### os
 - [ ] `os.networkInterfaces()` — MAC addresses (currently all zeros)
@@ -57,8 +56,8 @@ Full build: `bash src/milo/build.sh`
 - [ ] `process.channel` for IPC
 
 ### stream
-- [ ] `stream.Readable.toArray()` / `map()` / `filter()` / `reduce()` — web stream compat
-- [ ] `stream.compose()`
+- [ ] `stream.Readable` async iterator — event loop doesn't keep alive for `for await` on streams
+- [ ] `stream.addAbortSignal()`
 
 ## low
 
