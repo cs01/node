@@ -35,8 +35,8 @@ Full build: `bash src/milo/build.sh`
 - [ ] stdio option: `pipe`, `inherit`, `ignore`
 
 ### net
-- [ ] `socket.setTimeout()` / `setKeepAlive()` — real implementations
-- [ ] `server.getConnections()` — real count
+- [ ] `net.BlockList` — IP blocking
+- [ ] `net.SocketAddress` class
 
 ### dns
 - [ ] MX, TXT, SRV, NS, CNAME, PTR record queries

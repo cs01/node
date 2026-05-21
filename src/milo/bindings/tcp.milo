@@ -357,6 +357,29 @@ fn pollWait(info: *u8, _ud: *u8): void {
     }
 }
 
+// TCP_NODELAY=1, IPPROTO_TCP=6, SO_KEEPALIVE=8, SOL_SOCKET=0xffff
+fn tcpSetNoDelay(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let fd = ci.i32Arg(0, -1)
+        let on = ci.i32Arg(1, 1)
+        var val: [i32; 1] = [on]
+        setsockopt(fd, 6, 1, val as *u8, 4)
+        ci.retI32(0)
+    }
+}
+
+fn tcpSetKeepAlive(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let fd = ci.i32Arg(0, -1)
+        let on = ci.i32Arg(1, 1)
+        var val: [i32; 1] = [on]
+        setsockopt(fd, 0xffff, 8, val as *u8, 4)
+        ci.retI32(0)
+    }
+}
+
 fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
@@ -375,6 +398,8 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "pollAdd" as *u8, pollAdd as *u8)
         c.setMethod(exp, "pollRemove" as *u8, pollRemove as *u8)
         c.setMethod(exp, "pollWait" as *u8, pollWait as *u8)
+        c.setMethod(exp, "setNoDelay" as *u8, tcpSetNoDelay as *u8)
+        c.setMethod(exp, "setKeepAlive" as *u8, tcpSetKeepAlive as *u8)
 
         // constants
         let i = Isolate { ptr: _iso }

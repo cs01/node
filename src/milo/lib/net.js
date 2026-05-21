@@ -122,9 +122,27 @@ class Socket extends EventEmitter {
     return tcp.getSockName(this._fd) || {};
   }
 
-  setNoDelay() { return this; }
-  setKeepAlive() { return this; }
-  setTimeout() { return this; }
+  setNoDelay(noDelay) {
+    if (this._fd >= 0) tcp.setNoDelay(this._fd, noDelay !== false ? 1 : 0);
+    return this;
+  }
+
+  setKeepAlive(enable, initialDelay) {
+    if (this._fd >= 0) tcp.setKeepAlive(this._fd, enable ? 1 : 0);
+    return this;
+  }
+
+  setTimeout(ms, cb) {
+    if (cb) this.once('timeout', cb);
+    if (this._timeoutTimer) clearTimeout(this._timeoutTimer);
+    if (ms > 0) {
+      this._timeoutTimer = setTimeout(() => this.emit('timeout'), ms);
+    } else {
+      this._timeoutTimer = null;
+    }
+    return this;
+  }
+
   ref() { return this; }
   unref() { return this; }
 }
@@ -140,6 +158,7 @@ class Server extends EventEmitter {
     }
     this._fd = -1;
     this._listening = false;
+    this._connections = 0;
     if (connectionListener) this.on('connection', connectionListener);
   }
 
@@ -192,6 +211,8 @@ class Server extends EventEmitter {
     const clientFd = tcp.accept(this._fd);
     if (clientFd < 0) return;
     const sock = new Socket({ _fd: clientFd });
+    this._connections++;
+    sock.on('close', () => this._connections--);
     this.emit('connection', sock);
   }
 
@@ -214,7 +235,7 @@ class Server extends EventEmitter {
 
   ref() { return this; }
   unref() { return this; }
-  getConnections(cb) { cb(null, 0); }
+  getConnections(cb) { cb(null, this._connections); }
 }
 Server._servers = new Map();
 
