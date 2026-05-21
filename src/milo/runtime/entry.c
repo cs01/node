@@ -2,8 +2,10 @@
 // Milo's codegen adds implicit params before user params, so we can't
 // use Milo's main directly as the CRT entry point.
 
+#include <stdio.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/sysctl.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
@@ -40,6 +42,87 @@ int nm_dns_lookup(const char* hostname, int family, char* out_ip, int out_len, i
 
     freeaddrinfo(res);
     return 0;
+}
+
+// os helpers — cpu info, network interfaces
+#include <mach/mach.h>
+#include <mach/processor_info.h>
+#include <mach/host_info.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+
+// Returns CPU frequency in MHz
+long long nm_cpu_speed(void) {
+    uint64_t freq = 0;
+    size_t size = sizeof(freq);
+    if (sysctlbyname("hw.cpufrequency", &freq, &size, NULL, 0) == 0) {
+        return freq / 1000000;
+    }
+    // Apple Silicon: hw.cpufrequency unavailable, use hw.tbfrequency / 10000
+    uint64_t tb = 0;
+    size = sizeof(tb);
+    if (sysctlbyname("hw.tbfrequency", &tb, &size, NULL, 0) == 0 && tb > 0) {
+        return tb / 10000;
+    }
+    return 0;
+}
+
+// Fills user/sys/idle/nice times (in clock ticks) for each CPU
+// Returns number of CPUs, or -1 on error
+// out_times must have space for ncpu*4 uint32_t values
+int nm_cpu_times(unsigned int* out_times, int max_cpus) {
+    natural_t ncpu = 0;
+    processor_cpu_load_info_t cpu_load;
+    mach_msg_type_number_t count;
+    kern_return_t kr = host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &ncpu, (processor_info_array_t*)&cpu_load, &count);
+    if (kr != KERN_SUCCESS) return -1;
+    int n = ncpu < max_cpus ? ncpu : max_cpus;
+    for (int i = 0; i < n; i++) {
+        out_times[i*4+0] = cpu_load[i].cpu_ticks[CPU_STATE_USER];
+        out_times[i*4+1] = cpu_load[i].cpu_ticks[CPU_STATE_SYSTEM];
+        out_times[i*4+2] = cpu_load[i].cpu_ticks[CPU_STATE_IDLE];
+        out_times[i*4+3] = cpu_load[i].cpu_ticks[CPU_STATE_NICE];
+    }
+    vm_deallocate(mach_task_self(), (vm_address_t)cpu_load, count * sizeof(integer_t));
+    return n;
+}
+
+// Get network interfaces: fills a buffer with entries
+// Format per entry: name\0family(4|6)\0address\0netmask\0mac\0\0
+// Returns number of entries
+int nm_net_interfaces(char* out, int out_len) {
+    struct ifaddrs *ifap, *ifa;
+    if (getifaddrs(&ifap) != 0) return 0;
+    int pos = 0, count = 0;
+    for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr) continue;
+        if (ifa->ifa_addr->sa_family != AF_INET && ifa->ifa_addr->sa_family != AF_INET6) continue;
+        int fam = ifa->ifa_addr->sa_family == AF_INET ? 4 : 6;
+        char addr[64] = {0}, mask[64] = {0};
+        if (fam == 4) {
+            struct sockaddr_in *sa = (struct sockaddr_in*)ifa->ifa_addr;
+            inet_ntop(AF_INET, &sa->sin_addr, addr, sizeof(addr));
+            if (ifa->ifa_netmask) {
+                struct sockaddr_in *nm = (struct sockaddr_in*)ifa->ifa_netmask;
+                inet_ntop(AF_INET, &nm->sin_addr, mask, sizeof(mask));
+            }
+        } else {
+            struct sockaddr_in6 *sa = (struct sockaddr_in6*)ifa->ifa_addr;
+            inet_ntop(AF_INET6, &sa->sin6_addr, addr, sizeof(addr));
+            if (ifa->ifa_netmask) {
+                struct sockaddr_in6 *nm = (struct sockaddr_in6*)ifa->ifa_netmask;
+                inet_ntop(AF_INET6, &nm->sin6_addr, mask, sizeof(mask));
+            }
+        }
+        // Write: name|family|address|netmask\n
+        int n = snprintf(out + pos, out_len - pos, "%s|%d|%s|%s\n", ifa->ifa_name, fam, addr, mask);
+        if (n < 0 || pos + n >= out_len) break;
+        pos += n;
+        count++;
+    }
+    freeifaddrs(ifap);
+    if (pos < out_len) out[pos] = 0;
+    return count;
 }
 
 // zlib helpers — gzip/gunzip/deflate/inflate

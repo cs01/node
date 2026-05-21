@@ -25,6 +25,14 @@ extern fn host_processor_info(host: u32, flavor: i32, count: *u32, info: **i32, 
 extern fn host_statistics64(host: u32, flavor: i32, info: *u8, count: *u32): i32
 extern fn vm_deallocate(task: u32, addr: i64, size: i64): i32
 extern fn mach_task_self_(): u32
+extern fn strlen(s: *u8): i64
+extern fn malloc(size: i64): *u8
+extern fn free(ptr: *u8): void
+
+// C helpers in entry.c
+extern fn nm_cpu_speed(): i64
+extern fn nm_cpu_times(outTimes: *u32, maxCpus: i32): i32
+extern fn nm_net_interfaces(out: *u8, outLen: i32): i32
 
 fn osGetHostname(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
@@ -181,6 +189,51 @@ fn osUmask(info: *u8, _ud: *u8): void {
     }
 }
 
+fn osGetCpuSpeed(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe { ci.retI32(nm_cpu_speed() as i32) }
+}
+
+fn osGetCpuTimes(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    unsafe {
+        var times: [u32; 256] = [0; 256]
+        let ncpu = nm_cpu_times(times as *u32, 64)
+        if ncpu < 0 {
+            ci.ret(iso.array(0))
+            return
+        }
+        let arr = iso.array(ncpu)
+        var i: i32 = 0
+        while i < ncpu {
+            let cpuObj = iso.object()
+            ctx.objectSet(cpuObj, "user" as *u8, iso.number(times[(i * 4) as i64] as f64 * 10.0))
+            ctx.objectSet(cpuObj, "sys" as *u8, iso.number(times[(i * 4 + 1) as i64] as f64 * 10.0))
+            ctx.objectSet(cpuObj, "idle" as *u8, iso.number(times[(i * 4 + 2) as i64] as f64 * 10.0))
+            ctx.objectSet(cpuObj, "nice" as *u8, iso.number(times[(i * 4 + 3) as i64] as f64 * 10.0))
+            ctx.objectSetIndex(arr, i as u32, cpuObj)
+            i = i + 1
+        }
+        ci.ret(arr)
+    }
+}
+
+fn osGetNetInterfaces(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        var buf: [u8; 8192] = [0; 8192]
+        let count = nm_net_interfaces(buf as *u8, 8192)
+        if count <= 0 {
+            ci.retStr("" as *u8)
+            return
+        }
+        let len = strlen(buf as *u8)
+        ci.retStrLen(buf as *u8, len as i32)
+    }
+}
+
 fn nm_init_os(_iso: *u8, ctx: *u8, exports: i32): void {
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
@@ -200,10 +253,32 @@ fn nm_init_os(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "getLoadAvg15" as *u8, osGetLoadavg15 as *u8)
         c.setMethod(exp, "setPriority" as *u8, osSetPriority as *u8)
         c.setMethod(exp, "getPriority" as *u8, osGetPriority as *u8)
+        c.setMethod(exp, "getCpuSpeed" as *u8, osGetCpuSpeed as *u8)
+        c.setMethod(exp, "getCpuTimes" as *u8, osGetCpuTimes as *u8)
+        c.setMethod(exp, "getNetInterfaces" as *u8, osGetNetInterfaces as *u8)
+        c.setMethod(exp, "getUid" as *u8, osGetUid as *u8)
+        c.setMethod(exp, "getGid" as *u8, osGetGid as *u8)
+        c.setMethod(exp, "getEuid" as *u8, osGetEuid as *u8)
+        c.setMethod(exp, "getEgid" as *u8, osGetEgid as *u8)
     }
 }
 
-fn nm_os_getuid(): u32 { unsafe { return getuid() } }
-fn nm_os_getgid(): u32 { unsafe { return getgid() } }
-fn nm_os_geteuid(): u32 { unsafe { return geteuid() } }
-fn nm_os_getegid(): u32 { unsafe { return getegid() } }
+fn osGetUid(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe { ci.retU32(getuid()) }
+}
+
+fn osGetGid(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe { ci.retU32(getgid()) }
+}
+
+fn osGetEuid(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe { ci.retU32(geteuid()) }
+}
+
+fn osGetEgid(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe { ci.retU32(getegid()) }
+}

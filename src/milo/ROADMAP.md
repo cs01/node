@@ -49,9 +49,8 @@ Full build: `bash src/milo/build.sh`
 - [ ] `MIMEType` class
 
 ### os
-- [ ] `os.cpus()` — real speed and time values (currently `speed: 0`)
-- [ ] `os.networkInterfaces()` — real interface data
-- [ ] `os.getpriority()` / `os.setpriority()`
+- [ ] `os.networkInterfaces()` — MAC addresses (currently all zeros)
+- [ ] `os.userInfo()` — use `getpwuid` for username/homedir/shell instead of env vars
 
 ### process
 - [ ] `process.send()` / IPC when forked

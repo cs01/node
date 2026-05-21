@@ -4,9 +4,73 @@
 const b = internalBinding('os');
 const constants = internalBinding('constants').os;
 
+function cpus() {
+  const model = b.getCpuModel();
+  const speed = b.getCpuSpeed();
+  const times = b.getCpuTimes();
+  const n = times.length;
+  const result = [];
+  for (let i = 0; i < n; i++) {
+    result.push({
+      model,
+      speed,
+      times: { user: times[i].user, nice: times[i].nice, sys: times[i].sys, idle: times[i].idle, irq: 0 },
+    });
+  }
+  return result;
+}
+
+function networkInterfaces() {
+  const raw = b.getNetInterfaces();
+  if (!raw) return {};
+  const result = {};
+  const lines = raw.split('\n');
+  for (const line of lines) {
+    if (!line) continue;
+    const parts = line.split('|');
+    if (parts.length < 4) continue;
+    const [name, fam, address, netmask] = parts;
+    const family = fam === '4' ? 'IPv4' : 'IPv6';
+    const internal = address === '127.0.0.1' || address === '::1';
+    if (!result[name]) result[name] = [];
+    result[name].push({ address, netmask, family, mac: '00:00:00:00:00:00', internal, cidr: address + '/' + netmaskToCidr(netmask, family) });
+  }
+  return result;
+}
+
+function netmaskToCidr(mask, family) {
+  if (family === 'IPv6') {
+    const parts = mask.split(':');
+    let bits = 0;
+    for (const p of parts) {
+      if (!p) continue;
+      const n = parseInt(p, 16);
+      for (let i = 15; i >= 0; i--) { if (n & (1 << i)) bits++; else return bits; }
+    }
+    return bits;
+  }
+  const parts = mask.split('.');
+  let bits = 0;
+  for (const p of parts) {
+    let n = parseInt(p);
+    while (n & 128) { bits++; n = (n << 1) & 255; }
+  }
+  return bits;
+}
+
+function userInfo(options) {
+  return {
+    uid: b.getUid(),
+    gid: b.getGid(),
+    username: process.env.USER || '',
+    homedir: process.env.HOME || '/',
+    shell: process.env.SHELL || '/bin/zsh',
+  };
+}
+
 module.exports = {
   hostname: () => b.getHostname(),
-  cpus: () => { const n = b.getAvailableParallelism(); return Array.from({length: n}, () => ({model: b.getCpuModel(), speed: 0, times: {user:0,nice:0,sys:0,idle:0,irq:0}})); },
+  cpus,
   availableParallelism: () => b.getAvailableParallelism(),
   freemem: () => b.getFreeMem(),
   totalmem: () => b.getTotalMem(),
@@ -17,10 +81,12 @@ module.exports = {
   platform: () => process.platform || 'darwin',
   arch: () => process.arch || 'arm64',
   endianness: () => 'LE',
-  userInfo: () => ({ uid: -1, gid: -1, username: process.env.USER || '', homedir: process.env.HOME || '/', shell: process.env.SHELL || '/bin/zsh' }),
-  networkInterfaces: () => ({}),
+  userInfo,
+  networkInterfaces,
   homedir: () => process.env.HOME || '/',
   tmpdir: () => process.env.TMPDIR || '/tmp',
+  setPriority: (pid, priority) => { if (priority === undefined) { priority = pid; pid = 0; } return b.setPriority(pid, priority); },
+  getPriority: (pid) => b.getPriority(pid || 0),
   EOL: '\n',
   constants,
 };
