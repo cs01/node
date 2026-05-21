@@ -13,6 +13,12 @@ Full build: `bash src/milo/build.sh`
 - [ ] `process.send()` / IPC when forked
 - [ ] `process.channel` for IPC
 
+### net
+- [ ] net.Socket should extend Duplex (currently extends EventEmitter with ad-hoc methods)
+
+### fastify compat
+- [ ] investigate async plugin loading hang (listen promise never resolves)
+
 ## low
 
 - [ ] `stream.Writable.toWeb()` / `Readable.toWeb()` — needs ReadableStream/WritableStream globals in V8
@@ -22,3 +28,27 @@ Full build: `bash src/milo/build.sh`
 - [ ] `perf_hooks` — `monitorEventLoopDelay` real histogram
 - [ ] Buffer pooling optimization
 - [ ] `domain` module (deprecated but some packages use it)
+- [ ] ESM module support (`import`/`export`)
+
+## done
+
+- [x] binary TCP send/recv — WebSocket (ws) package works
+- [x] crypto.randomFillSync, randomFill
+- [x] crypto.createPublicKey, createPrivateKey
+- [x] Buffer.writeUIntBE/LE, readUIntBE/LE, writeIntBE/LE, readIntBE/LE
+- [x] HTTP upgrade events (server + client) for WebSocket
+- [x] HTTP server setTimeout, listening property
+- [x] EventEmitter → function-based constructor (util.inherits compat)
+- [x] Stream → function-based constructor
+- [x] StringDecoder → function-based constructor
+- [x] fs.Dirent + readdirSync withFileTypes
+- [x] fs/promises, stream/promises subpath requires
+- [x] http2 module (basic)
+- [x] util.types: isUint8Array, isArrayBufferView, typed array checks, etc.
+- [x] net.Socket: cork/uncork, pause/resume/pipe, read, _readableState/_writableState
+- [x] net.Server listen({port, host}) options object
+- [x] internalBinding('config').hasCrypto = true
+- [x] tty module with raw mode
+- [x] per-module require with exports map support
+- [x] express 4 full compat (GET/POST/JSON/params/status)
+- [x] stream async iterator + Readable.from
