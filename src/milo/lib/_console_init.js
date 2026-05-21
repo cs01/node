@@ -8,12 +8,57 @@ const _fmt = (a) => typeof a === 'string' ? a : _util.inspect(a, { colors: false
 
 // process.stdout / process.stderr / process.stdin
 const _isTTY = _con.isatty ? (fd) => !!_con.isatty(fd) : () => false;
-process.stdout = { write(s) { _con.write(typeof s === 'string' ? s : String(s)); return true; }, fd: 1, isTTY: _isTTY(1) };
-process.stderr = { write(s) { _con.writeError(typeof s === 'string' ? s : String(s)); return true; }, fd: 2, isTTY: _isTTY(2) };
-const { Readable } = require('stream');
-process.stdin = new Readable({ read() {} });
-process.stdin.fd = 0;
-process.stdin.isTTY = _isTTY(0);
+const { Readable, Writable } = require('stream');
+
+process.stdout = new Writable({
+  write(chunk, enc, cb) { _con.write(typeof chunk === 'string' ? chunk : chunk.toString()); if (cb) cb(); }
+});
+process.stdout.fd = 1;
+process.stdout.isTTY = _isTTY(1);
+process.stdout.columns = 80;
+process.stdout.rows = 24;
+
+process.stderr = new Writable({
+  write(chunk, enc, cb) { _con.writeError(typeof chunk === 'string' ? chunk : chunk.toString()); if (cb) cb(); }
+});
+process.stderr.fd = 2;
+process.stderr.isTTY = _isTTY(2);
+const _stdin = new Readable({ read() {} });
+_stdin.fd = 0;
+_stdin.isTTY = _isTTY(0);
+_stdin._started = false;
+_stdin.resume = function() {
+  Readable.prototype.resume.call(this);
+  if (!this._started && !this.isTTY) {
+    this._started = true;
+    const net = require('net');
+    const tcp = internalBinding('tcp');
+    const spawn = internalBinding('spawn');
+    net._ensurePoll();
+    const self = this;
+    const pipeObj = {
+      _fd: 0,
+      destroyed: false,
+      _onReadable() {
+        for (;;) {
+          const data = spawn.readPipe(0);
+          if (data === undefined) {
+            self.push(null);
+            net.Socket._sockets.delete(0);
+            this.destroyed = true;
+            return;
+          }
+          if (data.length === 0) break;
+          self.push(Buffer.from(data));
+        }
+      }
+    };
+    net.Socket._sockets.set(0, pipeObj);
+    tcp.pollAdd(0, tcp.EVFILT_READ);
+  }
+  return this;
+};
+process.stdin = _stdin;
 
 const _counts = {};
 const _timers = {};
