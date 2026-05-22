@@ -275,15 +275,24 @@ function fork(modulePath, args, options) {
   const spawnArgs = [...execArgv, modulePath, ...args];
   const { Readable, Writable } = require('stream');
 
-  // Set NODE_CHANNEL_FD so child knows about IPC (synced to C environ via proxy)
+  // Set environment for child — must include NODE_CHANNEL_FD and any custom env
+  const savedEnv = {};
+  const childEnv = options.env || {};
+  const envKeys = Object.keys(childEnv);
+  for (const k of envKeys) { savedEnv[k] = process.env[k]; process.env[k] = childEnv[k]; }
   const hadChannelFd = process.env.NODE_CHANNEL_FD;
   process.env.NODE_CHANNEL_FD = '3';
   // fork() defaults to inherit unless silent:true or explicit stdio
   const forkOpts = options.stdio ? options : (options.silent ? { stdio: ['pipe', 'pipe', 'pipe'] } : { stdio: ['inherit', 'inherit', 'inherit'] });
   const [stdinMode, stdoutMode, stderrMode] = parseStdio(forkOpts);
   const result = spawnBinding.spawnAsync(execPath, spawnArgs, stdinMode, stdoutMode, stderrMode, childFd);
+  // Restore parent env
   if (hadChannelFd !== undefined) process.env.NODE_CHANNEL_FD = hadChannelFd;
   else delete process.env.NODE_CHANNEL_FD;
+  for (const k of envKeys) {
+    if (savedEnv[k] !== undefined) process.env[k] = savedEnv[k];
+    else delete process.env[k];
+  }
 
   const child = new EventEmitter();
   child.exitCode = null;
