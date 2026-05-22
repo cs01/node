@@ -552,6 +552,19 @@ fn tcpSetKeepAlive(info: *u8, _ud: *u8): void {
     }
 }
 
+fn tcpSetLinger(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let fd = ci.i32Arg(0, -1)
+        let on = ci.i32Arg(1, 0)
+        let secs = ci.i32Arg(2, 0)
+        // struct linger { int l_onoff; int l_linger; }
+        var ling: [i32; 2] = [on, secs]
+        setsockopt(fd, 0xffff, 0x80, ling as *u8, 8)
+        ci.retI32(0)
+    }
+}
+
 // --- TLS ---
 // sslConnect(fd, hostname) → ssl handle (i64), or 0 on failure
 fn sslConnect(info: *u8, _ud: *u8): void {
@@ -980,6 +993,7 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "pollWait" as *u8, pollWait as *u8)
         c.setMethod(exp, "setNoDelay" as *u8, tcpSetNoDelay as *u8)
         c.setMethod(exp, "setKeepAlive" as *u8, tcpSetKeepAlive as *u8)
+        c.setMethod(exp, "setLinger" as *u8, tcpSetLinger as *u8)
         c.setMethod(exp, "watchFile" as *u8, tcpWatchFile as *u8)
         c.setMethod(exp, "unwatchFile" as *u8, tcpUnwatchFile as *u8)
         c.setMethod(exp, "sslConnect" as *u8, sslConnect as *u8)

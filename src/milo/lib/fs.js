@@ -3,7 +3,30 @@
 
 const b = internalBinding('fs');
 
+function _validatePath(path, name) {
+  if (typeof path !== 'string' && !Buffer.isBuffer(path)) {
+    if (path instanceof URL) return;
+    const err = new TypeError(`The "${name || 'path'}" argument must be of type string or an instance of Buffer or URL. Received ${typeof path === 'object' ? (path === null ? 'null' : 'an instance of ' + (path.constructor && path.constructor.name || 'Object')) : 'type ' + typeof path} (${String(path)})`);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+  if (typeof path === 'string' && path.indexOf('\0') !== -1) {
+    const err = new TypeError('The "path" argument must be of type string without null bytes. Received ' + JSON.stringify(path));
+    err.code = 'ERR_INVALID_ARG_VALUE';
+    throw err;
+  }
+}
+
+function _validateCallback(cb, name) {
+  if (typeof cb !== 'function') {
+    const err = new TypeError(`Callback must be a function. Received ${typeof cb === 'object' ? (cb === null ? 'null' : 'an instance of ' + (cb.constructor && cb.constructor.name || 'Object')) : 'type ' + typeof cb}`);
+    err.code = 'ERR_INVALID_ARG_TYPE';
+    throw err;
+  }
+}
+
 function readFileSync(path, opts) {
+  _validatePath(path, 'path');
   const r = b.readFile(String(path));
   if (r === -1) { const e = new Error(`ENOENT: no such file or directory, open '${path}'`); e.code = 'ENOENT'; e.syscall = 'open'; e.path = String(path); throw e; }
   const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
@@ -18,11 +41,13 @@ function _fsError(code, syscall, path, msg) {
 }
 
 function writeFileSync(path, data) {
+  _validatePath(path, 'path');
   const r = b.writeFile(String(path), typeof data === 'string' ? data : data.toString());
   if (r === -1) throw _fsError('EIO', 'write', path, 'write failed');
 }
 
 function appendFileSync(path, data) {
+  _validatePath(path, 'path');
   let existing = '';
   try { existing = readFileSync(path, 'utf8'); } catch {}
   writeFileSync(path, existing + (typeof data === 'string' ? data : data.toString()));
@@ -42,6 +67,7 @@ function _wrapStats(s) {
 }
 
 function statSync(path) {
+  _validatePath(path, 'path');
   const s = b.stat(String(path));
   if (s === -1) throw _fsError('ENOENT', 'stat', path, 'no such file or directory');
   return _wrapStats(s);
@@ -50,6 +76,7 @@ function statSync(path) {
 function existsSync(path) { return !!b.exists(String(path)); }
 
 function mkdirSync(path, opts) {
+  _validatePath(path, 'path');
   const mode = (opts && opts.mode) || 0o777;
   if (opts && opts.recursive) {
     const parts = String(path).split('/');
@@ -65,10 +92,11 @@ function mkdirSync(path, opts) {
   if (r !== 0) throw _fsError('EEXIST', 'mkdir', path, 'file already exists');
 }
 
-function unlinkSync(path) { b.unlink(String(path)); }
-function rmdirSync(path) { b.rmdir(String(path)); }
-function renameSync(old, n) { b.rename(String(old), String(n)); }
+function unlinkSync(path) { _validatePath(path, 'path'); b.unlink(String(path)); }
+function rmdirSync(path) { _validatePath(path, 'path'); b.rmdir(String(path)); }
+function renameSync(old, n) { _validatePath(old, 'oldPath'); _validatePath(n, 'newPath'); b.rename(String(old), String(n)); }
 function readdirSync(path, opts) {
+  _validatePath(path, 'path');
   const entries = b.readdir(String(path)) || [];
   if (opts && opts.withFileTypes) {
     const dir = String(path);
@@ -76,15 +104,16 @@ function readdirSync(path, opts) {
   }
   return entries;
 }
-function realpathSync(path) { return b.realpath(String(path)); }
-function chmodSync(path, mode) { b.chmod(String(path), mode); }
-function symlinkSync(target, path) { b.symlink(String(target), String(path)); }
+function realpathSync(path) { _validatePath(path, 'path'); return b.realpath(String(path)); }
+function chmodSync(path, mode) { _validatePath(path, 'path'); b.chmod(String(path), mode); }
+function symlinkSync(target, path) { _validatePath(target, 'target'); _validatePath(path, 'path'); b.symlink(String(target), String(path)); }
 function lstatSync(path) {
+  _validatePath(path, 'path');
   const result = b.lstat(String(path));
   if (typeof result === 'number') throw _fsError('ENOENT', 'lstat', path, 'no such file or directory');
   return _wrapStats(result);
 }
-function readlinkSync(path) { return b.readlink ? b.readlink(String(path)) : String(path); }
+function readlinkSync(path) { _validatePath(path, 'path'); return b.readlink ? b.readlink(String(path)) : String(path); }
 // POSIX open flags
 const O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0x200, O_TRUNC = 0x400, O_APPEND = 0x8, O_EXCL = 0x800;
 const FLAG_MAP = {
@@ -95,6 +124,7 @@ const FLAG_MAP = {
 };
 
 function openSync(path, flags, mode) {
+  _validatePath(path, 'path');
   const f = typeof flags === 'string' ? (FLAG_MAP[flags] ?? 0) : (flags || 0);
   const fd = b.open(String(path), f, mode || 0o666);
   if (fd < 0) throw _fsError('ENOENT', 'open', path, 'no such file or directory');

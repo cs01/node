@@ -37,19 +37,37 @@ class OutgoingMessage extends EventEmitter {
   constructor() {
     super();
     this._headers = {};
+    this._rawHeaderNames = {};
     this._headersSent = false;
     this.finished = false;
+    this.destroyed = false;
     this.writableEnded = false;
     this.sendDate = true;
     this._outputData = [];
     this._outputSize = 0;
   }
+  get headersSent() { return this._headersSent; }
   get writableObjectMode() { return false; }
   get writableHighWaterMark() { return this.socket ? this.socket.writableHighWaterMark : 65536; }
   get writableLength() { return this._outputSize; }
   get writableFinished() { return this.finished; }
   get writableCorked() { return 0; }
   get writableNeedDrain() { return false; }
+  setTimeout(ms, cb) {
+    if (cb) this.on('timeout', cb);
+    if (!this.socket) {
+      this.once('socket', (s) => s.setTimeout(ms));
+    } else {
+      this.socket.setTimeout(ms);
+    }
+    return this;
+  }
+  destroy(err) {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    if (this.socket) this.socket.destroy(err);
+    return this;
+  }
   write(chunk, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = null; }
     if (!this._headersSent && this._implicitHeader) this._implicitHeader();
@@ -69,13 +87,38 @@ class OutgoingMessage extends EventEmitter {
     if (cb) cb();
     return this;
   }
-  setHeader(k, v) { this._headers[k.toLowerCase()] = v; }
+  setHeader(k, v) {
+    const lower = k.toLowerCase();
+    this._headers[lower] = v;
+    this._rawHeaderNames[lower] = k;
+  }
   getHeader(k) { return this._headers[k.toLowerCase()]; }
-  removeHeader(k) { delete this._headers[k.toLowerCase()]; }
+  removeHeader(k) {
+    const lower = k.toLowerCase();
+    delete this._headers[lower];
+    delete this._rawHeaderNames[lower];
+  }
   hasHeader(k) { return k.toLowerCase() in this._headers; }
   getHeaderNames() { return Object.keys(this._headers); }
   getHeaders() { return { ...this._headers }; }
+  getRawHeaderNames() { return Object.values(this._rawHeaderNames); }
+  appendHeader(name, value) {
+    const lower = name.toLowerCase();
+    const existing = this._headers[lower];
+    if (existing === undefined) {
+      this._headers[lower] = value;
+      this._rawHeaderNames[lower] = name;
+    } else if (Array.isArray(existing)) {
+      existing.push(value);
+    } else {
+      this._headers[lower] = [existing, value];
+    }
+    return this;
+  }
   flushHeaders() {}
+  cork() {}
+  uncork() {}
+  addTrailers() {}
 }
 
 class ServerResponse extends OutgoingMessage {

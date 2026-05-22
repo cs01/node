@@ -171,6 +171,28 @@ class Socket extends EventEmitter {
 
   ref() { this._unref = false; return this; }
   unref() { this._unref = true; return this; }
+
+  resetAndDestroy() {
+    // RST instead of FIN — sets SO_LINGER with 0 timeout
+    if (this._fd >= 0) {
+      try { tcp.setLinger(this._fd, 1, 0); } catch {}
+    }
+    return this.destroy();
+  }
+
+  get readyState() {
+    if (this._connecting) return 'opening';
+    if (this.readable && this.writable) return 'open';
+    if (this.readable && !this.writable) return 'readOnly';
+    if (!this.readable && this.writable) return 'writeOnly';
+    return 'closed';
+  }
+
+  get pending() { return this._connecting || this._fd < 0; }
+  get connecting() { return this._connecting; }
+
+  get bytesRead() { return this._bytesRead || 0; }
+  get bytesWritten() { return this._bytesWritten || 0; }
 }
 Socket._sockets = new Map();
 
