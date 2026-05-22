@@ -342,8 +342,12 @@ function _extend(target, source) {
   return target;
 }
 
+function log(...args) {
+  console.error('%s - %s', new Date().toUTCString(), format(...args));
+}
+
 module.exports = {
-  inspect, format, formatWithOptions, inherits, deprecate,
+  inspect, format, formatWithOptions, inherits, deprecate, log,
   promisify, callbackify, debuglog, debug: debuglog, types, isDeepStrictEqual, getSystemErrorName,
   getCallSites, stripVTControlCharacters, parseEnv, styleText,
   MIMEType, MIMEParams, toUSVString, aborted, _extend,

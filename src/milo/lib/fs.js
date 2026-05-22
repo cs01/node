@@ -197,6 +197,8 @@ function createReadStream(path, opts) {
     },
   });
   rs.path = path;
+  rs.fd = fd;
+  process.nextTick(() => rs.emit('open', fd));
   return rs;
 }
 
@@ -211,6 +213,8 @@ function createWriteStream(path, opts) {
     final(cb) { closeSync(fd); cb(); },
   });
   ws.path = path;
+  ws.fd = fd;
+  process.nextTick(() => ws.emit('open', fd));
   return ws;
 }
 
@@ -526,8 +530,15 @@ function lutimes(p, atime, mtime, cb) { if (cb) process.nextTick(cb, null); }
 function chownSync(p, uid, gid) { const _f = internalBinding('fs'); _f.chown(p, uid, gid); }
 function lchownSync(p, uid, gid) { chownSync(p, uid, gid); }
 function utimesSync(p, atime, mtime) { const _f = internalBinding('fs'); _f.utimes(p, Math.floor(atime), Math.floor(mtime)); }
-function truncate(p, len, cb) { if (typeof len === 'function') { cb = len; len = 0; } const _f = internalBinding('fs'); _f.truncate(p, len || 0); if (cb) process.nextTick(cb, null); }
-function truncateSync(p, len) { const _f = internalBinding('fs'); _f.truncate(p, len || 0); }
+function truncateSync(p, len) {
+  const fd = openSync(p, 'r+');
+  try { ftruncateSync(fd, len || 0); } finally { closeSync(fd); }
+}
+function truncate(p, len, cb) {
+  if (typeof len === 'function') { cb = len; len = 0; }
+  try { truncateSync(p, len); if (cb) process.nextTick(cb, null); }
+  catch (e) { if (cb) process.nextTick(cb, e); else throw e; }
+}
 
 module.exports = {
   readFile, writeFile, appendFile, stat, lstat, mkdir, readdir,

@@ -100,8 +100,12 @@ function format(urlObj) {
 }
 
 function pathToFileURL(p) {
-  const encoded = p.split('/').map(s => encodeURIComponent(s)).join('/');
-  return new URL('file://' + (encoded.startsWith('/') ? '' : '/') + encoded);
+  if (typeof p !== 'string') { const e = new TypeError('The "path" argument must be of type string'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+  const path = require('path');
+  let resolved = path.resolve(p);
+  if (p.endsWith('/') || p.endsWith('\\')) resolved += '/';
+  const encoded = resolved.split('/').map(s => encodeURIComponent(s)).join('/');
+  return new URL('file://' + encoded);
 }
 
 function fileURLToPath(u) {
