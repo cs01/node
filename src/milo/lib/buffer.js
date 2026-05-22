@@ -72,7 +72,7 @@ function _base64Encode(buf, start, end) {
 
 class Buffer extends Uint8Array {
   static alloc(size, fill, encoding) {
-    if (typeof size !== 'number') throw new TypeError('The "size" argument must be of type number');
+    if (typeof size !== 'number') { const e = new TypeError('The "size" argument must be of type number. Received type ' + typeof size); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
     if (size < 0 || size > Buffer.kMaxLength) {
       const err = new RangeError(`The value "${size}" is invalid for option "size"`);
       err.code = 'ERR_OUT_OF_RANGE';
@@ -94,7 +94,7 @@ class Buffer extends Uint8Array {
   }
 
   static allocUnsafe(size) {
-    if (typeof size !== 'number') throw new TypeError('The "size" argument must be of type number');
+    if (typeof size !== 'number') { const e = new TypeError('The "size" argument must be of type number. Received type ' + typeof size); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
     if (size < 0 || size > Buffer.kMaxLength) {
       const err = new RangeError(`The value "${size}" is invalid for option "size"`);
       err.code = 'ERR_OUT_OF_RANGE';
@@ -104,7 +104,7 @@ class Buffer extends Uint8Array {
   }
 
   static allocUnsafeSlow(size) {
-    if (typeof size !== 'number') throw new TypeError('The "size" argument must be of type number');
+    if (typeof size !== 'number') { const e = new TypeError('The "size" argument must be of type number. Received type ' + typeof size); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
     if (size < 0 || size > Buffer.kMaxLength) {
       const err = new RangeError(`The value "${size}" is invalid for option "size"`);
       err.code = 'ERR_OUT_OF_RANGE';
@@ -115,10 +115,12 @@ class Buffer extends Uint8Array {
 
   static from(value, encodingOrOffset, length) {
     if (value === null || value === undefined) {
-      throw new TypeError('The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received ' + (value === null ? 'null' : 'undefined'));
+      const e = new TypeError('The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received ' + (value === null ? 'null' : 'undefined'));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
     }
     if (typeof value === 'number') {
-      throw new TypeError('The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received type number (' + value + ')');
+      const e = new TypeError('The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received type number (' + value + ')');
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
     }
     if (typeof value === 'string') {
       const enc = (encodingOrOffset || 'utf8').toLowerCase();
@@ -174,8 +176,11 @@ class Buffer extends Uint8Array {
 
   static byteLength(str, encoding) {
     if (typeof str !== 'string') {
-      if (ArrayBuffer.isView(str) || str instanceof ArrayBuffer) return str.byteLength;
-      str = String(str);
+      if (ArrayBuffer.isView(str) || str instanceof ArrayBuffer || str instanceof SharedArrayBuffer) return str.byteLength;
+      if (typeof str !== 'string') {
+        const e = new TypeError('The "string" argument must be of type string or an instance of Buffer or ArrayBuffer. Received type ' + typeof str);
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
     }
     const enc = (encoding || 'utf8').toLowerCase();
     if (enc === 'ascii' || enc === 'latin1' || enc === 'binary') return str.length;
@@ -232,7 +237,7 @@ class Buffer extends Uint8Array {
 
   toJSON() { return { type: 'Buffer', data: Array.from(this) }; }
   equals(other) {
-    if (!Buffer.isBuffer(other)) throw new TypeError('Argument must be a Buffer');
+    if (!(other instanceof Uint8Array)) { const e = new TypeError('The "otherBuffer" argument must be an instance of Buffer or Uint8Array. Received type ' + typeof other); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
     if (this.length !== other.length) return false;
     if (_nativeCompare) return _nativeCompare(this, other) === 0;
     return Buffer.compare(this, other) === 0;
