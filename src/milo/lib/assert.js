@@ -89,11 +89,23 @@ function notDeepStrictEqual(actual, expected, message) {
 }
 
 function throws(fn, expected, message) {
+  if (typeof expected === 'string') { message = expected; expected = undefined; }
   let threw = false;
   try { fn(); } catch (e) {
     threw = true;
-    if (expected instanceof RegExp) { if (!expected.test(e.message)) fail(e.message, expected, message, 'throws'); }
-    else if (typeof expected === 'function' && !(e instanceof expected)) fail(e, expected, message, 'throws');
+    if (expected instanceof RegExp) {
+      if (!expected.test(String(e))) fail(e.message, expected, message, 'throws');
+    } else if (typeof expected === 'function') {
+      if (!(e instanceof expected)) fail(e, expected, message, 'throws');
+    } else if (expected && typeof expected === 'object') {
+      for (const key of Object.keys(expected)) {
+        if (expected[key] instanceof RegExp) {
+          if (!expected[key].test(e[key])) fail(e[key], expected[key], message || `${key} mismatch`, 'throws');
+        } else if (e[key] !== expected[key]) {
+          fail(e[key], expected[key], message || `${key} mismatch`, 'throws');
+        }
+      }
+    }
   }
   if (!threw) fail(undefined, undefined, message || 'Missing expected exception', 'throws');
 }
@@ -106,7 +118,7 @@ async function rejects(fn, expected, message) {
   let threw = false;
   try { await (typeof fn === 'function' ? fn() : fn); } catch (e) {
     threw = true;
-    if (expected instanceof RegExp) { if (!expected.test(e.message)) fail(e.message, expected, message, 'rejects'); }
+    if (expected instanceof RegExp) { if (!expected.test(String(e))) fail(e.message, expected, message, 'rejects'); }
     else if (typeof expected === 'function') {
       if (expected.prototype !== undefined && !(e instanceof expected)) fail(e, expected, message, 'rejects');
       else if (expected.prototype === undefined) { const r = expected(e); if (r !== true) fail(e, expected, message, 'rejects'); }

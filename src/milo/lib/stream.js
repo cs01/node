@@ -337,7 +337,7 @@ class Writable extends Stream {
       err.code = 'ERR_STREAM_NULL_VALUES';
       throw err;
     }
-    if (!this._writableState.objectMode && chunk !== undefined && typeof chunk !== 'string' && !Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) {
+    if (!this._writableState.objectMode && typeof chunk !== 'string' && !Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) {
       const err = new TypeError('The "chunk" argument must be of type string or an instance of Buffer or Uint8Array. Received type ' + typeof chunk);
       err.code = 'ERR_INVALID_ARG_TYPE';
       throw err;
