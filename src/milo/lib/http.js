@@ -19,6 +19,17 @@ class IncomingMessage extends Readable {
   }
   _read() {}
   setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
+  _addHeaderLines(headers, n) {
+    if (headers && headers.length) {
+      for (let i = 0; i < headers.length; i += 2) {
+        const key = headers[i].toLowerCase();
+        const val = headers[i + 1];
+        this.rawHeaders.push(headers[i], val);
+        if (this.headers[key]) { this.headers[key] += ', ' + val; }
+        else { this.headers[key] = val; }
+      }
+    }
+  }
 }
 
 class OutgoingMessage extends EventEmitter {
@@ -43,8 +54,11 @@ class ServerResponse extends OutgoingMessage {
   constructor(socket) {
     super();
     this._socket = socket;
+    this.socket = socket;
+    this.connection = socket;
     this.statusCode = 200;
   }
+  _implicitHeader() { this._flushHeaders(); }
   writeHead(code, reason, headers) {
     if (typeof reason === 'object') { headers = reason; reason = undefined; }
     this.statusCode = code;
@@ -120,6 +134,8 @@ class Server extends EventEmitter {
           req.method = method;
           req.url = url;
           req.httpVersion = (version || '').replace('HTTP/', '');
+          req.socket = socket;
+          req.connection = socket;
           for (let i = 1; i < lines.length; i++) {
             const idx = lines[i].indexOf(':');
             if (idx > 0) {
@@ -443,7 +459,7 @@ module.exports = {
   createServer: (opts, handler) => new Server(opts, handler),
   request, get,
   Server: _Server, IncomingMessage, ServerResponse, ClientRequest, OutgoingMessage,
-  Agent: Agent_class,
+  Agent: new Proxy(Agent_class, { apply(target, _, args) { return new target(...args); } }),
   globalAgent: new Agent_class(),
   METHODS, STATUS_CODES,
   maxHeaderSize: 16384,

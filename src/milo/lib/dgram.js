@@ -136,7 +136,16 @@ class Socket extends EventEmitter {
 
 function createSocket(options, listener) {
   if (typeof options === 'string') options = { type: options };
-  return new Socket(options.type, listener);
+  else if (options === null || typeof options !== 'object') {
+    const e = new TypeError('The "options" argument must be of type string or an instance of Object');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  const type = options.type;
+  if (type !== 'udp4' && type !== 'udp6') {
+    const e = new TypeError(`Bad socket type specified. Valid types are: udp4, udp6`);
+    e.code = 'ERR_SOCKET_BAD_TYPE'; throw e;
+  }
+  return new Socket(type, listener);
 }
 
 module.exports = { createSocket, Socket };

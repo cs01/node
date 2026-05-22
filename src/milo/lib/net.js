@@ -238,6 +238,8 @@ class Server extends EventEmitter {
     const clientFd = tcp.accept(this._fd);
     if (clientFd < 0) return;
     const sock = new Socket({ _fd: clientFd });
+    const peer = tcp.getPeerName(clientFd);
+    if (peer) { sock.remoteAddress = peer.address; sock.remotePort = peer.port; sock.remoteFamily = peer.family; }
     this._connections++;
     sock.on('close', () => this._connections--);
     this.emit('connection', sock);

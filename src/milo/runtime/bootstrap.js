@@ -617,7 +617,15 @@
         if (id === 'internal/test/binding') {
           stub = { internalBinding: globalThis.internalBinding };
         } else if (id === 'internal/errors') {
-          stub = { codes: new Proxy({}, { get(_, k) { return class extends Error { constructor(...a) { super(a.join(', ')); this.code = k; } }; } }) };
+          const _errCodes = {};
+          const _codesProxy = new Proxy(_errCodes, { get(t, k) { return t[k] || class extends Error { constructor(...a) { super(a.join(', ')); this.code = k; } }; } });
+          class SystemError extends Error { constructor(msg, ctx) { super(typeof msg === 'string' ? msg : (ctx && ctx.message) || ''); if (typeof msg === 'object') ctx = msg; if (ctx) { this.code = ctx.code; this.syscall = ctx.syscall; if (ctx.path) this.path = ctx.path; if (ctx.dest) this.dest = ctx.dest; this.errno = ctx.errno; } } get info() { return { code: this.code, syscall: this.syscall, path: this.path, dest: this.dest, errno: this.errno, message: this.message }; } }
+          function E(code, msgTpl, Base) {
+            const Cls = class extends (Base || Error) { constructor(...a) { let msg; if (typeof msgTpl === 'function') msg = msgTpl(...a); else if (typeof msgTpl === 'string') { msg = msgTpl; let i = 0; msg = msg.replace(/%[sd]/g, () => String(a[i++])); } else msg = String(a[0] || ''); super(Base === SystemError ? a[0] : msg, Base === SystemError ? undefined : undefined); if (Base === SystemError && typeof a[0] === 'object') { const ctx = a[0]; this.code = code; this.syscall = ctx.syscall; if (ctx.path) this.path = ctx.path; if (ctx.dest) this.dest = ctx.dest; this.errno = ctx.errno; this.message = msg || ctx.message; } this.code = code; } };
+            Object.defineProperty(Cls, 'name', { value: code });
+            _errCodes[code] = Cls;
+          }
+          stub = { codes: _codesProxy, E, SystemError };
         } else if (id === 'internal/options') {
           stub = { getOptionValue: (name) => { if (name === '--insecure-http-parser') return false; if (name === '--use-env-proxy') return false; if (name === '--force-fips') return false; if (name === '--enable-source-maps') return false; if (name === '--pending-deprecation') return false; return undefined; } };
         } else if (id === 'internal/validators') {

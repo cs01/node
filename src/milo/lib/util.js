@@ -346,11 +346,33 @@ function log(...args) {
   console.error('%s - %s', new Date().toUTCString(), format(...args));
 }
 
+function normalizeEncoding(enc) {
+  if (!enc) return 'utf8';
+  const lower = enc.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (lower === 'utf8' || lower === 'utf-8') return 'utf8';
+  if (lower === 'ascii') return 'ascii';
+  if (lower === 'hex') return 'hex';
+  if (lower === 'base64') return 'base64';
+  if (lower === 'base64url') return 'base64url';
+  if (lower === 'latin1' || lower === 'binary') return 'latin1';
+  if (lower === 'utf16le' || lower === 'ucs2' || lower === 'ucs-2') return 'utf16le';
+  return undefined;
+}
+
+const _sysErrors = new Map([
+  [-1, ['EPERM', 'operation not permitted']], [-2, ['ENOENT', 'no such file or directory']],
+  [-13, ['EACCES', 'permission denied']], [-17, ['EEXIST', 'file already exists']],
+  [-20, ['ENOTDIR', 'not a directory']], [-21, ['EISDIR', 'is a directory']],
+  [-22, ['EINVAL', 'invalid argument']], [-28, ['ENOSPC', 'no space left on device']],
+  [-36, ['ENAMETOOLONG', 'name too long']], [-40, ['EMSGSIZE', 'message too long']],
+]);
+
 module.exports = {
   inspect, format, formatWithOptions, inherits, deprecate, log,
   promisify, callbackify, debuglog, debug: debuglog, types, isDeepStrictEqual, getSystemErrorName,
   getCallSites, stripVTControlCharacters, parseEnv, styleText,
-  MIMEType, MIMEParams, toUSVString, aborted, _extend,
+  MIMEType, MIMEParams, toUSVString, aborted, _extend, normalizeEncoding,
+  getSystemErrorMap: () => _sysErrors,
   TextEncoder: globalThis.TextEncoder, TextDecoder: globalThis.TextDecoder,
   isArray, isBoolean, isNull, isNullOrUndefined, isNumber, isString,
   isSymbol, isUndefined, isRegExp, isObject, isDate, isError,

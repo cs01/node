@@ -31,6 +31,7 @@ extern fn kevent(kq: i32, changelist: *u8, nchanges: i32, eventlist: *u8, nevent
 extern fn inet_pton(af: i32, src: *u8, dst: *u8): i32
 extern fn inet_ntop(af: i32, src: *u8, dst: *u8, size: i32): *u8
 extern fn getsockname(fd: i32, addr: *u8, addrlen: *i32): i32
+extern fn getpeername(fd: i32, addr: *u8, addrlen: *i32): i32
 extern fn shutdown(fd: i32, how: i32): i32
 extern fn nm_fs_open(path: *u8, flags: i32, mode: i32): i32
 
@@ -360,6 +361,32 @@ fn tcpGetSockName(info: *u8, _ud: *u8): void {
         var addr: [u8; 16] = [0; 16]
         var addrlen: i32 = 16
         let r = getsockname(fd, addr as *u8, &addrlen)
+        if r != 0 {
+            ci.retUndefined()
+            return
+        }
+        let port_raw = (addr[2] as i32) << 8 | (addr[3] as i32)
+        let obj = iso.object()
+        ctx.objectSet(obj, "port" as *u8, iso.int32(port_raw))
+
+        var ip_buf: [u8; 64] = [0; 64]
+        inet_ntop(2, (addr as *u8 as i64 + 4) as *u8, ip_buf as *u8, 64)
+        ctx.objectSet(obj, "address" as *u8, iso.string(ip_buf as *u8))
+        ctx.objectSet(obj, "family" as *u8, iso.string("IPv4" as *u8))
+        ci.ret(obj)
+    }
+}
+
+fn tcpGetPeerName(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let iso = ci.isolate()
+    let ctx = ci.context()
+
+    unsafe {
+        var addr: [u8; 16] = [0; 16]
+        var addrlen: i32 = 16
+        let r = getpeername(fd, addr as *u8, &addrlen)
         if r != 0 {
             ci.retUndefined()
             return
@@ -926,6 +953,7 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "shutdown" as *u8, tcpShutdown as *u8)
         c.setMethod(exp, "close" as *u8, tcpClose as *u8)
         c.setMethod(exp, "getSockName" as *u8, tcpGetSockName as *u8)
+        c.setMethod(exp, "getPeerName" as *u8, tcpGetPeerName as *u8)
         c.setMethod(exp, "pollInit" as *u8, pollInit as *u8)
         c.setMethod(exp, "pollAdd" as *u8, pollAdd as *u8)
         c.setMethod(exp, "pollRemove" as *u8, pollRemove as *u8)
