@@ -102,7 +102,10 @@ class Readable extends Stream {
     this._didPush = true;
     if (chunk === null) {
       state.ended = true;
-      if (state.flowing) process.nextTick(() => { if (!state.endEmitted) { state.endEmitted = true; this.emit('end'); } });
+      if (state.flowing) process.nextTick(() => {
+        if (!state.endEmitted) { state.endEmitted = true; this.emit('end'); }
+        if (this.allowHalfOpen === false && this._writableState && !this._writableState.ended) this.end();
+      });
       return false;
     }
     if (!state.objectMode && typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
@@ -182,6 +185,7 @@ class Readable extends Stream {
   get readableLength() { return this._readableState.length; }
   get readableObjectMode() { return this._readableState.objectMode; }
   get readableEncoding() { return this._readableState.encoding; }
+  get readableDidRead() { return !!this._didPush; }
 
   [Symbol.asyncIterator]() {
     const self = this;
@@ -340,15 +344,21 @@ class Writable extends Stream {
   constructor(opts) {
     super();
     this.writable = true;
-    this._writableState = { ended: false, finished: false, corked: 0, buffered: [] };
+    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: !!(opts && opts.objectMode), needDrain: false, writing: false, length: 0 };
     if (opts && opts.write) this._write = opts.write;
+    if (opts && opts.writev) this._writev = opts.writev;
     if (opts && opts.final) this._final = opts.final;
+    if (opts && opts.defaultEncoding) this._defaultEncoding = opts.defaultEncoding;
+    if (opts && opts.decodeStrings === false) this._decodeStrings = false;
+    if (opts && opts.highWaterMark != null) this._writableState.highWaterMark = opts.highWaterMark;
+    if (opts && opts.objectMode) this._writableState.objectMode = true;
   }
 
   _write(chunk, encoding, cb) { cb(); }
 
   write(chunk, encoding, cb) {
-    if (typeof encoding === 'function') { cb = encoding; encoding = 'utf8'; }
+    if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
+    if (!encoding) encoding = this._defaultEncoding || 'utf8';
     if (chunk === null) {
       const err = new TypeError('May not write null values to stream');
       err.code = 'ERR_STREAM_NULL_VALUES';
@@ -359,7 +369,7 @@ class Writable extends Stream {
       err.code = 'ERR_INVALID_ARG_TYPE';
       throw err;
     }
-    if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
+    if (typeof chunk === 'string' && this._decodeStrings !== false) chunk = Buffer.from(chunk, encoding);
     this._write(chunk, encoding || 'utf8', (err) => {
       if (err) this.emit('error', err);
       else this.emit('drain');
@@ -372,7 +382,9 @@ class Writable extends Stream {
     if (typeof chunk === 'function') { cb = chunk; chunk = null; }
     if (typeof encoding === 'function') { cb = encoding; encoding = null; }
     if (chunk != null) this.write(chunk, encoding);
+    this._writableState.ending = true;
     this._writableState.ended = true;
+    this.writable = false;
     const done = () => { this._writableState.finished = true; process.nextTick(() => { this.emit('finish'); if (cb) cb(); }); };
     if (this._final) this._final(done);
     else done();
@@ -388,7 +400,17 @@ class Writable extends Stream {
     this.emit('close');
     return this;
   }
-  setDefaultEncoding(enc) { this._defaultEncoding = enc; return this; }
+  setDefaultEncoding(enc) {
+    const normalized = typeof enc === 'string' ? enc.toLowerCase() : String(enc);
+    if (!Buffer.isEncoding(normalized)) {
+      const label = typeof enc === 'object' ? '{}' : enc;
+      const err = new TypeError('Unknown encoding: ' + label);
+      err.code = 'ERR_UNKNOWN_ENCODING';
+      throw err;
+    }
+    this._defaultEncoding = normalized;
+    return this;
+  }
 
   get destroyed() { return !!this._writableState._destroyed; }
   set destroyed(v) { this._writableState._destroyed = v; }
@@ -405,9 +427,14 @@ class Duplex extends Readable {
   constructor(opts) {
     super(opts);
     this.writable = true;
-    this._writableState = { ended: false, finished: false, corked: 0, buffered: [] };
+    this.allowHalfOpen = opts && opts.allowHalfOpen !== undefined ? opts.allowHalfOpen : true;
+    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: !!(opts && opts.objectMode), needDrain: false, writing: false, length: 0 };
     if (opts && opts.write) this._write = opts.write;
+    if (opts && opts.writev) this._writev = opts.writev;
     if (opts && opts.final) this._final = opts.final;
+    if (opts && opts.defaultEncoding) this._defaultEncoding = opts.defaultEncoding;
+    if (opts && opts.decodeStrings === false) this._decodeStrings = false;
+    if (opts && opts.highWaterMark != null) this._writableState.highWaterMark = opts.highWaterMark;
   }
 
   get destroyed() { return !!(this._readableState._destroyed || this._writableState._destroyed); }
@@ -539,6 +566,13 @@ module.exports.duplexPair = function duplexPair() {
 };
 module.exports.pipeline = pipeline;
 module.exports.finished = finished;
+module.exports.isDisturbed = function isDisturbed(stream) { return !!(stream && (stream._didPush || stream._readableState && stream._readableState.endEmitted)); };
+module.exports.isReadable = function isReadable(stream) { return !!(stream && stream.readable && !stream.destroyed && !stream._readableState.ended); };
+module.exports.isErrored = function isErrored(stream) { return !!(stream && stream._readableState && stream._readableState.errored || stream && stream._writableState && stream._writableState.errored); };
+module.exports.destroy = function destroy(stream, err) {
+  const e = err || (() => { const a = new DOMException('The operation was aborted', 'AbortError'); a.name = 'AbortError'; return a; })();
+  process.nextTick(() => stream.destroy(e));
+};
 module.exports.compose = compose;
 module.exports.addAbortSignal = function addAbortSignal(signal, stream) {
   if (signal.aborted) { stream.destroy(new DOMException('The operation was aborted', 'AbortError')); }

@@ -658,8 +658,24 @@
         this.data = (init && init.data !== undefined) ? init.data : null;
         this.origin = init && init.origin != null ? String(init.origin) : '';
         this.lastEventId = init && init.lastEventId != null ? String(init.lastEventId) : '';
-        this.source = (init && init.source) || null;
-        this.ports = (init && init.ports) || [];
+        if (init && init.source != null) {
+          if (!(init.source instanceof MessagePort)) {
+            const v = typeof init.source === 'object' ? '{}' : JSON.stringify(init.source);
+            throw new TypeError(`MessageEvent constructor: Expected eventInitDict.source ("${v}") to be an instance of MessagePort.`);
+          }
+          this.source = init.source;
+        } else { this.source = null; }
+        if (init && init.ports != null) {
+          if (typeof init.ports[Symbol.iterator] !== 'function') throw new TypeError(`MessageEvent constructor: eventInitDict.ports (${init.ports}) is not iterable.`);
+          const arr = [...init.ports];
+          for (let i = 0; i < arr.length; i++) {
+            if (!(arr[i] instanceof MessagePort)) {
+              const v = arr[i] === null ? 'null' : typeof arr[i] === 'object' ? '{}' : JSON.stringify(arr[i]);
+              throw new TypeError(`MessageEvent constructor: Expected eventInitDict.ports[${i}] ("${v}") to be an instance of MessagePort.`);
+            }
+          }
+          this.ports = arr;
+        } else { this.ports = []; }
       }
     };
   }
