@@ -92,6 +92,6 @@ module.exports = {
   tmpdir: () => process.env.TMPDIR || '/tmp',
   setPriority: (pid, priority) => { if (priority === undefined) { priority = pid; pid = 0; } return b.setPriority(pid, priority); },
   getPriority: (pid) => b.getPriority(pid || 0),
-  EOL: '\n',
   constants,
 };
+Object.defineProperty(module.exports, 'EOL', { value: '\n', writable: false, enumerable: true, configurable: true });

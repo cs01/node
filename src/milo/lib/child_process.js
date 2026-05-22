@@ -43,7 +43,7 @@ function spawnSync(file, args, options) {
     err.errno = -2;
     err.syscall = 'spawnSync ' + file;
     err.path = file;
-    return { status: null, signal: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error: err };
+    return { status: null, signal: null, output: [null, Buffer.alloc(0), Buffer.alloc(0)], stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error: err, pid: 0 };
   }
   const encoding = opts.encoding || 'buffer';
   let stdout = result.stdout || '';
@@ -52,7 +52,7 @@ function spawnSync(file, args, options) {
     stdout = Buffer.from(stdout);
     stderr = Buffer.from(stderr);
   }
-  return { status: result.status, signal: null, stdout, stderr, error: null };
+  return { status: result.status, signal: null, output: [null, stdout, stderr], stdout, stderr, pid: result.pid || 0 };
 }
 
 function execSync(command, options) {

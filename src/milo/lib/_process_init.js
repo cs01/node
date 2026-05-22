@@ -23,7 +23,7 @@ process.env = new Proxy({}, {
   getOwnPropertyDescriptor(_, key) { const v = this.get(null, key); if (v !== undefined) return { value: v, writable: true, enumerable: true, configurable: true }; return undefined; },
 });
 
-process.config = { variables: { asan: 0, v8_enable_i18n_support: 0 }, target_defaults: { default_configuration: 'Release' } };
+process.config = { variables: { asan: 0, v8_enable_i18n_support: 0, node_module_version: 135 }, target_defaults: { default_configuration: 'Release' } };
 process.features = { inspector: false, debug: false, uv: true, ipv6: true, tls: false };
 if (!process.versions) process.versions = {};
 Object.assign(process.versions, {

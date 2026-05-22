@@ -21,4 +21,14 @@ module.exports = {
   promiseHooks: { onInit: () => ({}), onSettled: () => ({}), onBefore: () => ({}), onAfter: () => ({}), createHook: () => ({}) },
   startupSnapshot: { addDeserializeCallback: () => {}, addSerializeCallback: () => {}, setDeserializeMainFunction: () => {}, isBuildingSnapshot: () => false },
   GCProfiler: class GCProfiler { start() {} stop() { return { version: 1, startTime: 0, endTime: 0, statistics: [] }; } },
+  startHeapProfile(opts) {
+    if (opts !== undefined && typeof opts !== 'object') { const e = new TypeError('The "options" argument must be of type object'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (opts) {
+      if (opts.sampleInterval !== undefined) {
+        if (typeof opts.sampleInterval !== 'number') { const e = new TypeError('The "options.sampleInterval" property must be of type number'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+        if (!Number.isInteger(opts.sampleInterval) || opts.sampleInterval < 1) { const e = new RangeError('The "options.sampleInterval" property must be >= 1'); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+      }
+    }
+  },
+  stopHeapProfile() { return { head: {} }; },
 };

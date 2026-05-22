@@ -347,7 +347,7 @@ function isIP(s) {
   // IPv4
   if (/^(\d{1,3}\.){3}\d{1,3}$/.test(s)) {
     const parts = s.split('.');
-    if (parts.every(p => parseInt(p, 10) <= 255)) return 4;
+    if (parts.every(p => (p.length === 1 || p[0] !== '0') && parseInt(p, 10) <= 255)) return 4;
     return 0;
   }
   // IPv6
@@ -362,6 +362,10 @@ function isIP(s) {
     }
     // no leading/trailing single colons (but :: is ok)
     if (/^:[^:]/.test(s) || /[^:]:$/.test(s)) return 0;
+    // no triple colons
+    if (s.includes(':::')) return 0;
+    // no leading IPv4 (1.2.3.4:: is invalid)
+    if (/^\d+\.\d+/.test(s)) return 0;
     // at most one :: group
     const dcs = s.split('::');
     if (dcs.length > 2) return 0;
@@ -379,7 +383,8 @@ function isIP(s) {
     for (let i = 0; i < groups.length; i++) {
       const g = groups[i];
       if (i === groups.length - 1 && /^\d+\.\d+\.\d+\.\d+$/.test(g)) {
-        if (isIP(g) !== 4) return 0;
+        const v4parts = g.split('.');
+        if (!v4parts.every(p => (p.length === 1 || p[0] !== '0') && parseInt(p, 10) <= 255)) return 0;
       } else if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return 0;
     }
     return 6;

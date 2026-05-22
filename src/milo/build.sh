@@ -7,11 +7,16 @@ NODE_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$NODE_DIR/out/Release"
 JOBS="${JOBS:-8}"
 
-# Generate version.milo with embedded git hash
+# Generate version.milo with embedded git hash and commit date
 GIT_HASH=$(cd "$NODE_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_DATE=$(cd "$NODE_DIR" && git log -1 --format=%cs 2>/dev/null || echo "unknown")
 VERSION_FILE="$NODE_DIR/src/milo/runtime/version.milo"
 VERSION_CONTENT="fn miloNodeVersion(): string {
     return \"0.1.0+${GIT_HASH}\"
+}
+
+fn miloBuildDate(): string {
+    return \"${GIT_DATE}\"
 }"
 if [ ! -f "$VERSION_FILE" ] || [ "$(cat "$VERSION_FILE")" != "$VERSION_CONTENT" ]; then
     echo "$VERSION_CONTENT" > "$VERSION_FILE"

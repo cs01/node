@@ -365,6 +365,7 @@ fn fsChmod(info: *u8, _ud: *u8): void {
 extern fn symlink(target: *u8, linkpath: *u8): i32
 extern fn link(oldpath: *u8, newpath: *u8): i32
 extern fn fchmod(fd: i32, mode: u32): i32
+extern fn fchown(fd: i32, owner: u32, group: u32): i32
 extern fn fsync(fd: i32): i32
 extern fn fdatasync(fd: i32): i32
 extern fn ftruncate(fd: i32, length: i64): i32
@@ -550,6 +551,18 @@ fn fsFchmod(info: *u8, _ud: *u8): void {
     unsafe { ci.retI32(fchmod(fd, mode as u32)) }
 }
 
+fn fsFchown(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let fd = ci.i32Arg(0, -1)
+    let uid = ci.i32Arg(1, -1)
+    let gid = ci.i32Arg(2, -1)
+    if fd < 0 {
+        ci.retI32(-1)
+        return
+    }
+    unsafe { ci.retI32(fchown(fd, uid as u32, gid as u32)) }
+}
+
 fn nm_init_fs(_iso: *u8, ctx: *u8, exports: i32): void {
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
@@ -579,5 +592,6 @@ fn nm_init_fs(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "fdatasync" as *u8, fsFdatasync as *u8)
         c.setMethod(exp, "ftruncate" as *u8, fsFtruncate as *u8)
         c.setMethod(exp, "fchmod" as *u8, fsFchmod as *u8)
+        c.setMethod(exp, "fchown" as *u8, fsFchown as *u8)
     }
 }

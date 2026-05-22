@@ -55,7 +55,9 @@ for test in "${SAMPLE[@]}"; do
     name=$(basename "$test")
     echo "  ...   [$I/$N] $name"
 
-    output=$(run_with_timeout "$NODE --max-old-space-size $MAX_HEAP $test" "$TIMEOUT" 2>&1)
+    # Parse // Flags: header from test file and pass through to milo-node
+    FLAGS=$(head -20 "$test" | grep '// Flags:' | sed 's,// Flags:,,' | tr '\n' ' ')
+    output=$(run_with_timeout "$NODE --max-old-space-size $MAX_HEAP $FLAGS $test" "$TIMEOUT" 2>&1)
     rc=$?
 
     # Kill any lingering processes from this test

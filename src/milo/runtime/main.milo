@@ -2,7 +2,7 @@
 
 from "../v8/v8" import { Isolate, Context, Value, CallbackInfo, HandleScope, TryCatch }
 from "std/argparse" import { newParser, ArgParser, ParsedArgs }
-from "version" import { miloNodeVersion }
+from "version" import { miloNodeVersion, miloBuildDate }
 
 // POSIX
 extern fn write(fd: i32, buf: *u8, len: i64): i64
@@ -447,15 +447,19 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         }
     }
 
-    var parser = newParser("milo-node", "Node.js runtime on Milo (" + miloNodeVersion() + ")")
+    var parser = newParser("milo-node", "Node.js runtime on Milo (" + miloNodeVersion() + ", " + miloBuildDate() + ")")
     parser.addString("eval", "e", "Evaluate JavaScript string", "")
     parser.addString("print", "p", "Evaluate and print result", "")
     parser.addString("require", "r", "Preload module before running", "")
     parser.addBool("interactive", "i", "Start REPL (read-eval-print loop)")
     parser.addBool("version", "v", "Print version and exit")
     parser.addString("max-old-space-size", "", "V8 heap limit in MB (default: 512)", "")
+    parser.addBool("expose-internals", "", "Expose internal modules")
+    parser.addBool("no-warnings", "", "Suppress process warnings")
+    parser.addBool("expose-gc", "", "Expose global gc() function")
     parser.addOptionalPositional("file", "JavaScript file to execute")
     parser.enableTrailingArgs()
+    parser.enableIgnoreUnknown()
 
     let parsed = parser.parseFrom(argVec)
 

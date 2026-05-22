@@ -148,8 +148,20 @@ function format(fmt, ...args) {
 function formatWithOptions(_opts, fmt, ...args) { return format(fmt, ...args); }
 
 function inherits(ctor, superCtor) {
+  if (superCtor === undefined || superCtor === null) {
+    const e = new TypeError('The super constructor to "inherits" must not be null or undefined');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (ctor === undefined || ctor === null) {
+    const e = new TypeError('The constructor to "inherits" must not be null or undefined');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (superCtor.prototype === undefined) {
+    const e = new TypeError('The super constructor to "inherits" must have a prototype');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  Object.defineProperty(ctor, 'super_', { value: superCtor, writable: true, configurable: true });
   Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
-  Object.setPrototypeOf(ctor, superCtor);
 }
 
 function deprecate(fn, msg) {

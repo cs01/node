@@ -13,8 +13,9 @@ const _nativeIndexOf = binding.indexOf;
 const _nativeIndexOfByte = binding.indexOfByte;
 const _nativeHexEncode = binding.hexEncode;
 const _nativeHexDecode = binding.hexDecode;
-const _nativeBase64Encode = binding.base64Encode;
-const _nativeBase64Decode = binding.base64Decode;
+// native base64 binding has a bug (returns NUL bytes) — use JS fallback
+const _nativeBase64Encode = null;
+const _nativeBase64Decode = null;
 const _nativeUtf8ByteLength = binding.utf8ByteLength;
 
 function _utf8Encode(str) {
@@ -223,10 +224,18 @@ class Buffer extends Uint8Array {
 
   toString(encoding, start, end) {
     encoding = (encoding || 'utf8').toLowerCase();
-    start = start || 0;
-    end = end !== undefined ? end : this.length;
+    start = Number(start) || 0;
+    if (start < 0 || !Number.isFinite(start)) start = start > 0 ? this.length : 0;
+    start = Math.floor(start);
+    if (start > this.length) start = this.length;
+    end = end !== undefined ? (Number(end) || 0) : this.length;
+    if (end < 0 || !Number.isFinite(end)) end = end > 0 ? this.length : 0;
+    end = Math.floor(end);
+    if (end > this.length) end = this.length;
+    if (end <= start) return '';
     if (encoding === 'hex') return _hexEncode(this, start, end);
     if (encoding === 'base64') return _base64Encode(this, start, end);
+    if (encoding === 'base64url') return _base64Encode(this, start, end).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     if (encoding === 'ascii' || encoding === 'latin1' || encoding === 'binary') {
       let s = '';
       for (let i = start; i < end; i++) s += String.fromCharCode(this[i]);

@@ -157,6 +157,12 @@ function mkdtempSync(prefix) {
   return dir;
 }
 
+function mkdtemp(prefix, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  try { const r = mkdtempSync(prefix); if (cb) process.nextTick(cb, null, r); }
+  catch (e) { if (cb) process.nextTick(cb, e); else throw e; }
+}
+
 function accessSync(path, mode) {
   if (!existsSync(String(path))) {
     const err = new Error('ENOENT: no such file or directory: ' + path);
@@ -465,26 +471,27 @@ class Dirent {
   isSocket() { return this._getStat().isSocket ? this._getStat().isSocket() : false; }
 }
 
+function _promisify(fn) { return (...args) => { try { return Promise.resolve(fn(...args)); } catch (e) { return Promise.reject(e); } }; }
 const promises = {
-  readFile: (path, opts) => Promise.resolve(readFileSync(path, opts)),
-  writeFile: (path, data) => Promise.resolve(writeFileSync(path, data)),
-  stat: (path) => Promise.resolve(statSync(path)),
-  lstat: (path) => Promise.resolve(lstatSync(path)),
-  unlink: (path) => Promise.resolve(unlinkSync(path)),
-  mkdir: (path, opts) => Promise.resolve(mkdirSync(path, opts)),
-  rmdir: (path) => Promise.resolve(rmdirSync(path)),
-  readdir: (path, opts) => Promise.resolve(readdirSync(path, opts)),
-  access: (path, mode) => Promise.resolve(accessSync(path, mode)),
-  rm: (path, opts) => Promise.resolve(rmSync(path, opts)),
-  link: (existing, newPath) => Promise.resolve(linkSync(existing, newPath)),
-  rename: (o, n) => Promise.resolve(renameSync(o, n)),
-  chmod: (p, m) => Promise.resolve(chmodSync(p, m)),
-  copyFile: (src, dst) => Promise.resolve(copyFileSync(src, dst)),
-  mkdtemp: (prefix) => Promise.resolve(mkdtempSync(prefix)),
-  readlink: (p) => Promise.resolve(readlinkSync(p)),
-  realpath: (p) => Promise.resolve(realpathSync(p)),
-  symlink: (target, p) => Promise.resolve(symlinkSync(target, p)),
-  appendFile: (p, data) => Promise.resolve(appendFileSync(p, data)),
+  readFile: _promisify((path, opts) => readFileSync(path, opts)),
+  writeFile: _promisify((path, data) => writeFileSync(path, data)),
+  stat: _promisify((path) => statSync(path)),
+  lstat: _promisify((path) => lstatSync(path)),
+  unlink: _promisify((path) => unlinkSync(path)),
+  mkdir: _promisify((path, opts) => mkdirSync(path, opts)),
+  rmdir: _promisify((path) => rmdirSync(path)),
+  readdir: _promisify((path, opts) => readdirSync(path, opts)),
+  access: _promisify((path, mode) => accessSync(path, mode)),
+  rm: _promisify((path, opts) => rmSync(path, opts)),
+  link: _promisify((existing, newPath) => linkSync(existing, newPath)),
+  rename: _promisify((o, n) => renameSync(o, n)),
+  chmod: _promisify((p, m) => chmodSync(p, m)),
+  copyFile: _promisify((src, dst) => copyFileSync(src, dst)),
+  mkdtemp: _promisify((prefix) => mkdtempSync(prefix)),
+  readlink: _promisify((p) => readlinkSync(p)),
+  realpath: _promisify((p) => realpathSync(p)),
+  symlink: _promisify((target, p) => symlinkSync(target, p)),
+  appendFile: _promisify((p, data) => appendFileSync(p, data)),
   chown: () => Promise.resolve(),
   lchown: () => Promise.resolve(),
   lchmod: () => Promise.resolve(),
@@ -507,8 +514,11 @@ const promises = {
     };
     return Promise.resolve(handle);
   },
+  get constants() { return internalBinding('constants').fs; },
 };
 
+function fchown(fd, uid, gid, cb) { const _f = internalBinding('fs'); _f.fchown(fd, uid, gid); if (cb) process.nextTick(cb, null); }
+function fchownSync(fd, uid, gid) { internalBinding('fs').fchown(fd, uid, gid); }
 function chown(p, uid, gid, cb) { const _f = internalBinding('fs'); _f.chown(p, uid, gid); if (cb) process.nextTick(cb, null); }
 function lchown(p, uid, gid, cb) { const _f = internalBinding('fs'); _f.lchown ? _f.lchown(p, uid, gid) : _f.chown(p, uid, gid); if (cb) process.nextTick(cb, null); }
 function utimes(p, atime, mtime, cb) { const _f = internalBinding('fs'); _f.utimes(p, Math.floor(atime), Math.floor(mtime)); if (cb) process.nextTick(cb, null); }
@@ -522,8 +532,8 @@ function truncateSync(p, len) { const _f = internalBinding('fs'); _f.truncate(p,
 module.exports = {
   readFile, writeFile, appendFile, stat, lstat, mkdir, readdir,
   unlink, rmdir, rename, chmod, access, rm, copyFile, realpath, exists,
-  open, close, read, write, fstat, fsync, fdatasync, ftruncate, fchmod, link, readlink, symlink,
-  chown, lchown, utimes, lutimes, truncate,
+  open, close, read, write, fstat, fsync, fdatasync, ftruncate, fchmod, fchown, link, readlink, symlink,
+  chown, lchown, utimes, lutimes, truncate, mkdtemp,
   readFileSync, writeFileSync, appendFileSync, statSync, existsSync,
   mkdirSync, unlinkSync, rmdirSync, renameSync,
   readdirSync, realpathSync, chmodSync,
@@ -531,7 +541,7 @@ module.exports = {
   symlinkSync, lstatSync, readlinkSync, linkSync,
   chownSync, lchownSync, utimesSync, truncateSync,
   openSync, closeSync, fstatSync, writeSync, readSync,
-  fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync,
+  fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync, fchownSync,
   createReadStream, createWriteStream,
   ReadStream: createReadStream, WriteStream: createWriteStream,
   watch, watchFile, unwatchFile, FSWatcher, Dirent,

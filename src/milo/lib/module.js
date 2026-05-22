@@ -17,10 +17,11 @@ class Module {
   }
 
   static builtinModules = [
-    'assert', 'buffer', 'child_process', 'cluster', 'console', 'crypto',
-    'dgram', 'dns', 'domain', 'events', 'fs', 'http', 'https', 'module',
-    'net', 'os', 'path', 'punycode', 'querystring', 'readline', 'repl', 'stream',
-    'string_decoder', 'test', 'tls', 'url', 'util', 'v8', 'vm', 'worker_threads', 'zlib',
+    'assert', 'async_hooks', 'buffer', 'child_process', 'cluster', 'console', 'constants',
+    'crypto', 'dgram', 'diagnostics_channel', 'dns', 'domain', 'events', 'fs', 'http',
+    'https', 'module', 'net', 'os', 'path', 'perf_hooks', 'punycode', 'querystring',
+    'readline', 'repl', 'stream', 'string_decoder', 'sys', 'test', 'timers', 'tls', 'tty',
+    'url', 'util', 'v8', 'vm', 'worker_threads', 'zlib',
   ];
 
   static isBuiltin(name) {

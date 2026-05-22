@@ -189,6 +189,28 @@
   if (typeof performance === 'undefined') { const _perfOrigin = Date.now(); globalThis.performance = { now() { return Date.now() - _perfOrigin; }, timeOrigin: _perfOrigin }; }
   if (typeof global === 'undefined') globalThis.global = globalThis;
   if (typeof structuredClone === 'undefined') globalThis.structuredClone = (v) => JSON.parse(JSON.stringify(v));
+  if (typeof CustomEvent === 'undefined') globalThis.CustomEvent = class CustomEvent extends Event { constructor(type, opts) { super(type, opts); this.detail = opts?.detail ?? null; } };
+  if (typeof Navigator === 'undefined') {
+    class Navigator { get userAgent() { return 'milo-node'; } get language() { return 'en-US'; } get languages() { return ['en-US']; } get hardwareConcurrency() { return 1; } get platform() { return process.platform; } }
+    globalThis.Navigator = Navigator;
+    globalThis.navigator = new Navigator();
+  }
+  if (typeof Blob === 'undefined') {
+    globalThis.Blob = class Blob {
+      #parts; #type;
+      constructor(parts = [], opts = {}) {
+        this.#parts = parts.map(p => typeof p === 'string' ? new TextEncoder().encode(p) : (p instanceof Blob ? p.#parts.flat() : new Uint8Array(p instanceof ArrayBuffer ? p : p.buffer || p))).flat();
+        this.#type = (opts.type || '').toLowerCase();
+      }
+      get size() { return this.#parts.reduce((s, p) => s + p.byteLength, 0); }
+      get type() { return this.#type; }
+      async text() { const d = new TextDecoder(); return this.#parts.map(p => d.decode(p)).join(''); }
+      async arrayBuffer() { const r = new Uint8Array(this.size); let o = 0; for (const p of this.#parts) { r.set(p, o); o += p.byteLength; } return r.buffer; }
+      slice(start = 0, end = this.size, type = '') { const buf = new Uint8Array(this.size); let o = 0; for (const p of this.#parts) { buf.set(p, o); o += p.byteLength; } return new Blob([buf.slice(start, end)], { type }); }
+      stream() { const buf = this.#parts; return new ReadableStream({ start(c) { for (const p of buf) c.enqueue(p); c.close(); } }); }
+    };
+    globalThis.File = class File extends Blob { #name; #lastModified; constructor(parts, name, opts = {}) { super(parts, opts); this.#name = name; this.#lastModified = opts.lastModified || Date.now(); } get name() { return this.#name; } get lastModified() { return this.#lastModified; } };
+  }
 
   // --- require() ---
   const _fsBinding = _nativeBinding('fs');
@@ -554,8 +576,22 @@
       if (_moduleWrappers[id]) return _moduleWrappers[id].exports;
       if (moduleCache[id]) return moduleCache[id];
 
+      // Handle internal/* requires (--expose-internals compatibility)
+      if (id.startsWith('internal/')) {
+        let stub;
+        if (id === 'internal/test/binding') {
+          stub = { internalBinding: globalThis.internalBinding };
+        } else if (id === 'internal/errors') {
+          stub = { codes: new Proxy({}, { get(_, k) { return class extends Error { constructor(...a) { super(a.join(', ')); this.code = k; } }; } }) };
+        } else {
+          stub = Object.create(null);
+        }
+        moduleCache[id] = stub;
+        return stub;
+      }
+
       // Handle builtin subpath requires like fs/promises, stream/promises
-      const _builtinSubpaths = { 'fs/promises': 'fs', 'stream/promises': 'stream', 'stream/consumers': 'stream', 'stream/web': 'stream', 'dns/promises': 'dns', 'readline/promises': 'readline', 'timers/promises': 'timers', 'diagnostics_channel': 'diagnostics_channel', 'util/types': 'util' };
+      const _builtinSubpaths = { 'fs/promises': 'fs', 'stream/promises': 'stream', 'stream/consumers': 'stream', 'stream/web': 'stream', 'dns/promises': 'dns', 'readline/promises': 'readline', 'timers/promises': 'timers', 'util/types': 'util' };
       if (_builtinSubpaths[id]) {
         const parent = require(_builtinSubpaths[id]);
         const sub = id.split('/')[1];
