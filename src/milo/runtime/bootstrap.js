@@ -854,14 +854,30 @@
           stub = { internalBinding: globalThis.internalBinding };
         } else if (id === 'internal/errors') {
           const _errCodes = {};
-          const _codesProxy = new Proxy(_errCodes, { get(t, k) { return t[k] || class extends Error { constructor(...a) { super(a.join(', ')); this.code = k; } }; } });
+          const _codesProxy = new Proxy(_errCodes, { get(t, k) {
+            if (t[k]) return t[k];
+            const C = class extends Error { constructor(...a) { super(a.join(', ')); this.code = k; } };
+            Object.defineProperty(C, 'name', { value: k });
+            return C;
+          } });
           class SystemError extends Error { constructor(msg, ctx) { super(typeof msg === 'string' ? msg : (ctx && ctx.message) || ''); if (typeof msg === 'object') ctx = msg; if (ctx) { this.code = ctx.code; this.syscall = ctx.syscall; if (ctx.path) this.path = ctx.path; if (ctx.dest) this.dest = ctx.dest; this.errno = ctx.errno; } } get info() { return { code: this.code, syscall: this.syscall, path: this.path, dest: this.dest, errno: this.errno, message: this.message }; } }
           function E(code, msgTpl, Base) {
             const Cls = class extends (Base || Error) { constructor(...a) { let msg; if (typeof msgTpl === 'function') msg = msgTpl(...a); else if (typeof msgTpl === 'string') { msg = msgTpl; let i = 0; msg = msg.replace(/%[sd]/g, () => String(a[i++])); } else msg = String(a[0] || ''); super(Base === SystemError ? a[0] : msg, Base === SystemError ? undefined : undefined); if (Base === SystemError && typeof a[0] === 'object') { const ctx = a[0]; this.code = code; this.syscall = ctx.syscall; if (ctx.path) this.path = ctx.path; if (ctx.dest) this.dest = ctx.dest; this.errno = ctx.errno; this.message = msg || ctx.message; } this.code = code; } };
             Object.defineProperty(Cls, 'name', { value: code });
             _errCodes[code] = Cls;
           }
-          stub = { codes: _codesProxy, E, SystemError };
+          E('ERR_INVALID_ARG_TYPE', (name, expected, actual) => {
+            let msg = `The "${name}" argument must be ${expected.includes('|') ? 'one of type ' : 'of type '}${expected}`;
+            if (actual !== undefined) { const t = actual === null ? 'null' : typeof actual; msg += `. Received ${t === 'object' ? 'an instance of ' + actual?.constructor?.name : 'type ' + t}`; }
+            return msg;
+          }, TypeError);
+          E('ERR_INVALID_ARG_VALUE', (name, value, reason) => `The ${typeof name === 'string' && name.startsWith('property') ? name : `argument '${name}'`} ${reason || 'is invalid'}. Received ${String(value)}`, TypeError);
+          E('ERR_OUT_OF_RANGE', (name, range, actual) => `The value of "${name}" is out of range. It must be ${range}. Received ${actual}`, RangeError);
+          E('ERR_MISSING_ARGS', (...args) => `The ${args.map(a => `"${a}"`).join(', ')} argument${args.length > 1 ? 's' : ''} must be specified`, TypeError);
+          E('ERR_INVALID_RETURN_VALUE', (expected, name, actual) => `Expected ${expected} from "${name}" but got ${typeof actual}`, TypeError);
+          E('ERR_INVALID_CALLBACK', (v) => `Callback must be a function. Received ${v}`, TypeError);
+          E('ERR_UNKNOWN_ENCODING', (enc) => `Unknown encoding: ${enc}`, TypeError);
+          stub = { codes: _codesProxy, E, SystemError, isStackOverflowError: (e) => e?.message?.includes?.('Maximum call stack') || false, connResetException: (msg) => { const e = new Error(msg || 'socket hang up'); e.code = 'ECONNRESET'; return e; }, uvExceptionWithHostPort: (err, syscall, address, port) => { const e = new Error(`${syscall} ${err} ${address}:${port}`); e.code = err; e.syscall = syscall; return e; } };
         } else if (id === 'internal/options') {
           stub = { getOptionValue: (name) => { if (name === '--insecure-http-parser') return false; if (name === '--use-env-proxy') return false; if (name === '--force-fips') return false; if (name === '--enable-source-maps') return false; if (name === '--pending-deprecation') return false; return undefined; } };
         } else if (id === 'internal/validators') {

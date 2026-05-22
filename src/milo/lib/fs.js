@@ -219,7 +219,14 @@ function createWriteStream(path, opts) {
 }
 
 // Async callback wrappers — run sync on next tick to match Node.js API shape
+function _validateCb(cb) {
+  if (typeof cb !== 'function') {
+    const e = new TypeError('Callback must be a function. Received ' + typeof cb);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+}
 function _async(syncFn, args, cb) {
+  _validateCb(cb);
   process.nextTick(() => { try { const r = syncFn(...args); cb(null, r); } catch (e) { cb(e); } });
 }
 
@@ -230,6 +237,7 @@ function readFile(path, opts, cb) {
 
 function writeFile(path, data, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validateCb(cb);
   _async(writeFileSync, [path, data], (err) => cb(err));
 }
 
@@ -253,21 +261,21 @@ function readdir(path, opts, cb) {
   _async(readdirSync, [path, opts], cb);
 }
 
-function unlink(path, cb) { _async(unlinkSync, [path], (err) => cb(err)); }
-function rmdir(path, cb) { _async(rmdirSync, [path], (err) => cb(err)); }
-function rename(oldPath, newPath, cb) { _async(renameSync, [oldPath, newPath], (err) => cb(err)); }
-function chmod(path, mode, cb) { _async(chmodSync, [path, mode], (err) => cb(err)); }
+function unlink(path, cb) { _validateCb(cb); _async(unlinkSync, [path], (err) => cb(err)); }
+function rmdir(path, cb) { _validateCb(cb); _async(rmdirSync, [path], (err) => cb(err)); }
+function rename(oldPath, newPath, cb) { _validateCb(cb); _async(renameSync, [oldPath, newPath], (err) => cb(err)); }
+function chmod(path, mode, cb) { _validateCb(cb); _async(chmodSync, [path, mode], (err) => cb(err)); }
 function access(path, mode, cb) {
   if (typeof mode === 'function') { cb = mode; mode = undefined; }
-  _async(accessSync, [path, mode], (err) => cb(err));
+  _validateCb(cb); _async(accessSync, [path, mode], (err) => cb(err));
 }
 function rm(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
-  _async(rmSync, [path, opts], (err) => cb(err));
+  _validateCb(cb); _async(rmSync, [path, opts], (err) => cb(err));
 }
 function copyFile(src, dest, flags, cb) {
   if (typeof flags === 'function') { cb = flags; flags = 0; }
-  _async(copyFileSync, [src, dest], (err) => cb(err));
+  _validateCb(cb); _async(copyFileSync, [src, dest], (err) => cb(err));
 }
 function realpath(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
@@ -275,9 +283,15 @@ function realpath(path, opts, cb) {
 }
 function appendFile(path, data, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
-  _async(appendFileSync, [path, data], (err) => cb(err));
+  _validateCb(cb); _async(appendFileSync, [path, data], (err) => cb(err));
 }
-function exists(path, cb) { process.nextTick(() => cb(existsSync(path))); }
+function exists(path, cb) {
+  if (typeof cb !== 'function') {
+    const e = new TypeError('The "cb" argument must be of type function. Received ' + typeof cb);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  process.nextTick(() => cb(existsSync(path)));
+}
 
 function linkSync(existingPath, newPath) {
   const r = b.link(String(existingPath), String(newPath));

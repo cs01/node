@@ -60,6 +60,20 @@ class ZlibTransform extends Transform {
       cb(null, result);
     } catch (e) { cb(e); }
   }
+  flush(kind, cb) {
+    if (typeof kind === 'function') { cb = kind; kind = constants.Z_FULL_FLUSH; }
+    if (this._chunks.length > 0) {
+      const input = Buffer.concat(this._chunks);
+      this._chunks = [];
+      try {
+        const result = _syncOp(this._mode, input, this._opts);
+        this.push(result);
+      } catch (e) { if (cb) { cb(e); return; } throw e; }
+    }
+    if (cb) process.nextTick(cb);
+  }
+  close(cb) { if (cb) process.nextTick(cb); this.destroy(); }
+  params(level, strategy, cb) { if (cb) process.nextTick(cb); }
 }
 
 class Gzip extends ZlibTransform { constructor(opts) { super(0, opts); } }
@@ -94,6 +108,20 @@ const constants = Object.freeze({
 // Allow calling constructors without new
 function _wrapClass(Cls) { const w = function(opts) { return new Cls(opts); }; Object.setPrototypeOf(w, Cls); w.prototype = Cls.prototype; return w; }
 
+// CRC32 lookup table
+const _crc32Table = new Int32Array(256);
+for (let i = 0; i < 256; i++) {
+  let c = i;
+  for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+  _crc32Table[i] = c;
+}
+function crc32(data, value) {
+  if (typeof data === 'string') data = Buffer.from(data);
+  let crc = (value || 0) ^ -1;
+  for (let i = 0; i < data.length; i++) crc = _crc32Table[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ -1) >>> 0;
+}
+
 module.exports = {
   Gzip: _wrapClass(Gzip), Gunzip: _wrapClass(Gunzip), Deflate: _wrapClass(Deflate), Inflate: _wrapClass(Inflate),
   DeflateRaw: _wrapClass(DeflateRaw), InflateRaw: _wrapClass(InflateRaw), Unzip: _wrapClass(Unzip),
@@ -105,6 +133,7 @@ module.exports = {
   gzipSync, gunzipSync, deflateSync, inflateSync,
   deflateRawSync, inflateRawSync, unzipSync,
   brotliCompressSync, brotliDecompressSync,
+  crc32,
   constants,
 };
 Object.defineProperty(module.exports, 'codes', { value: constants, writable: false, configurable: false, enumerable: true });
