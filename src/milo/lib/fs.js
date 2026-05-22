@@ -131,7 +131,7 @@ function writeSync(fd, data, offset, length, position) {
 
 function rmSync(path, opts) {
   try {
-    const s = statSync(String(path));
+    const s = lstatSync(String(path));
     if (s.isDirectory()) {
       if (opts && opts.recursive) {
         const entries = readdirSync(String(path));

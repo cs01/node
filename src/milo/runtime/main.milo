@@ -623,6 +623,20 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         }
         v8c_try_catch_delete(tc)
 
+        // Set process._eval and process.execArgv for fork bomb protection
+        if scriptFile as i64 == 0 && script as i64 != 0 {
+            let evalLen = strlen(script) as i32
+            ctx.objectSet(proc, "_eval" as *u8, iso.stringLen(script, evalLen))
+            let execArgvArr = iso.array(2)
+            if printResult {
+                ctx.objectSetIndex(execArgvArr, 0, iso.string("-p" as *u8))
+            } else {
+                ctx.objectSetIndex(execArgvArr, 0, iso.string("-e" as *u8))
+            }
+            ctx.objectSetIndex(execArgvArr, 1, iso.stringLen(script, evalLen))
+            ctx.objectSet(proc, "execArgv" as *u8, execArgvArr)
+        }
+
         // Preload --require module if specified
         if preloadModule as i64 != 0 {
             var reqCode: [u8; 2048] = [0; 2048]
@@ -655,10 +669,30 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         let tc2 = v8c_try_catch_new(isoPtr)
         var result = Value { slot: -1 }
         if scriptFile as i64 != 0 {
-            ctx.objectSet(global, "__filename" as *u8, iso.string(scriptFile))
-            let setCtx = "(function(){const p=require('path');const f=p.resolve(__filename);globalThis.__filename=f;globalThis.__dirname=p.dirname(f);globalThis._requireStack.push(p.dirname(f));if(globalThis._makeRequire)globalThis.require=globalThis._makeRequire(p.dirname(f));})()"
-            ctx.compileRun(setCtx as *u8, strlen(setCtx) as i32, "[setup]" as *u8)
-            result = ctx.compileRun(script, scriptLen, scriptFile)
+            // Load through module system for CommonJS semantics (top-level return, module/exports)
+            var runCode: [u8; 4096] = [0; 4096]
+            let rPrefix = "(function(){const p=require('path');const f=p.resolve('"
+            let rMiddle = "');require.main={id:'.',filename:f,loaded:false,paths:[]};require(f);})()"
+            var wi: i64 = 0
+            var wj: i64 = 0
+            while wj < strlen(rPrefix) {
+                runCode[wi] = rPrefix[wj]
+                wi = wi + 1
+                wj = wj + 1
+            }
+            wj = 0
+            while wj < strlen(scriptFile) {
+                runCode[wi] = scriptFile[wj]
+                wi = wi + 1
+                wj = wj + 1
+            }
+            wj = 0
+            while wj < strlen(rMiddle) {
+                runCode[wi] = rMiddle[wj]
+                wi = wi + 1
+                wj = wj + 1
+            }
+            result = ctx.compileRun(runCode as *u8, wi as i32, "[main]" as *u8)
         } else {
             result = ctx.compileRun(script, scriptLen, "[eval]" as *u8)
         }

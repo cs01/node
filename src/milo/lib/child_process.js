@@ -256,7 +256,20 @@ function fork(modulePath, args, options) {
 
   // Resolve the execPath (use current process executable)
   const execPath = options.execPath || process.execPath || './out/Release/milo-node';
-  const execArgv = options.execArgv || [];
+  let execArgv = options.execArgv || process.execArgv || [];
+
+  // Fork bomb protection: strip -e/--eval from execArgv so child doesn't re-run eval
+  if (process._eval != null) {
+    const filtered = [];
+    for (let i = 0; i < execArgv.length; i++) {
+      if (execArgv[i] === '-e' || execArgv[i] === '--eval' || execArgv[i] === '-p' || execArgv[i] === '--print') {
+        i++; // skip the value arg too
+      } else {
+        filtered.push(execArgv[i]);
+      }
+    }
+    execArgv = filtered;
+  }
 
   // Build spawn args: execArgv + modulePath + args
   const spawnArgs = [...execArgv, modulePath, ...args];

@@ -521,6 +521,13 @@
 
   function _loadModule(id, resolved, fileSrc) {
     const mod = { exports: {} };
+    // Link require.main to actual module object so `module === require.main` works
+    if (require.main && require.main.filename === resolved) {
+      mod.id = require.main.id;
+      mod.filename = require.main.filename;
+      mod.paths = require.main.paths || [];
+      require.main = mod;
+    }
     _moduleWrappers[resolved] = mod;
     const isBare = !id.startsWith('./') && !id.startsWith('../') && !id.startsWith('/') && id !== '.' && id !== '..';
     if (isBare && id !== resolved) _moduleWrappers[id] = mod;
@@ -599,9 +606,14 @@
       throw new Error("Cannot find module '" + id + "'");
     };
     require.cache = moduleCache;
-    require.main = null;
+    Object.defineProperty(require, 'main', {
+      get() { return _requireMain; },
+      set(v) { _requireMain = v; },
+      configurable: true,
+    });
     return require;
   }
+  let _requireMain = null;
 
   globalThis._makeRequire = _makeRequire;
   globalThis.require = _makeRequire('');
