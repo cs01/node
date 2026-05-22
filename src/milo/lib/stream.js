@@ -70,7 +70,7 @@ class Readable extends Stream {
     this.readable = true;
     this._readableState = {
       flowing: null, ended: false, buffer: [], length: 0,
-      highWaterMark: (opts && opts.highWaterMark) || 16384,
+      highWaterMark: (opts && opts.highWaterMark != null) ? opts.highWaterMark : (opts && opts.readableHighWaterMark != null) ? opts.readableHighWaterMark : 16384,
       objectMode: !!(opts && opts.objectMode),
       encoding: null,
       pipes: [],
@@ -344,13 +344,13 @@ class Writable extends Stream {
   constructor(opts) {
     super();
     this.writable = true;
-    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: !!(opts && opts.objectMode), needDrain: false, writing: false, length: 0 };
+    const _wHWM2 = (opts && opts.highWaterMark != null) ? opts.highWaterMark : (opts && opts.writableHighWaterMark != null) ? opts.writableHighWaterMark : 16384;
+    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: !!(opts && opts.objectMode), needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2 };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;
     if (opts && opts.final) this._final = opts.final;
     if (opts && opts.defaultEncoding) this._defaultEncoding = opts.defaultEncoding;
     if (opts && opts.decodeStrings === false) this._decodeStrings = false;
-    if (opts && opts.highWaterMark != null) this._writableState.highWaterMark = opts.highWaterMark;
     if (opts && opts.objectMode) this._writableState.objectMode = true;
   }
 
@@ -370,12 +370,17 @@ class Writable extends Stream {
       throw err;
     }
     if (typeof chunk === 'string' && this._decodeStrings !== false) chunk = Buffer.from(chunk, encoding);
+    this._writableState.writing = true;
+    this._writableState.length += (this._writableState.objectMode ? 1 : (chunk.length || 0));
     this._write(chunk, encoding || 'utf8', (err) => {
+      this._writableState.writing = false;
+      this._writableState.length -= (this._writableState.objectMode ? 1 : (chunk.length || 0));
       if (err) this.emit('error', err);
       else this.emit('drain');
       if (cb) cb(err);
     });
-    return true;
+    const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 16384;
+    return this._writableState.length < hwm;
   }
 
   end(chunk, encoding, cb) {
@@ -385,9 +390,9 @@ class Writable extends Stream {
     this._writableState.ending = true;
     this._writableState.ended = true;
     this.writable = false;
-    const done = () => { this._writableState.finished = true; process.nextTick(() => { this.emit('finish'); if (cb) cb(); }); };
+    const done = () => { this._writableState.finished = true; this.emit('finish'); if (cb) cb(); };
     if (this._final) this._final(done);
-    else done();
+    else process.nextTick(done);
     return this;
   }
 
@@ -416,7 +421,7 @@ class Writable extends Stream {
   set destroyed(v) { this._writableState._destroyed = v; }
   get writableEnded() { return this._writableState.ended; }
   get writableFinished() { return this._writableState.finished; }
-  get writableHighWaterMark() { return (this._writableState && this._writableState.highWaterMark) || 16384; }
+  get writableHighWaterMark() { return this._writableState && this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 16384; }
   get writableLength() { return (this._writableState && this._writableState.buffered && this._writableState.buffered.length) || 0; }
   get writableObjectMode() { return !!(this._writableState && this._writableState.objectMode); }
   get writableCorked() { return (this._writableState && this._writableState.corked) || 0; }
@@ -428,20 +433,20 @@ class Duplex extends Readable {
     super(opts);
     this.writable = true;
     this.allowHalfOpen = opts && opts.allowHalfOpen !== undefined ? opts.allowHalfOpen : true;
-    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: !!(opts && opts.objectMode), needDrain: false, writing: false, length: 0 };
+    const _wHWM = (opts && opts.highWaterMark != null) ? opts.highWaterMark : (opts && opts.writableHighWaterMark != null) ? opts.writableHighWaterMark : 16384;
+    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: !!(opts && opts.objectMode), needDrain: false, writing: false, length: 0, highWaterMark: _wHWM };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;
     if (opts && opts.final) this._final = opts.final;
     if (opts && opts.defaultEncoding) this._defaultEncoding = opts.defaultEncoding;
     if (opts && opts.decodeStrings === false) this._decodeStrings = false;
-    if (opts && opts.highWaterMark != null) this._writableState.highWaterMark = opts.highWaterMark;
   }
 
   get destroyed() { return !!(this._readableState._destroyed || this._writableState._destroyed); }
   set destroyed(v) { this._readableState._destroyed = v; this._writableState._destroyed = v; }
   get writableEnded() { return this._writableState.ended; }
   get writableFinished() { return this._writableState.finished; }
-  get writableHighWaterMark() { return (this._writableState && this._writableState.highWaterMark) || 16384; }
+  get writableHighWaterMark() { return this._writableState && this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 16384; }
   get writableLength() { return (this._writableState && this._writableState.buffered && this._writableState.buffered.length) || 0; }
   get writableObjectMode() { return !!(this._writableState && this._writableState.objectMode); }
   get writableCorked() { return (this._writableState && this._writableState.corked) || 0; }
