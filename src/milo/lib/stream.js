@@ -111,6 +111,7 @@ class Readable extends Stream {
   push(chunk, encoding) {
     const state = this._readableState;
     this._didPush = true;
+    if (chunk === undefined) return state.length < state.highWaterMark;
     if (chunk === null) {
       state.ended = true;
       if (state.flowing) process.nextTick(() => {

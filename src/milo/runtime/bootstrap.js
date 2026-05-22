@@ -223,6 +223,49 @@
     globalThis.PerformanceObserver = class PerformanceObserver { constructor(cb) { this._cb = cb; } observe() {} disconnect() {} takeRecords() { return []; } };
     globalThis.PerformanceObserver.supportedEntryTypes = ['mark', 'measure'];
   }
+  if (typeof Headers === 'undefined') {
+    globalThis.Headers = class Headers {
+      constructor(init) {
+        this._map = new Map();
+        if (init instanceof Headers) { for (const [k, v] of init) this._map.set(k.toLowerCase(), v); }
+        else if (Array.isArray(init)) { for (const [k, v] of init) this._map.set(k.toLowerCase(), v); }
+        else if (init && typeof init === 'object') { for (const k of Object.keys(init)) this._map.set(k.toLowerCase(), String(init[k])); }
+      }
+      get(name) { return this._map.get(name.toLowerCase()) ?? null; }
+      set(name, value) { this._map.set(name.toLowerCase(), String(value)); }
+      has(name) { return this._map.has(name.toLowerCase()); }
+      delete(name) { this._map.delete(name.toLowerCase()); }
+      append(name, value) { const k = name.toLowerCase(); const old = this._map.get(k); this._map.set(k, old ? old + ', ' + value : String(value)); }
+      forEach(cb, thisArg) { this._map.forEach((v, k) => cb.call(thisArg, v, k, this)); }
+      entries() { return this._map.entries(); }
+      keys() { return this._map.keys(); }
+      values() { return this._map.values(); }
+      [Symbol.iterator]() { return this._map.entries(); }
+    };
+  }
+  if (typeof Request === 'undefined') {
+    globalThis.Request = class Request {
+      constructor(input, init) {
+        if (typeof input === 'string') { this.url = input; this.method = init?.method || 'GET'; this.headers = new Headers(init?.headers); this._body = init?.body || null; }
+        else { this.url = input.url; this.method = input.method; this.headers = new Headers(input.headers); this._body = input._body; }
+      }
+      async text() { return this._body ? String(this._body) : ''; }
+      async json() { return JSON.parse(await this.text()); }
+      async arrayBuffer() { const t = await this.text(); return new TextEncoder().encode(t).buffer; }
+    };
+  }
+  if (typeof Response === 'undefined') {
+    globalThis.Response = class Response {
+      constructor(body, init) {
+        this._body = body; this.status = init?.status || 200; this.statusText = init?.statusText || '';
+        this.headers = new Headers(init?.headers); this.ok = this.status >= 200 && this.status < 300;
+      }
+      async text() { return this._body ? String(this._body) : ''; }
+      async json() { return JSON.parse(await this.text()); }
+      async arrayBuffer() { const t = await this.text(); return new TextEncoder().encode(t).buffer; }
+      static json(data, init) { return new Response(JSON.stringify(data), { ...init, headers: { 'content-type': 'application/json', ...(init?.headers || {}) } }); }
+    };
+  }
   if (typeof global === 'undefined') globalThis.global = globalThis;
   if (typeof structuredClone === 'undefined') globalThis.structuredClone = (v) => JSON.parse(JSON.stringify(v));
   if (typeof CustomEvent === 'undefined') globalThis.CustomEvent = class CustomEvent extends Event { constructor(type, opts) { super(type, opts); this.detail = opts?.detail ?? null; } };
