@@ -134,6 +134,16 @@ function Url() {
   this.href = null;
 }
 
+// Polyfill URLSearchParams.sort if missing (older V8 builds)
+if (!URLSearchParams.prototype.sort) {
+  URLSearchParams.prototype.sort = function() {
+    const entries = [...this.entries()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    const keys = [...this.keys()];
+    for (const k of keys) this.delete(k);
+    for (const [k, v] of entries) this.append(k, v);
+  };
+}
+
 module.exports = {
   URL: globalThis.URL, URLSearchParams: globalThis.URLSearchParams,
   parse, resolve, resolveObject, format, pathToFileURL, fileURLToPath, urlToHttpOptions,

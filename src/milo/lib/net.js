@@ -169,8 +169,8 @@ class Socket extends EventEmitter {
     return dest;
   }
 
-  ref() { return this; }
-  unref() { return this; }
+  ref() { this._unref = false; return this; }
+  unref() { this._unref = true; return this; }
 }
 Socket._sockets = new Map();
 
@@ -260,8 +260,8 @@ class Server extends EventEmitter {
     return this;
   }
 
-  ref() { return this; }
-  unref() { return this; }
+  ref() { this._unref = false; return this; }
+  unref() { this._unref = true; return this; }
   getConnections(cb) { cb(null, this._connections); }
 }
 Server._servers = new Map();

@@ -192,7 +192,7 @@ const win32 = {
   resolve(...args) { return resolve(...args).replace(/\//g, '\\'); },
   normalize(p) { return normalize(p.replace(/\\/g, '/')).replace(/\//g, '\\'); },
   isAbsolute(p) { return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\'); },
-  join(...args) { return args.join('\\').replace(/\\/g, '/').split('/').filter((s,i) => s || i === 0).join('\\'); },
+  join(...args) { if (args.length === 0) return '.'; const joined = args.filter(a => a !== '').map(a => a.replace(/\\/g, '/')).join('/'); if (!joined) return '.'; return normalize(joined).replace(/\//g, '\\'); },
   dirname(p) { const n = p.replace(/\\/g, '/'); const d = dirname(n); return d.replace(/\//g, '\\'); },
   basename(p, ext) { const parts = p.replace(/\\+$/, '').split(/[\\/]/); const b = parts[parts.length - 1] || ''; if (ext && b.endsWith(ext)) return b.slice(0, -ext.length); return b; },
   extname(p) { return extname(p.replace(/\\/g, '/')); },

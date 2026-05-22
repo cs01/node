@@ -38,7 +38,12 @@ function spawnSync(file, args, options) {
   const [stdinMode, stdoutMode, stderrMode] = parseStdio(opts);
   const result = b.spawnSync(file, allArgs, input, stdinMode, stdoutMode, stderrMode);
   if (result.error) {
-    return { status: null, signal: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error: new Error('spawn ' + file + ' failed') };
+    const err = new Error('spawnSync ' + file + ' ENOENT');
+    err.code = 'ENOENT';
+    err.errno = -2;
+    err.syscall = 'spawnSync ' + file;
+    err.path = file;
+    return { status: null, signal: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error: err };
   }
   const encoding = opts.encoding || 'buffer';
   let stdout = result.stdout || '';

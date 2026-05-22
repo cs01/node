@@ -39,59 +39,92 @@ const types = {
 };
 
 function inspect(obj, opts) {
-  if (obj === null) return 'null';
-  if (obj === undefined) return 'undefined';
-  if (typeof obj === 'string') return "'" + obj + "'";
-  if (typeof obj === 'number' || typeof obj === 'boolean' || typeof obj === 'bigint') return String(obj);
-  if (typeof obj === 'symbol') return obj.toString();
-  if (typeof obj === 'function') return '[Function: ' + (obj.name || 'anonymous') + ']';
+  if (typeof opts === 'boolean') opts = { showHidden: opts };
+  const colors = opts && opts.colors;
+  const _c = (style, s) => {
+    if (!colors) return s;
+    const code = inspect.colors[inspect.styles[style]];
+    return code ? `\x1b[${code[0]}m${s}\x1b[${code[1]}m` : s;
+  };
+  if (obj === null) return _c('null', 'null');
+  if (obj === undefined) return _c('undefined', 'undefined');
+  if (typeof obj === 'string') return _c('string', "'" + obj + "'");
+  if (typeof obj === 'number') return _c('number', String(obj));
+  if (typeof obj === 'boolean') return _c('boolean', String(obj));
+  if (typeof obj === 'bigint') return _c('bigint', String(obj) + 'n');
+  if (typeof obj === 'symbol') return _c('symbol', obj.toString());
+  if (typeof obj === 'function') return _c('special', '[Function: ' + (obj.name || 'anonymous') + ']');
+
+  if (obj[Symbol.for('nodejs.util.inspect.custom')]) {
+    const custom = obj[Symbol.for('nodejs.util.inspect.custom')](opts && opts.depth !== undefined ? opts.depth : 2, opts || {}, inspect);
+    if (typeof custom === 'string') return custom;
+  }
 
   const depth = (opts && opts.depth !== undefined) ? opts.depth : 2;
-  return _inspectObject(obj, depth, 0, new Set());
+  return _inspectObject(obj, depth, 0, new Set(), colors);
 }
 
-function _inspectObject(obj, maxDepth, currentDepth, seen) {
+function _colorize(style, s) {
+  const code = inspect.colors[inspect.styles[style]];
+  return code ? `\x1b[${code[0]}m${s}\x1b[${code[1]}m` : s;
+}
+
+function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
   if (seen.has(obj)) return '[Circular]';
   seen.add(obj);
 
   if (Array.isArray(obj)) {
     if (currentDepth >= maxDepth) return '[Array]';
-    const items = obj.map(v => _inspectValue(v, maxDepth, currentDepth + 1, seen));
+    const items = obj.map(v => _inspectValue(v, maxDepth, currentDepth + 1, seen, colors));
     return '[ ' + items.join(', ') + ' ]';
   }
-  if (obj instanceof Date) return obj.toISOString();
-  if (obj instanceof RegExp) return obj.toString();
+  if (obj instanceof Date) { const s = obj.toISOString(); return colors ? _colorize('date', s) : s; }
+  if (obj instanceof RegExp) { const s = obj.toString(); return colors ? _colorize('regexp', s) : s; }
   if (obj instanceof Error) return obj.stack || obj.toString();
   if (obj instanceof Map) {
     if (currentDepth >= maxDepth) return '[Map]';
     const entries = [];
-    for (const [k, v] of obj) entries.push(_inspectValue(k, maxDepth, currentDepth + 1, seen) + ' => ' + _inspectValue(v, maxDepth, currentDepth + 1, seen));
+    for (const [k, v] of obj) entries.push(_inspectValue(k, maxDepth, currentDepth + 1, seen, colors) + ' => ' + _inspectValue(v, maxDepth, currentDepth + 1, seen, colors));
     return 'Map(' + obj.size + ') { ' + entries.join(', ') + ' }';
   }
   if (obj instanceof Set) {
     if (currentDepth >= maxDepth) return '[Set]';
     const items = [];
-    for (const v of obj) items.push(_inspectValue(v, maxDepth, currentDepth + 1, seen));
+    for (const v of obj) items.push(_inspectValue(v, maxDepth, currentDepth + 1, seen, colors));
     return 'Set(' + obj.size + ') { ' + items.join(', ') + ' }';
   }
 
   if (currentDepth >= maxDepth) return '[Object]';
   const keys = Object.keys(obj);
   if (keys.length === 0) return '{}';
-  const pairs = keys.map(k => k + ': ' + _inspectValue(obj[k], maxDepth, currentDepth + 1, seen));
+  const pairs = keys.map(k => k + ': ' + _inspectValue(obj[k], maxDepth, currentDepth + 1, seen, colors));
   return '{ ' + pairs.join(', ') + ' }';
 }
 
-function _inspectValue(val, maxDepth, currentDepth, seen) {
-  if (val === null) return 'null';
-  if (val === undefined) return 'undefined';
-  if (typeof val === 'string') return "'" + val + "'";
-  if (typeof val !== 'object' && typeof val !== 'function') return String(val);
-  if (typeof val === 'function') return '[Function: ' + (val.name || 'anonymous') + ']';
-  return _inspectObject(val, maxDepth, currentDepth, seen);
+function _inspectValue(val, maxDepth, currentDepth, seen, colors) {
+  if (val === null) return colors ? _colorize('null', 'null') : 'null';
+  if (val === undefined) return colors ? _colorize('undefined', 'undefined') : 'undefined';
+  if (typeof val === 'string') { const s = "'" + val + "'"; return colors ? _colorize('string', s) : s; }
+  if (typeof val === 'number') { const s = String(val); return colors ? _colorize('number', s) : s; }
+  if (typeof val === 'boolean') { const s = String(val); return colors ? _colorize('boolean', s) : s; }
+  if (typeof val === 'bigint') { const s = String(val) + 'n'; return colors ? _colorize('bigint', s) : s; }
+  if (typeof val === 'symbol') { const s = val.toString(); return colors ? _colorize('symbol', s) : s; }
+  if (typeof val === 'function') { const s = '[Function: ' + (val.name || 'anonymous') + ']'; return colors ? _colorize('special', s) : s; }
+  return _inspectObject(val, maxDepth, currentDepth, seen, colors);
 }
 
 inspect.defaultOptions = { depth: 2 };
+inspect.colors = {
+  bold: [1, 22], italic: [3, 23], underline: [4, 24], inverse: [7, 27],
+  white: [37, 39], grey: [90, 39], black: [30, 39], blue: [34, 39],
+  cyan: [36, 39], green: [32, 39], magenta: [35, 39], red: [31, 39], yellow: [33, 39],
+};
+inspect.styles = {
+  special: 'cyan', number: 'yellow', bigint: 'yellow', boolean: 'yellow',
+  undefined: 'grey', null: 'bold', string: 'green', symbol: 'green',
+  date: 'magenta', regexp: 'red', module: 'underline',
+};
+inspect.custom = Symbol.for('nodejs.util.inspect.custom');
 
 function format(fmt, ...args) {
   if (typeof fmt !== 'string') return [fmt, ...args].map(a => typeof a === 'object' ? inspect(a) : String(a)).join(' ');
@@ -287,11 +320,21 @@ const isFunction = (v) => typeof v === 'function';
 const isPrimitive = (v) => v === null || (typeof v !== 'object' && typeof v !== 'function');
 const isBuffer = (v) => Buffer.isBuffer(v);
 
+const _errnoMap = { [-1]: 'EPERM', [-2]: 'ENOENT', [-3]: 'ESRCH', [-4]: 'EINTR', [-5]: 'EIO', [-9]: 'EBADF', [-12]: 'ENOMEM', [-13]: 'EACCES', [-14]: 'EFAULT', [-17]: 'EEXIST', [-20]: 'ENOTDIR', [-21]: 'EISDIR', [-22]: 'EINVAL', [-24]: 'EMFILE', [-28]: 'ENOSPC', [-30]: 'EROFS', [-32]: 'EPIPE', [-35]: 'EAGAIN', [-36]: 'EINPROGRESS', [-38]: 'ENOTSOCK', [-40]: 'EMSGSIZE', [-43]: 'EPROTONOSUPPORT', [-47]: 'EAFNOSUPPORT', [-48]: 'EADDRINUSE', [-49]: 'EADDRNOTAVAIL', [-51]: 'ENETUNREACH', [-54]: 'ECONNRESET', [-56]: 'EISCONN', [-57]: 'ENOTCONN', [-60]: 'ETIMEDOUT', [-61]: 'ECONNREFUSED', [-63]: 'ENAMETOOLONG', [-65]: 'EHOSTUNREACH', [-66]: 'ENOTEMPTY' };
+function getSystemErrorName(err) { return _errnoMap[err] || 'Unknown system error ' + err; }
+
+function _extend(target, source) {
+  if (source === null || source === undefined) return target;
+  const keys = Object.keys(source);
+  for (let i = 0; i < keys.length; i++) target[keys[i]] = source[keys[i]];
+  return target;
+}
+
 module.exports = {
   inspect, format, formatWithOptions, inherits, deprecate,
-  promisify, callbackify, debuglog, types, isDeepStrictEqual,
+  promisify, callbackify, debuglog, debug: debuglog, types, isDeepStrictEqual, getSystemErrorName,
   getCallSites, stripVTControlCharacters, parseEnv, styleText,
-  MIMEType, MIMEParams, toUSVString, aborted,
+  MIMEType, MIMEParams, toUSVString, aborted, _extend,
   TextEncoder: globalThis.TextEncoder, TextDecoder: globalThis.TextDecoder,
   isArray, isBoolean, isNull, isNullOrUndefined, isNumber, isString,
   isSymbol, isUndefined, isRegExp, isObject, isDate, isError,

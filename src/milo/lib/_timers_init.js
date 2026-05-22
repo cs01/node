@@ -3,6 +3,7 @@
 
 const _tb = internalBinding('timers');
 const _timerCallbacks = new Map();
+const _unrefTimers = new Set();
 
 class Timeout {
   constructor(id, fn, delay, args, repeat) {
@@ -23,8 +24,8 @@ class Timeout {
     _timerCallbacks.set(this._id, wrapped);
     return this;
   }
-  unref() { this._refed = false; return this; }
-  ref() { this._refed = true; return this; }
+  unref() { this._refed = false; _unrefTimers.add(this._id); return this; }
+  ref() { this._refed = true; _unrefTimers.delete(this._id); return this; }
   hasRef() { return this._refed; }
   close() { globalThis.clearTimeout(this); return this; }
   [Symbol.toPrimitive]() { return this._id; }
@@ -52,6 +53,7 @@ globalThis.setTimeout = function(fn, delay, ...args) {
 globalThis.clearTimeout = function(t) {
   const id = t && typeof t === 'object' ? t._id : t;
   _timerCallbacks.delete(id);
+  _unrefTimers.delete(id);
   _tb.clear(id);
 };
 
@@ -67,6 +69,7 @@ globalThis.setInterval = function(fn, delay, ...args) {
 globalThis.clearInterval = function(t) {
   const id = t && typeof t === 'object' ? t._id : t;
   _timerCallbacks.delete(id);
+  _unrefTimers.delete(id);
   _tb.clear(id);
 };
 
@@ -96,7 +99,13 @@ globalThis.__runEventLoop = function() {
     if (process._tickCallback) process._tickCallback();
     _eluActiveMs += _now() - tickStart;
 
-    const hasTimers = _tb.hasPending();
+    const hasTimersNative = _tb.hasPending();
+    let hasTimers = false;
+    if (hasTimersNative) {
+      for (const id of _timerCallbacks.keys()) {
+        if (!_unrefTimers.has(id)) { hasTimers = true; break; }
+      }
+    }
     const hasIO = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
     const hasTicks = process._nextTickQueue && process._nextTickQueue.length > 0;
     if (!hasTimers && !hasIO && !hasTicks) break;
@@ -134,7 +143,11 @@ globalThis.__hasIO = function() {
   if (_activeRefs > 0) return true;
   try {
     const net = require('net');
-    if (net.Server._servers && net.Server._servers.size > 0) return true;
+    if (net.Server._servers && net.Server._servers.size > 0) {
+      for (const srv of net.Server._servers.values()) {
+        if (!srv._unref) return true;
+      }
+    }
     if (net._fileWatchers && net._fileWatchers.size > 0) return true;
     if (net.Socket._sockets && net.Socket._sockets.size > 0) {
       for (const sock of net.Socket._sockets.values()) {

@@ -134,7 +134,7 @@
   const _nativeBinding = internalBinding;
   globalThis.internalBinding = function(name) {
     if (_jsBindings[name]) return _jsBindings[name];
-    try { return _nativeBinding(name); } catch { return Object.freeze(Object.create(null)); }
+    try { return _nativeBinding(name); } catch { return Object.create(null); }
   };
   globalThis.getInternalBinding = globalThis.internalBinding;
 
@@ -555,7 +555,7 @@
       if (moduleCache[id]) return moduleCache[id];
 
       // Handle builtin subpath requires like fs/promises, stream/promises
-      const _builtinSubpaths = { 'fs/promises': 'fs', 'stream/promises': 'stream', 'stream/consumers': 'stream', 'dns/promises': 'dns' };
+      const _builtinSubpaths = { 'fs/promises': 'fs', 'stream/promises': 'stream', 'stream/consumers': 'stream', 'stream/web': 'stream', 'dns/promises': 'dns', 'readline/promises': 'readline', 'timers/promises': 'timers', 'diagnostics_channel': 'diagnostics_channel', 'util/types': 'util' };
       if (_builtinSubpaths[id]) {
         const parent = require(_builtinSubpaths[id]);
         const sub = id.split('/')[1];
@@ -625,4 +625,107 @@
   try { const _b = require('buffer'); globalThis.Buffer = _b.Buffer || _b; } catch {}
   // Expose WebCrypto API as globalThis.crypto (Node 19+)
   try { const _c = require('crypto'); if (_c.webcrypto) globalThis.crypto = _c.webcrypto; } catch {}
+  // Polyfill TextDecoder properties missing in V8's minimal implementation
+  if (typeof TextDecoder !== 'undefined' && !('encoding' in TextDecoder.prototype)) {
+    const _OrigTD = TextDecoder;
+    globalThis.TextDecoder = function TextDecoder(label, opts) {
+      const td = new _OrigTD(label, opts);
+      const _encAliases = { 'utf8': 'utf-8', 'utf-8': 'utf-8', 'unicode-1-1-utf-8': 'utf-8', 'unicode11utf8': 'utf-8', 'unicode20utf8': 'utf-8', 'x-unicode20utf8': 'utf-8', 'ascii': 'windows-1252', 'us-ascii': 'windows-1252', 'iso-8859-1': 'windows-1252', 'latin1': 'windows-1252', 'ucs-2': 'utf-16le', 'utf-16': 'utf-16le' };
+      const _raw = (label || 'utf-8').toLowerCase().trim();
+      td.encoding = _encAliases[_raw] || _raw;
+      td.fatal = !!(opts && opts.fatal);
+      td.ignoreBOM = !!(opts && opts.ignoreBOM);
+      return td;
+    };
+    globalThis.TextDecoder.prototype = _OrigTD.prototype;
+  }
+
+  // Polyfill URLSearchParams.sort if missing
+  if (typeof URLSearchParams !== 'undefined' && !URLSearchParams.prototype.sort) {
+    URLSearchParams.prototype.sort = function() {
+      const entries = [...this.entries()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+      const keys = new Set(this.keys());
+      for (const k of keys) this.delete(k);
+      for (const [k, v] of entries) this.append(k, v);
+    };
+  }
+
+  // MessageEvent polyfill
+  if (typeof MessageEvent === 'undefined') {
+    globalThis.MessageEvent = class MessageEvent extends Event {
+      constructor(type, init) {
+        super(type, init);
+        this.data = (init && init.data !== undefined) ? init.data : null;
+        this.origin = init && init.origin != null ? String(init.origin) : '';
+        this.lastEventId = init && init.lastEventId != null ? String(init.lastEventId) : '';
+        this.source = (init && init.source) || null;
+        this.ports = (init && init.ports) || [];
+      }
+    };
+  }
+
+  // MessageChannel / MessagePort (structured clone via JSON for now)
+  if (typeof MessageChannel === 'undefined') {
+    class MessagePort extends EventTarget {
+      constructor() { super(); this._other = null; this._started = false; this._queue = []; }
+      postMessage(data, transfer) {
+        const clone = JSON.parse(JSON.stringify(data === undefined ? null : data));
+        if (this._other) {
+          if (this._other._started) {
+            Promise.resolve().then(() => this._other.dispatchEvent(new MessageEvent('message', { data: clone })));
+          } else {
+            this._other._queue.push(clone);
+          }
+        }
+      }
+      start() {
+        this._started = true;
+        while (this._queue.length > 0) {
+          const data = this._queue.shift();
+          Promise.resolve().then(() => this.dispatchEvent(new MessageEvent('message', { data })));
+        }
+      }
+      close() { this._other = null; }
+      get onmessage() { return this._onmessage || null; }
+      set onmessage(fn) {
+        if (this._onmessage) this.removeEventListener('message', this._onmessage);
+        this._onmessage = fn;
+        if (fn) { this.addEventListener('message', fn); this.start(); }
+      }
+      get onmessageerror() { return this._onmessageerror || null; }
+      set onmessageerror(fn) { this._onmessageerror = fn; }
+      ref() { return this; }
+      unref() { return this; }
+    }
+    class MessageChannel {
+      constructor() {
+        this.port1 = new MessagePort();
+        this.port2 = new MessagePort();
+        this.port1._other = this.port2;
+        this.port2._other = this.port1;
+      }
+    }
+    globalThis.MessageChannel = MessageChannel;
+    globalThis.MessagePort = MessagePort;
+    // BroadcastChannel
+    const _bcChannels = new Map();
+    class BroadcastChannel extends EventTarget {
+      constructor(name) {
+        super();
+        this.name = name;
+        if (!_bcChannels.has(name)) _bcChannels.set(name, new Set());
+        _bcChannels.get(name).add(this);
+      }
+      postMessage(data) {
+        const clone = JSON.parse(JSON.stringify(data === undefined ? null : data));
+        for (const ch of _bcChannels.get(this.name) || []) {
+          if (ch !== this) Promise.resolve().then(() => ch.dispatchEvent(new MessageEvent('message', { data: clone })));
+        }
+      }
+      close() { const s = _bcChannels.get(this.name); if (s) s.delete(this); }
+      get onmessage() { return this._onmessage || null; }
+      set onmessage(fn) { if (this._onmessage) this.removeEventListener('message', this._onmessage); this._onmessage = fn; if (fn) this.addEventListener('message', fn); }
+    }
+    globalThis.BroadcastChannel = BroadcastChannel;
+  }
 })();

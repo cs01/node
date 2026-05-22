@@ -11,6 +11,7 @@ Stream.prototype.pipe = function pipe(dest, opts) {
   if (this._readableState && this._readableState.pipes) {
     this._readableState.pipes.push(dest);
   }
+  if (!this._pipeListeners) this._pipeListeners = [];
   const ondata = (chunk) => {
     if (dest.writable !== false) {
       const canContinue = dest.write(chunk);
@@ -22,9 +23,7 @@ Stream.prototype.pipe = function pipe(dest, opts) {
   this.on('end', onend);
   const ondrain = () => { if (this.resume) this.resume(); };
   dest.on('drain', ondrain);
-  dest._srcOnData = ondata;
-  dest._srcOnEnd = onend;
-  dest._srcOnDrain = ondrain;
+  this._pipeListeners.push({ dest, ondata, onend, ondrain });
   dest.emit('pipe', this);
   if (this.resume) this.resume();
   return dest;
@@ -35,11 +34,29 @@ Stream.prototype.unpipe = function unpipe(dest) {
     if (!dest) {
       const pipes = this._readableState.pipes.slice();
       this._readableState.pipes = [];
+      if (this._pipeListeners) {
+        for (const entry of this._pipeListeners) {
+          this.removeListener('data', entry.ondata);
+          this.removeListener('end', entry.onend);
+          entry.dest.removeListener('drain', entry.ondrain);
+        }
+        this._pipeListeners = [];
+      }
       for (const d of pipes) d.emit('unpipe', this);
     } else {
       const idx = this._readableState.pipes.indexOf(dest);
       if (idx >= 0) {
         this._readableState.pipes.splice(idx, 1);
+        if (this._pipeListeners) {
+          const li = this._pipeListeners.findIndex(e => e.dest === dest);
+          if (li >= 0) {
+            const entry = this._pipeListeners[li];
+            this.removeListener('data', entry.ondata);
+            this.removeListener('end', entry.onend);
+            dest.removeListener('drain', entry.ondrain);
+            this._pipeListeners.splice(li, 1);
+          }
+        }
         dest.emit('unpipe', this);
       }
     }
@@ -529,6 +546,8 @@ module.exports.addAbortSignal = function addAbortSignal(signal, stream) {
   return stream;
 };
 module.exports.promises = promises;
+module.exports.consumers = { arrayBuffer: async (s) => { const c = []; for await (const ch of s) c.push(ch); return Buffer.concat(c).buffer; }, text: async (s) => { const c = []; for await (const ch of s) c.push(ch); return Buffer.concat(c).toString(); }, json: async (s) => JSON.parse(await module.exports.consumers.text(s)), blob: async (s) => { const c = []; for await (const ch of s) c.push(ch); return new Blob([Buffer.concat(c)]); }, buffer: async (s) => { const c = []; for await (const ch of s) c.push(ch); return Buffer.concat(c); }, bytes: async (s) => { const c = []; for await (const ch of s) c.push(ch); return new Uint8Array(Buffer.concat(c)); } };
+module.exports.web = {};
 
 let _defaultHWM = 16384;
 let _defaultObjectHWM = 16;
