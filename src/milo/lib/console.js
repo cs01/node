@@ -4,15 +4,23 @@
 const { inspect } = require('util');
 
 class Console {
-  constructor(stdout, stderr) {
+  constructor(stdout, stderr, opts) {
+    if (typeof stdout === 'object' && stdout !== null && !stdout.write) {
+      opts = stdout;
+      stdout = opts.stdout;
+      stderr = opts.stderr;
+    }
     this._stdout = stdout;
     this._stderr = stderr || stdout;
     this._times = new Map();
     this._counts = new Map();
+    this._groupIndent = '';
+    this._colorMode = opts && opts.colorMode;
+    this._inspectOptions = opts && opts.inspectOptions;
   }
 
   log(...args) {
-    const msg = args.map(a => typeof a === 'object' && a !== null ? inspect(a) : String(a)).join(' ') + '\n';
+    const msg = this._groupIndent + args.map(a => typeof a === 'object' && a !== null ? inspect(a) : String(a)).join(' ') + '\n';
     if (this._stdout && this._stdout.write) this._stdout.write(msg);
     else internalBinding('_console').write(msg);
   }
@@ -22,7 +30,7 @@ class Console {
   dir(obj, opts) { this.log(inspect(obj, opts)); }
 
   error(...args) {
-    const msg = args.map(a => typeof a === 'object' && a !== null ? inspect(a) : String(a)).join(' ') + '\n';
+    const msg = this._groupIndent + args.map(a => typeof a === 'object' && a !== null ? inspect(a) : String(a)).join(' ') + '\n';
     if (this._stderr && this._stderr.write) this._stderr.write(msg);
     else internalBinding('_console').writeError(msg);
   }
@@ -67,8 +75,9 @@ class Console {
       this._stdout.write('\x1b[1;1H\x1b[0J');
     }
   }
-  group(...args) { if (args.length > 0) this.log(...args); }
-  groupEnd() {}
+  group(...args) { if (args.length > 0) this.log(...args); this._groupIndent += '  '; }
+  groupEnd() { if (this._groupIndent.length >= 2) this._groupIndent = this._groupIndent.slice(2); }
+  groupCollapsed(...args) { this.group(...args); }
   dirxml(...args) { this.log(...args); }
 }
 

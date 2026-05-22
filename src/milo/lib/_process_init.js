@@ -26,7 +26,14 @@ process.env = new Proxy({}, {
 process.config = { variables: { asan: 0, v8_enable_i18n_support: 0 }, target_defaults: { default_configuration: 'Release' } };
 process.features = { inspector: false, debug: false, uv: true, ipv6: true, tls: false };
 if (!process.versions) process.versions = {};
-process.versions.node = '24.0.0'; process.versions.v8 = '13.6.233.5'; process.versions.modules = '135';
+Object.assign(process.versions, {
+  node: '24.0.0', v8: '13.6.233.5', modules: '135', napi: '10',
+  uv: '1.50.0', zlib: '1.3.1.1-motley-82a5fec', ares: '1.34.4',
+  brotli: '1.1.0', zstd: '1.5.7', nghttp2: '1.64.0', nghttp3: '1.6.0',
+  ngtcp2: '1.9.1', llhttp: '9.3.0', openssl: '3.0.15+quic',
+  unicode: '16.0', icu: '76.1', simdutf: '6.1.1', acorn: '8.14.0',
+  ada: '3.2.0', undici: '7.3.0', simdjson: '3.11.2',
+});
 process.version = 'v24.0.0'; process.release = { name: 'node' };
 if (!process.cwd) process.cwd = () => _envB.get('PWD') || '/';
 if (!process.chdir) process.chdir = () => {};

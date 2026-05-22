@@ -71,19 +71,20 @@ process.stdin = _stdin;
 
 const _counts = {};
 const _timers = {};
+let _groupIndent = '';
 const _fmtArgs = (args) => {
   if (args.length === 0) return '';
   if (typeof args[0] === 'string' && args.length > 1) return _util.format(...args);
   return args.map(_fmt).join(' ');
 };
 globalThis.console = {
-  log(...args) { _con.write(_fmtArgs(args) + '\n'); },
-  info(...args) { _con.write(_fmtArgs(args) + '\n'); },
-  debug(...args) { _con.write(_fmtArgs(args) + '\n'); },
-  error(...args) { _con.writeError(_fmtArgs(args) + '\n'); },
-  warn(...args) { _con.writeError(_fmtArgs(args) + '\n'); },
+  log(...args) { _con.write(_groupIndent + _fmtArgs(args) + '\n'); },
+  info(...args) { _con.write(_groupIndent + _fmtArgs(args) + '\n'); },
+  debug(...args) { _con.write(_groupIndent + _fmtArgs(args) + '\n'); },
+  error(...args) { _con.writeError(_groupIndent + _fmtArgs(args) + '\n'); },
+  warn(...args) { _con.writeError(_groupIndent + _fmtArgs(args) + '\n'); },
   dir(obj, opts) { _con.write(_util.inspect(obj, { depth: 2, ...opts }) + '\n'); },
-  clear() {},
+  clear() { if (process.stdout.isTTY) _con.write('\x1b[1;1H\x1b[0J'); },
   assert(val, ...args) { if (!val) console.error('Assertion failed:', ...args); },
   count(label) { label = label || 'default'; _counts[label] = (_counts[label] || 0) + 1; console.log(label + ':', _counts[label]); },
   countReset(label) { label = label || 'default'; _counts[label] = 0; },
@@ -91,7 +92,9 @@ globalThis.console = {
   timeEnd(label) { label = label || 'default'; const d = Date.now() - (_timers[label] || 0); delete _timers[label]; console.log(label + ':', d + 'ms'); },
   timeLog(label) { label = label || 'default'; const d = Date.now() - (_timers[label] || 0); console.log(label + ':', d + 'ms'); },
   trace(...args) { const e = new Error(); console.error('Trace:', ...args, '\n' + e.stack); },
-  group() {}, groupEnd() {}, groupCollapsed() {},
+  group(...args) { if (args.length > 0) _con.write(_groupIndent + _fmtArgs(args) + '\n'); _groupIndent += '  '; },
+  groupEnd() { if (_groupIndent.length >= 2) _groupIndent = _groupIndent.slice(2); },
+  groupCollapsed(...args) { if (args.length > 0) _con.write(_groupIndent + _fmtArgs(args) + '\n'); _groupIndent += '  '; },
   table(data, columns) {
     if (!data || typeof data !== 'object') { console.log(data); return; }
     const rows = Array.isArray(data) ? data : Object.entries(data).map(([k, v]) => typeof v === 'object' && v ? { '(index)': k, ...v } : { '(index)': k, Values: v });
