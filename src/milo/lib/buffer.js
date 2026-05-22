@@ -158,13 +158,13 @@ class Buffer extends Uint8Array {
     if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && value instanceof SharedArrayBuffer)) {
       const offset = encodingOrOffset || 0;
       const len = length !== undefined ? length : value.byteLength - offset;
-      const buf = new Buffer(len);
-      const src = new Uint8Array(value, offset, len);
-      buf.set(src);
-      return buf;
+      const view = new Uint8Array(value, offset, len);
+      Object.setPrototypeOf(view, Buffer.prototype);
+      return view;
     }
     if (Array.isArray(value) || value instanceof Uint8Array) return new Buffer(value);
     if (Buffer.isBuffer(value)) { const c = new Buffer(value.length); c.set(value); return c; }
+    if (value && typeof value === 'object' && value.type === 'Buffer' && Array.isArray(value.data)) return new Buffer(value.data);
     if (value && typeof value === 'object' && typeof value.length === 'number') return new Buffer(Array.from(value));
     throw new TypeError('The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object.');
   }

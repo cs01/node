@@ -110,10 +110,16 @@ EventEmitter.defaultMaxListeners = 10;
 EventEmitter.EventEmitter = EventEmitter;
 EventEmitter.listenerCount = function(emitter, type) { return emitter.listenerCount(type); };
 EventEmitter.getEventListeners = function(emitter, type) { return emitter.listeners(type); };
-EventEmitter.getMaxListeners = function(emitter) { return emitter.getMaxListeners(); };
+EventEmitter.getMaxListeners = function(emitter) {
+  if (typeof emitter.getMaxListeners === 'function') return emitter.getMaxListeners();
+  return emitter._maxListeners !== undefined ? emitter._maxListeners : EventEmitter.defaultMaxListeners;
+};
 EventEmitter.setMaxListeners = function(n) {
   if (arguments.length <= 1) { EventEmitter.defaultMaxListeners = n; return; }
-  for (let i = 1; i < arguments.length; i++) arguments[i].setMaxListeners(n);
+  for (let i = 1; i < arguments.length; i++) {
+    if (typeof arguments[i].setMaxListeners === 'function') arguments[i].setMaxListeners(n);
+    else arguments[i]._maxListeners = n;
+  }
 };
 
 function once(emitter, type) {
@@ -193,3 +199,14 @@ EventEmitter.addAbortListener = function(signal, listener) {
 };
 
 module.exports = EventEmitter;
+module.exports.getMaxListeners = EventEmitter.getMaxListeners;
+module.exports.setMaxListeners = EventEmitter.setMaxListeners;
+module.exports.defaultMaxListeners = EventEmitter.defaultMaxListeners;
+module.exports.once = once;
+module.exports.on = EventEmitter.on;
+module.exports.addAbortListener = EventEmitter.addAbortListener;
+module.exports.getEventListeners = EventEmitter.getEventListeners;
+module.exports.listenerCount = EventEmitter.listenerCount;
+module.exports.captureRejections = EventEmitter.captureRejections;
+module.exports.captureRejectionSymbol = EventEmitter.captureRejectionSymbol;
+module.exports.errorMonitor = EventEmitter.errorMonitor;

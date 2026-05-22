@@ -19,7 +19,7 @@ class Module {
   static builtinModules = [
     'assert', 'buffer', 'child_process', 'cluster', 'console', 'crypto',
     'dgram', 'dns', 'domain', 'events', 'fs', 'http', 'https', 'module',
-    'net', 'os', 'path', 'punycode', 'querystring', 'readline', 'stream',
+    'net', 'os', 'path', 'punycode', 'querystring', 'readline', 'repl', 'stream',
     'string_decoder', 'test', 'tls', 'url', 'util', 'v8', 'vm', 'worker_threads', 'zlib',
   ];
 

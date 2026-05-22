@@ -477,9 +477,33 @@ const promises = {
   link: (existing, newPath) => Promise.resolve(linkSync(existing, newPath)),
   rename: (o, n) => Promise.resolve(renameSync(o, n)),
   chmod: (p, m) => Promise.resolve(chmodSync(p, m)),
-  open: (path, flags, mode) => {
-    const fd = openSync(path, flags || 'r', mode);
-    return Promise.resolve({ fd, close() { closeSync(fd); return Promise.resolve(); }, read: (...a) => Promise.resolve(readSync(fd, ...a)), write: (...a) => Promise.resolve(writeSync(fd, ...a)), stat: () => Promise.resolve(fstatSync(fd)) });
+  copyFile: (src, dst) => Promise.resolve(copyFileSync(src, dst)),
+  mkdtemp: (prefix) => Promise.resolve(mkdtempSync(prefix)),
+  readlink: (p) => Promise.resolve(readlinkSync(p)),
+  realpath: (p) => Promise.resolve(realpathSync(p)),
+  symlink: (target, p) => Promise.resolve(symlinkSync(target, p)),
+  appendFile: (p, data) => Promise.resolve(appendFileSync(p, data)),
+  chown: () => Promise.resolve(),
+  lchown: () => Promise.resolve(),
+  lchmod: () => Promise.resolve(),
+  lutimes: () => Promise.resolve(),
+  utimes: () => Promise.resolve(),
+  open: (p, flags, mode) => {
+    const fd = openSync(p, flags || 'r', mode);
+    const handle = {
+      fd,
+      close() { closeSync(fd); return Promise.resolve(); },
+      read(buf, off, len, pos) { return Promise.resolve({ bytesRead: readSync(fd, buf, off, len, pos), buffer: buf }); },
+      write(buf, off, len, pos) { return Promise.resolve({ bytesWritten: writeSync(fd, buf, off, len, pos), buffer: buf }); },
+      stat() { return Promise.resolve(fstatSync(fd)); },
+      readFile(opts) { return Promise.resolve(readFileSync('/dev/fd/' + fd, opts)); },
+      writeFile(data) { writeSync(fd, data); return Promise.resolve(); },
+      chmod(m) { fchmodSync(fd, m); return Promise.resolve(); },
+      datasync() { fdatasyncSync(fd); return Promise.resolve(); },
+      sync() { fsyncSync(fd); return Promise.resolve(); },
+      truncate(len) { ftruncateSync(fd, len); return Promise.resolve(); },
+    };
+    return Promise.resolve(handle);
   },
 };
 
@@ -495,6 +519,7 @@ module.exports = {
   openSync, closeSync, fstatSync, writeSync, readSync,
   fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync,
   createReadStream, createWriteStream,
+  ReadStream: createReadStream, WriteStream: createWriteStream,
   watch, watchFile, unwatchFile, FSWatcher, Dirent,
   promises,
   constants: internalBinding('constants').fs,

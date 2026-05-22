@@ -424,10 +424,15 @@ const STATUS_CODES = {
   500:'Internal Server Error',501:'Not Implemented',502:'Bad Gateway',503:'Service Unavailable',504:'Gateway Timeout',
 };
 
+// Allow Server() without new (Node.js compat)
+const _Server = new Proxy(Server, {
+  apply(target, thisArg, args) { return new target(...args); },
+});
+
 module.exports = {
   createServer: (opts, handler) => new Server(opts, handler),
   request, get,
-  Server, IncomingMessage, ServerResponse, ClientRequest,
+  Server: _Server, IncomingMessage, ServerResponse, ClientRequest,
   Agent: Agent_class,
   globalAgent: new Agent_class(),
   METHODS, STATUS_CODES,

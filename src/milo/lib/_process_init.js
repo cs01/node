@@ -76,7 +76,17 @@ if (!process.on) {
 const _startTime = Date.now();
 if (!process.uptime) process.uptime = () => (Date.now() - _startTime) / 1000;
 if (!process.title) process.title = 'milo-node';
-if (!process.execPath) process.execPath = process.argv[0] || '';
+if (!process.execPath) {
+  const _ep = process.argv[0] || '';
+  if (_ep) {
+    const _path = require('path');
+    const _fs = require('fs');
+    const _abs = _ep.startsWith('/') ? _ep : _path.resolve(_ep);
+    try { process.execPath = _fs.realpathSync(_abs); } catch { process.execPath = _abs; }
+  } else {
+    process.execPath = _ep;
+  }
+}
 if (!process.argv0) process.argv0 = process.argv[0] || '';
 if (!process.execArgv) process.execArgv = [];
 if (!process.allowedNodeEnvironmentFlags) process.allowedNodeEnvironmentFlags = new Set();

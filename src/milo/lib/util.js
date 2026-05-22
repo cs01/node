@@ -270,10 +270,30 @@ function aborted(signal, resource) {
   });
 }
 
+// Deprecated type-checking functions (Node.js compat)
+const isArray = Array.isArray;
+const isBoolean = (v) => typeof v === 'boolean';
+const isNull = (v) => v === null;
+const isNullOrUndefined = (v) => v == null;
+const isNumber = (v) => typeof v === 'number';
+const isString = (v) => typeof v === 'string';
+const isSymbol = (v) => typeof v === 'symbol';
+const isUndefined = (v) => v === undefined;
+const isRegExp = (v) => v instanceof RegExp;
+const isObject = (v) => typeof v === 'object' && v !== null;
+const isDate = (v) => v instanceof Date;
+const isError = (v) => v instanceof Error;
+const isFunction = (v) => typeof v === 'function';
+const isPrimitive = (v) => v === null || (typeof v !== 'object' && typeof v !== 'function');
+const isBuffer = (v) => Buffer.isBuffer(v);
+
 module.exports = {
   inspect, format, formatWithOptions, inherits, deprecate,
   promisify, callbackify, debuglog, types, isDeepStrictEqual,
   getCallSites, stripVTControlCharacters, parseEnv, styleText,
   MIMEType, MIMEParams, toUSVString, aborted,
   TextEncoder: globalThis.TextEncoder, TextDecoder: globalThis.TextDecoder,
+  isArray, isBoolean, isNull, isNullOrUndefined, isNumber, isString,
+  isSymbol, isUndefined, isRegExp, isObject, isDate, isError,
+  isFunction, isPrimitive, isBuffer,
 };

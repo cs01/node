@@ -20,6 +20,8 @@ class Interface extends EventEmitter {
     this.line = '';
     this.cursor = 0;
     this.closed = false;
+    this.history = [];
+    this.historyIndex = -1;
     this._buf = '';
 
     if (input) {

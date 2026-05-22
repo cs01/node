@@ -8,17 +8,43 @@ function Stream() { EventEmitter.call(this); }
 Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
 Object.setPrototypeOf(Stream, EventEmitter);
 Stream.prototype.pipe = function pipe(dest, opts) {
-  this.on('data', (chunk) => {
+  if (this._readableState && this._readableState.pipes) {
+    this._readableState.pipes.push(dest);
+  }
+  const ondata = (chunk) => {
     if (dest.writable !== false) {
       const canContinue = dest.write(chunk);
       if (canContinue === false && this.pause) this.pause();
     }
-  });
-  this.on('end', () => { if (!opts || opts.end !== false) dest.end(); });
-  dest.on('drain', () => { if (this.resume) this.resume(); });
+  };
+  this.on('data', ondata);
+  const onend = () => { if (!opts || opts.end !== false) dest.end(); };
+  this.on('end', onend);
+  const ondrain = () => { if (this.resume) this.resume(); };
+  dest.on('drain', ondrain);
+  dest._srcOnData = ondata;
+  dest._srcOnEnd = onend;
+  dest._srcOnDrain = ondrain;
   dest.emit('pipe', this);
   if (this.resume) this.resume();
   return dest;
+};
+
+Stream.prototype.unpipe = function unpipe(dest) {
+  if (this._readableState && this._readableState.pipes) {
+    if (!dest) {
+      const pipes = this._readableState.pipes.slice();
+      this._readableState.pipes = [];
+      for (const d of pipes) d.emit('unpipe', this);
+    } else {
+      const idx = this._readableState.pipes.indexOf(dest);
+      if (idx >= 0) {
+        this._readableState.pipes.splice(idx, 1);
+        dest.emit('unpipe', this);
+      }
+    }
+  }
+  return this;
 };
 
 class Readable extends Stream {
@@ -30,6 +56,7 @@ class Readable extends Stream {
       highWaterMark: (opts && opts.highWaterMark) || 16384,
       objectMode: !!(opts && opts.objectMode),
       encoding: null,
+      pipes: [],
     };
     if (opts && opts.read) this._read = opts.read;
   }
@@ -461,13 +488,28 @@ const promises = {
   finished: (stream, opts) => new Promise((resolve, reject) => finished(stream, opts, (err) => err ? reject(err) : resolve())),
 };
 
+// Allow calling stream classes without new (Node.js compat)
+function _proxyClass(Cls) {
+  return new Proxy(Cls, { apply(target, _, args) { return new target(...args); } });
+}
+const _Readable = _proxyClass(Readable);
+const _Writable = _proxyClass(Writable);
+const _Duplex = _proxyClass(Duplex);
+const _Transform = _proxyClass(Transform);
+const _PassThrough = _proxyClass(PassThrough);
+
 module.exports = Stream;
 module.exports.Stream = Stream;
-module.exports.Readable = Readable;
-module.exports.Writable = Writable;
-module.exports.Duplex = Duplex;
-module.exports.Transform = Transform;
-module.exports.PassThrough = PassThrough;
+module.exports.Readable = _Readable;
+module.exports.Writable = _Writable;
+module.exports.Duplex = _Duplex;
+module.exports.Transform = _Transform;
+module.exports.PassThrough = _PassThrough;
+module.exports.duplexPair = function duplexPair() {
+  const a = new Duplex({ read() {}, write(chunk, enc, cb) { b.push(chunk); cb(); } });
+  const b = new Duplex({ read() {}, write(chunk, enc, cb) { a.push(chunk); cb(); } });
+  return [a, b];
+};
 module.exports.pipeline = pipeline;
 module.exports.finished = finished;
 module.exports.compose = compose;
