@@ -78,13 +78,13 @@ const _fmtArgs = (args) => {
   return args.map(_fmt).join(' ');
 };
 globalThis.console = {
-  log(...args) { _con.write(_groupIndent + _fmtArgs(args) + '\n'); },
-  info(...args) { _con.write(_groupIndent + _fmtArgs(args) + '\n'); },
-  debug(...args) { _con.write(_groupIndent + _fmtArgs(args) + '\n'); },
-  error(...args) { _con.writeError(_groupIndent + _fmtArgs(args) + '\n'); },
-  warn(...args) { _con.writeError(_groupIndent + _fmtArgs(args) + '\n'); },
+  log(...args) { process.stdout.write(_groupIndent + _fmtArgs(args) + '\n'); },
+  info(...args) { process.stdout.write(_groupIndent + _fmtArgs(args) + '\n'); },
+  debug(...args) { process.stdout.write(_groupIndent + _fmtArgs(args) + '\n'); },
+  error(...args) { process.stderr.write(_groupIndent + _fmtArgs(args) + '\n'); },
+  warn(...args) { process.stderr.write(_groupIndent + _fmtArgs(args) + '\n'); },
   dir(obj, opts) { _con.write(_util.inspect(obj, { depth: 2, ...opts }) + '\n'); },
-  clear() { if (process.stdout.isTTY) _con.write('\x1b[1;1H\x1b[0J'); },
+  clear() { if (process.stdout.isTTY) process.stdout.write('\x1b[1;1H\x1b[0J'); },
   assert(val, ...args) { if (!val) console.error('Assertion failed:', ...args); },
   count(label) { label = label || 'default'; _counts[label] = (_counts[label] || 0) + 1; console.log(label + ':', _counts[label]); },
   countReset(label) { label = label || 'default'; _counts[label] = 0; },

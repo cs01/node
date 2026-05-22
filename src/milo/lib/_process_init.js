@@ -39,6 +39,15 @@ if (!process.cwd) process.cwd = () => _envB.get('PWD') || '/';
 if (!process.chdir) process.chdir = () => {};
 if (!process.umask) process.umask = (mask) => { if (mask !== undefined) return 0o22; return 0o22; };
 
+process.getActiveResourcesInfo = () => [];
+process.constrainedMemory = () => 0;
+process.availableMemory = () => 0;
+process.cpuUsage = (prev) => {
+  const usage = { user: 0, system: 0 };
+  if (prev) { usage.user -= prev.user; usage.system -= prev.system; }
+  return usage;
+};
+
 if (!process.hrtime) {
   const b = internalBinding('process_methods');
   process.hrtime = (...a) => {

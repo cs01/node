@@ -509,15 +509,27 @@ const promises = {
   },
 };
 
+function chown(p, uid, gid, cb) { const _f = internalBinding('fs'); _f.chown(p, uid, gid); if (cb) process.nextTick(cb, null); }
+function lchown(p, uid, gid, cb) { const _f = internalBinding('fs'); _f.lchown ? _f.lchown(p, uid, gid) : _f.chown(p, uid, gid); if (cb) process.nextTick(cb, null); }
+function utimes(p, atime, mtime, cb) { const _f = internalBinding('fs'); _f.utimes(p, Math.floor(atime), Math.floor(mtime)); if (cb) process.nextTick(cb, null); }
+function lutimes(p, atime, mtime, cb) { if (cb) process.nextTick(cb, null); }
+function chownSync(p, uid, gid) { const _f = internalBinding('fs'); _f.chown(p, uid, gid); }
+function lchownSync(p, uid, gid) { chownSync(p, uid, gid); }
+function utimesSync(p, atime, mtime) { const _f = internalBinding('fs'); _f.utimes(p, Math.floor(atime), Math.floor(mtime)); }
+function truncate(p, len, cb) { if (typeof len === 'function') { cb = len; len = 0; } const _f = internalBinding('fs'); _f.truncate(p, len || 0); if (cb) process.nextTick(cb, null); }
+function truncateSync(p, len) { const _f = internalBinding('fs'); _f.truncate(p, len || 0); }
+
 module.exports = {
   readFile, writeFile, appendFile, stat, lstat, mkdir, readdir,
   unlink, rmdir, rename, chmod, access, rm, copyFile, realpath, exists,
   open, close, read, write, fstat, fsync, fdatasync, ftruncate, fchmod, link, readlink, symlink,
+  chown, lchown, utimes, lutimes, truncate,
   readFileSync, writeFileSync, appendFileSync, statSync, existsSync,
   mkdirSync, unlinkSync, rmdirSync, renameSync,
   readdirSync, realpathSync, chmodSync,
   rmSync, mkdtempSync, accessSync, copyFileSync,
   symlinkSync, lstatSync, readlinkSync, linkSync,
+  chownSync, lchownSync, utimesSync, truncateSync,
   openSync, closeSync, fstatSync, writeSync, readSync,
   fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync,
   createReadStream, createWriteStream,
