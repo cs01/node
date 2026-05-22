@@ -91,9 +91,13 @@ const constants = Object.freeze({
   BROTLI_OPERATION_PROCESS: 0, BROTLI_OPERATION_FLUSH: 1, BROTLI_OPERATION_FINISH: 2,
 });
 
+// Allow calling constructors without new
+function _wrapClass(Cls) { const w = function(opts) { return new Cls(opts); }; Object.setPrototypeOf(w, Cls); w.prototype = Cls.prototype; return w; }
+
 module.exports = {
-  Gzip, Gunzip, Deflate, Inflate, DeflateRaw, InflateRaw, Unzip,
-  BrotliCompress, BrotliDecompress,
+  Gzip: _wrapClass(Gzip), Gunzip: _wrapClass(Gunzip), Deflate: _wrapClass(Deflate), Inflate: _wrapClass(Inflate),
+  DeflateRaw: _wrapClass(DeflateRaw), InflateRaw: _wrapClass(InflateRaw), Unzip: _wrapClass(Unzip),
+  BrotliCompress: _wrapClass(BrotliCompress), BrotliDecompress: _wrapClass(BrotliDecompress),
   createGzip, createGunzip, createDeflate, createInflate,
   createDeflateRaw, createInflateRaw, createUnzip,
   createBrotliCompress, createBrotliDecompress,

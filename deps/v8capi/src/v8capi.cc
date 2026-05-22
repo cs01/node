@@ -148,6 +148,10 @@ static v8::Local<v8::Value> unwrap(v8::Isolate* iso, v8c_value val) {
 
 static std::unique_ptr<v8::Platform> g_platform;
 
+extern "C" void v8c_set_flags_from_string(const char* flags) {
+    v8::V8::SetFlagsFromString(flags);
+}
+
 extern "C" int32_t v8c_platform_init(const char* exec_path) {
     v8::V8::InitializeICUDefaultLocation(exec_path);
     v8::V8::InitializeExternalStartupData(exec_path);

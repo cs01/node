@@ -38,15 +38,16 @@ function runInNewContext(code, sandbox, options) {
   sandbox = sandbox || Object.create(null);
   const keys = Object.keys(sandbox);
   const vals = keys.map(k => sandbox[k]);
-  // Pass sandbox vars as params, write back after execution
   const returnKeys = keys.map(k => `__sb__['${k}'] = ${k};`).join(' ');
+  // Use var declarations for sandbox keys so assignments stay local
+  const varDecls = keys.length ? keys.map((k, i) => `var ${k} = __vals__[${i}];`).join(' ') : '';
   let fn;
   try {
-    fn = new Function('__sb__', ...keys, `var __r__ = (${code}); ${returnKeys} return __r__;`);
+    fn = new Function('__sb__', '__vals__', `${varDecls} var __r__ = eval(${JSON.stringify(code)}); ${returnKeys} return __r__;`);
   } catch {
-    fn = new Function('__sb__', ...keys, `${code}\n${returnKeys}`);
+    fn = new Function('__sb__', '__vals__', `${varDecls} ${code}\n${returnKeys}`);
   }
-  return fn(sandbox, ...vals);
+  return fn(sandbox, vals);
 }
 
 function runInContext(code, context, options) {

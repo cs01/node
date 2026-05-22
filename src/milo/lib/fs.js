@@ -540,6 +540,14 @@ function truncate(p, len, cb) {
   catch (e) { if (cb) process.nextTick(cb, e); else throw e; }
 }
 
+function assertEncoding(encoding) {
+  if (encoding && !Buffer.isEncoding(encoding)) {
+    const e = new TypeError(`Unknown encoding: ${encoding}`);
+    e.code = 'ERR_INVALID_ARG_VALUE';
+    throw e;
+  }
+}
+
 module.exports = {
   readFile, writeFile, appendFile, stat, lstat, mkdir, readdir,
   unlink, rmdir, rename, chmod, access, rm, copyFile, realpath, exists,
@@ -556,6 +564,6 @@ module.exports = {
   createReadStream, createWriteStream,
   ReadStream: createReadStream, WriteStream: createWriteStream,
   watch, watchFile, unwatchFile, FSWatcher, Dirent,
-  promises,
+  promises, assertEncoding,
   constants: internalBinding('constants').fs,
 };

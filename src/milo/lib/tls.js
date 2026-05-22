@@ -250,9 +250,15 @@ function createServer(options, listener) {
   return new Server(options, listener);
 }
 
+function serverWrapper(options, listener) {
+  return new Server(options, listener);
+}
+Object.setPrototypeOf(serverWrapper, Server);
+serverWrapper.prototype = Server.prototype;
+
 module.exports = {
   TLSSocket,
-  Server,
+  Server: serverWrapper,
   connect,
   createServer,
   createSecureContext: () => ({}),

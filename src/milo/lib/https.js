@@ -266,12 +266,19 @@ function httpsCreateServer(options, listener) {
   return new Server(options, listener);
 }
 
+// Allow calling Server() without new
+function createServerWrapper(opts, handler) {
+  return new Server(opts, handler);
+}
+Object.setPrototypeOf(createServerWrapper, Server);
+createServerWrapper.prototype = Server.prototype;
+
 module.exports = {
   request,
   get,
   Agent,
   globalAgent,
-  Server,
+  Server: createServerWrapper,
   createServer: httpsCreateServer,
   STATUS_CODES: http.STATUS_CODES,
   METHODS: http.METHODS,

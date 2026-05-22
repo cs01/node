@@ -21,20 +21,30 @@ class IncomingMessage extends Readable {
   setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
 }
 
-class ServerResponse extends EventEmitter {
-  constructor(socket) {
+class OutgoingMessage extends EventEmitter {
+  constructor() {
     super();
-    this._socket = socket;
-    this.statusCode = 200;
     this._headers = {};
     this._headersSent = false;
     this.finished = false;
     this.writableEnded = false;
+    this.sendDate = true;
   }
   setHeader(k, v) { this._headers[k.toLowerCase()] = v; }
   getHeader(k) { return this._headers[k.toLowerCase()]; }
   removeHeader(k) { delete this._headers[k.toLowerCase()]; }
   hasHeader(k) { return k.toLowerCase() in this._headers; }
+  getHeaderNames() { return Object.keys(this._headers); }
+  getHeaders() { return { ...this._headers }; }
+  flushHeaders() {}
+}
+
+class ServerResponse extends OutgoingMessage {
+  constructor(socket) {
+    super();
+    this._socket = socket;
+    this.statusCode = 200;
+  }
   writeHead(code, reason, headers) {
     if (typeof reason === 'object') { headers = reason; reason = undefined; }
     this.statusCode = code;
@@ -432,7 +442,7 @@ const _Server = new Proxy(Server, {
 module.exports = {
   createServer: (opts, handler) => new Server(opts, handler),
   request, get,
-  Server: _Server, IncomingMessage, ServerResponse, ClientRequest,
+  Server: _Server, IncomingMessage, ServerResponse, ClientRequest, OutgoingMessage,
   Agent: Agent_class,
   globalAgent: new Agent_class(),
   METHODS, STATUS_CODES,

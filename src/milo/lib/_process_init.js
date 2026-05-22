@@ -1,7 +1,26 @@
 // process setup — internal bootstrap module
 'use strict';
 
-process.emitWarning = (msg) => console.error('Warning:', msg);
+process.emitWarning = (warning, typeOrOptions, code, ctor) => {
+  if (warning === undefined || (typeof warning !== 'string' && !(warning instanceof Error))) {
+    const e = new TypeError('The "warning" argument must be of type string or an instance of Error');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (typeof typeOrOptions === 'object' && typeOrOptions !== null && !Array.isArray(typeOrOptions)) {
+    code = typeOrOptions.code; ctor = typeOrOptions.ctor;
+    typeOrOptions = typeOrOptions.type || 'Warning';
+  }
+  if (typeOrOptions !== undefined && typeof typeOrOptions !== 'string') {
+    const e = new TypeError('The "type" argument must be of type string');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  const type = typeOrOptions || 'Warning';
+  let msg;
+  if (warning instanceof Error) { msg = warning; }
+  else { msg = new Error(warning); msg.name = type; if (code) msg.code = code; }
+  if (process.listenerCount && process.listenerCount('warning') > 0) process.emit('warning', msg);
+  else console.error(`${type}: ${typeof warning === 'string' ? warning : warning.message}`);
+};
 
 const _envB = internalBinding('env');
 const _envOverrides = {};

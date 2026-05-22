@@ -53,6 +53,7 @@ typedef void (*v8c_weak_callback)(void* data);
 // Platform + Isolate lifecycle
 // ---------------------------------------------------------------------------
 
+void      v8c_set_flags_from_string(const char* flags);
 int32_t   v8c_platform_init(const char* exec_path);
 void      v8c_platform_shutdown(void);
 

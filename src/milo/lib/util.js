@@ -148,16 +148,16 @@ function format(fmt, ...args) {
 function formatWithOptions(_opts, fmt, ...args) { return format(fmt, ...args); }
 
 function inherits(ctor, superCtor) {
-  if (superCtor === undefined || superCtor === null) {
-    const e = new TypeError('The super constructor to "inherits" must not be null or undefined');
+  if (ctor === undefined || ctor === null || typeof ctor !== 'function') {
+    const e = new TypeError(`The "ctor" argument must be of type function. Received ${ctor === null ? 'null' : ctor === undefined ? 'undefined' : 'type ' + typeof ctor}`);
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
-  if (ctor === undefined || ctor === null) {
-    const e = new TypeError('The constructor to "inherits" must not be null or undefined');
+  if (superCtor === null || superCtor === undefined) {
+    const e = new TypeError(`The "superCtor" argument must be of type function. Received ${superCtor === null ? 'null' : 'undefined'}`);
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
-  if (superCtor.prototype === undefined) {
-    const e = new TypeError('The super constructor to "inherits" must have a prototype');
+  if (superCtor.prototype === undefined || superCtor.prototype === null) {
+    const e = new TypeError(`The "superCtor.prototype" property must be of type object. Received ${superCtor.prototype === null ? 'null' : 'undefined'}`);
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
   Object.defineProperty(ctor, 'super_', { value: superCtor, writable: true, configurable: true });

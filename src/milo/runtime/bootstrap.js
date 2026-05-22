@@ -187,6 +187,41 @@
   if (typeof atob === 'undefined') globalThis.atob = function(s) { const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'; let r = '', i = 0; s = s.replace(/=/g, ''); while (i < s.length) { const a = chars.indexOf(s[i++]), b = chars.indexOf(s[i++]||'A'), c = chars.indexOf(s[i++]||'A'), d = chars.indexOf(s[i++]||'A'); r += String.fromCharCode((a<<2)|(b>>4)); if(s[i-2]!==undefined) r+=String.fromCharCode(((b&15)<<4)|(c>>2)); if(s[i-1]!==undefined) r+=String.fromCharCode(((c&3)<<6)|d); } return r; };
   if (typeof btoa === 'undefined') globalThis.btoa = function(s) { const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'; let r = ''; for (let i = 0; i < s.length; i += 3) { const a = s.charCodeAt(i), b = s.charCodeAt(i+1), c = s.charCodeAt(i+2); r += chars[a>>2] + chars[((a&3)<<4)|(b>>4)] + (isNaN(b)?'=':chars[((b&15)<<2)|(c>>6)]) + (isNaN(c)?'=':chars[c&63]); } return r; };
   if (typeof performance === 'undefined') { const _perfOrigin = Date.now(); globalThis.performance = { now() { return Date.now() - _perfOrigin; }, timeOrigin: _perfOrigin }; }
+  if (!performance.mark) {
+    const _entries = [];
+    performance.mark = function(name, options) {
+      const entry = { entryType: 'mark', name, startTime: (options && options.startTime != null) ? options.startTime : performance.now(), duration: 0, detail: options?.detail ?? null };
+      _entries.push(entry);
+      return entry;
+    };
+    performance.measure = function(name, startOrOptions, end) {
+      let startTime = 0, endTime = performance.now(), detail = null;
+      if (typeof startOrOptions === 'string') {
+        const sm = _entries.find(e => e.entryType === 'mark' && e.name === startOrOptions);
+        if (sm) startTime = sm.startTime;
+        if (typeof end === 'string') { const em = _entries.find(e => e.entryType === 'mark' && e.name === end); if (em) endTime = em.startTime; }
+      } else if (startOrOptions && typeof startOrOptions === 'object') {
+        if (startOrOptions.start != null) { if (typeof startOrOptions.start === 'string') { const sm = _entries.find(e => e.entryType === 'mark' && e.name === startOrOptions.start); if (sm) startTime = sm.startTime; } else startTime = startOrOptions.start; }
+        if (startOrOptions.end != null) { if (typeof startOrOptions.end === 'string') { const em = _entries.find(e => e.entryType === 'mark' && e.name === startOrOptions.end); if (em) endTime = em.startTime; } else endTime = startOrOptions.end; }
+        if (startOrOptions.duration != null) endTime = startTime + startOrOptions.duration;
+        detail = startOrOptions.detail ?? null;
+      }
+      const entry = { entryType: 'measure', name, startTime, duration: endTime - startTime, detail };
+      _entries.push(entry);
+      return entry;
+    };
+    performance.clearMarks = function(name) { for (let i = _entries.length - 1; i >= 0; i--) if (_entries[i].entryType === 'mark' && (!name || _entries[i].name === name)) _entries.splice(i, 1); };
+    performance.clearMeasures = function(name) { for (let i = _entries.length - 1; i >= 0; i--) if (_entries[i].entryType === 'measure' && (!name || _entries[i].name === name)) _entries.splice(i, 1); };
+    performance.getEntries = function() { return [..._entries]; };
+    performance.getEntriesByName = function(name, type) { return _entries.filter(e => e.name === name && (!type || e.entryType === type)); };
+    performance.getEntriesByType = function(type) { return _entries.filter(e => e.entryType === type); };
+    performance.clearResourceTimings = function() {};
+    performance.setResourceTimingBufferSize = function() {};
+  }
+  if (typeof PerformanceObserver === 'undefined') {
+    globalThis.PerformanceObserver = class PerformanceObserver { constructor(cb) { this._cb = cb; } observe() {} disconnect() {} takeRecords() { return []; } };
+    globalThis.PerformanceObserver.supportedEntryTypes = ['mark', 'measure'];
+  }
   if (typeof global === 'undefined') globalThis.global = globalThis;
   if (typeof structuredClone === 'undefined') globalThis.structuredClone = (v) => JSON.parse(JSON.stringify(v));
   if (typeof CustomEvent === 'undefined') globalThis.CustomEvent = class CustomEvent extends Event { constructor(type, opts) { super(type, opts); this.detail = opts?.detail ?? null; } };
@@ -583,6 +618,41 @@
           stub = { internalBinding: globalThis.internalBinding };
         } else if (id === 'internal/errors') {
           stub = { codes: new Proxy({}, { get(_, k) { return class extends Error { constructor(...a) { super(a.join(', ')); this.code = k; } }; } }) };
+        } else if (id === 'internal/options') {
+          stub = { getOptionValue: (name) => { if (name === '--insecure-http-parser') return false; if (name === '--use-env-proxy') return false; if (name === '--force-fips') return false; if (name === '--enable-source-maps') return false; if (name === '--pending-deprecation') return false; return undefined; } };
+        } else if (id === 'internal/validators') {
+          const _throwType = (name, type) => { const e = new TypeError(`The "${name}" argument must be of type ${type}`); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; };
+          stub = {
+            validateFunction: (v, name) => { if (typeof v !== 'function') _throwType(name, 'function'); },
+            validateString: (v, name) => { if (typeof v !== 'string') _throwType(name, 'string'); },
+            validateNumber: (v, name) => { if (typeof v !== 'number') _throwType(name, 'number'); },
+            validateBoolean: (v, name) => { if (typeof v !== 'boolean') _throwType(name, 'boolean'); },
+            validateObject: (v, name) => { if (v === null || typeof v !== 'object') _throwType(name, 'object'); },
+            validateArray: (v, name) => { if (!Array.isArray(v)) _throwType(name, 'Array'); },
+            validateInt32: (v, name) => { if (typeof v !== 'number' || v !== (v | 0)) _throwType(name, 'int32'); },
+            validateUint32: (v, name) => { if (typeof v !== 'number' || v < 0 || v > 0xFFFFFFFF || v !== (v >>> 0)) _throwType(name, 'uint32'); },
+            validateInteger: (v, name) => { if (typeof v !== 'number' || !Number.isInteger(v)) _throwType(name, 'integer'); },
+            validateBuffer: (v, name) => { if (!Buffer.isBuffer(v)) _throwType(name, 'Buffer'); },
+            validateEncoding: (v, name) => { if (typeof v !== 'string') _throwType(name, 'string'); },
+            validatePort: (v, name) => { if (typeof v !== 'number' || v < 0 || v > 65535) { const e = new RangeError(`${name || 'port'} should be >= 0 and < 65536`); e.code = 'ERR_SOCKET_BAD_PORT'; throw e; } return v | 0; },
+            validateAbortSignal: () => {},
+            validateOneOf: (v, name, oneOf) => { if (!oneOf.includes(v)) { const e = new TypeError(`${name} must be one of: ${oneOf.join(', ')}`); e.code = 'ERR_INVALID_ARG_VALUE'; throw e; } },
+            validateSignalName: (v) => { if (typeof v !== 'string') _throwType('signal', 'string'); },
+            validatePlainFunction: (v, name) => { if (typeof v !== 'function') _throwType(name, 'function'); },
+            validateUndefined: (v, name) => { if (v !== undefined) _throwType(name, 'undefined'); },
+            isInt32: (v) => typeof v === 'number' && v === (v | 0),
+            isUint32: (v) => typeof v === 'number' && v === (v >>> 0),
+            kValidateObjectNone: 0, kValidateObjectAllowNullable: 1, kValidateObjectAllowArray: 2,
+            kValidateObjectAllowFunction: 4, kValidateObjectAllowObjects: 6, kValidateObjectAllowObjectsAndNull: 7,
+          };
+        } else if (id === 'internal/util') {
+          stub = {
+            emitExperimentalWarning: (feature) => { process.emitWarning(`${feature} is an experimental feature`, 'ExperimentalWarning'); },
+            getSystemErrorName: (err) => `ERRNO_${err}`,
+            promisify: require('util').promisify,
+            deprecate: (fn) => fn,
+            kEmptyObject: Object.freeze({}),
+          };
         } else {
           stub = Object.create(null);
         }

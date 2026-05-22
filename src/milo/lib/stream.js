@@ -3,6 +3,14 @@
 
 const EventEmitter = require('events');
 
+function _validateHWM(hwm) {
+  if (hwm != null && (typeof hwm !== 'number' || !(hwm >= 0) || !Number.isFinite(hwm))) {
+    const { inspect } = require('util');
+    const e = new TypeError(`The property 'options.highWaterMark' is invalid. Received ${inspect(hwm)}`);
+    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+  }
+}
+
 // Function-based so old-style util.inherits + .call() works
 function Stream() { EventEmitter.call(this); }
 Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
@@ -68,6 +76,7 @@ class Readable extends Stream {
   constructor(opts) {
     super();
     this.readable = true;
+    if (opts) { _validateHWM(opts.highWaterMark); _validateHWM(opts.readableHighWaterMark); }
     const _rOM = opts ? (opts.readableObjectMode != null ? opts.readableObjectMode : !!opts.objectMode) : false;
     const _rDefaultHWM = _rOM ? 16 : 16384;
     this._readableState = {
@@ -353,6 +362,7 @@ class Writable extends Stream {
   constructor(opts) {
     super();
     this.writable = true;
+    if (opts) { _validateHWM(opts.highWaterMark); _validateHWM(opts.writableHighWaterMark); }
     const _wOM2 = !!(opts && opts.objectMode);
     const _wDefaultHWM2 = _wOM2 ? 16 : 16384;
     const _wHWM2 = (opts && opts.writableHighWaterMark != null) ? opts.writableHighWaterMark : (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM2;
@@ -383,15 +393,20 @@ class Writable extends Stream {
     if (typeof chunk === 'string' && this._decodeStrings !== false) chunk = Buffer.from(chunk, encoding);
     this._writableState.writing = true;
     this._writableState.length += (this._writableState.objectMode ? 1 : (chunk.length || 0));
+    const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 16384;
+    const ret = this._writableState.length < hwm;
+    if (!ret) this._writableState.needDrain = true;
     this._write(chunk, encoding || 'utf8', (err) => {
       this._writableState.writing = false;
       this._writableState.length -= (this._writableState.objectMode ? 1 : (chunk.length || 0));
-      if (err) this.emit('error', err);
-      else this.emit('drain');
+      if (err) { this.emit('error', err); }
+      else if (this._writableState.needDrain && this._writableState.length < hwm) {
+        this._writableState.needDrain = false;
+        this.emit('drain');
+      }
       if (cb) cb(err);
     });
-    const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 16384;
-    return this._writableState.length < hwm;
+    return ret;
   }
 
   end(chunk, encoding, cb) {
@@ -443,6 +458,7 @@ class Duplex extends Readable {
   constructor(opts) {
     super(opts);
     this.writable = true;
+    if (opts) _validateHWM(opts.writableHighWaterMark);
     this.allowHalfOpen = opts && opts.allowHalfOpen !== undefined ? opts.allowHalfOpen : true;
     const _wOM = opts ? (opts.writableObjectMode != null ? opts.writableObjectMode : !!opts.objectMode) : false;
     const _wDefaultHWM = _wOM ? 16 : 16384;
