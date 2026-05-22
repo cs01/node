@@ -51,11 +51,12 @@ function _makeRequest(options, cb) {
         for (const [k, v] of Object.entries(this._headers)) reqStr += `${k}: ${v}\r\n`;
         reqStr += '\r\n';
         tlsSock.write(reqStr);
-        if (body) tlsSock.write(body.toString());
+        if (body) tlsSock.write(body);
         this.emit('finish');
       });
 
-      let responseBuf = '';
+      let responseChunks = [];
+      let responseLen = 0;
       let headersParsed = false;
       let res = null;
       let contentLength = -1;
@@ -63,12 +64,21 @@ function _makeRequest(options, cb) {
       let chunked = false;
 
       tlsSock.on('data', (chunk) => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         if (!headersParsed) {
-          responseBuf += chunk.toString();
-          const headerEnd = responseBuf.indexOf('\r\n\r\n');
+          responseChunks.push(buf);
+          responseLen += buf.length;
+          const combined = Buffer.concat(responseChunks, responseLen);
+          // Search for \r\n\r\n in binary
+          let headerEnd = -1;
+          for (let i = 0; i <= combined.length - 4; i++) {
+            if (combined[i] === 0x0d && combined[i+1] === 0x0a && combined[i+2] === 0x0d && combined[i+3] === 0x0a) {
+              headerEnd = i; break;
+            }
+          }
           if (headerEnd === -1) return;
-          const headerPart = responseBuf.substring(0, headerEnd);
-          const bodyPart = responseBuf.substring(headerEnd + 4);
+          const headerPart = combined.slice(0, headerEnd).toString();
+          const bodyPart = combined.slice(headerEnd + 4); // stays as Buffer — preserves binary
           const lines = headerPart.split('\r\n');
           const statusLine = lines[0];
           const match = statusLine.match(/^HTTP\/(\d\.\d) (\d+) ?(.*)$/);
@@ -89,15 +99,16 @@ function _makeRequest(options, cb) {
             }
           }
           headersParsed = true;
+          responseChunks = null;
           contentLength = parseInt(res.headers['content-length']) || -1;
           chunked = (res.headers['transfer-encoding'] || '').includes('chunked');
           this.emit('response', res);
 
           if (bodyPart.length > 0) {
             if (chunked) {
-              _pushChunked(this, res, bodyPart);
+              _pushChunkedBuf(this, res, bodyPart);
             } else {
-              res.push(Buffer.from(bodyPart));
+              res.push(bodyPart);
               bodyReceived += bodyPart.length;
             }
           }
@@ -106,12 +117,11 @@ function _makeRequest(options, cb) {
             res.push(null);
           }
         } else {
-          const str = chunk.toString();
           if (chunked) {
-            _pushChunked(this, res, str);
+            _pushChunkedBuf(this, res, buf);
           } else {
-            res.push(chunk);
-            bodyReceived += chunk.length;
+            res.push(buf);
+            bodyReceived += buf.length;
             if (contentLength >= 0 && bodyReceived >= contentLength) {
               res.complete = true;
               res.push(null);
@@ -149,20 +159,25 @@ function _makeRequest(options, cb) {
   return req;
 }
 
-function _pushChunked(reqObj, res, data) {
-  if (!reqObj._chunkBuf) reqObj._chunkBuf = '';
-  reqObj._chunkBuf += data;
+// Binary-safe chunked transfer decoding
+function _pushChunkedBuf(reqObj, res, data) {
+  const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  if (!reqObj._chunkBuf) reqObj._chunkBuf = buf;
+  else reqObj._chunkBuf = Buffer.concat([reqObj._chunkBuf, buf]);
   while (true) {
-    const nl = reqObj._chunkBuf.indexOf('\r\n');
+    // Find \r\n in buffer
+    let nl = -1;
+    for (let i = 0; i < reqObj._chunkBuf.length - 1; i++) {
+      if (reqObj._chunkBuf[i] === 0x0d && reqObj._chunkBuf[i+1] === 0x0a) { nl = i; break; }
+    }
     if (nl === -1) break;
-    const sizeStr = reqObj._chunkBuf.substring(0, nl).trim();
+    const sizeStr = reqObj._chunkBuf.slice(0, nl).toString().trim();
     const size = parseInt(sizeStr, 16);
-    if (isNaN(size)) { reqObj._chunkBuf = reqObj._chunkBuf.substring(nl + 2); continue; }
+    if (isNaN(size)) { reqObj._chunkBuf = reqObj._chunkBuf.slice(nl + 2); continue; }
     if (size === 0) { res.complete = true; res.push(null); return; }
     if (reqObj._chunkBuf.length < nl + 2 + size + 2) break;
-    const chunkData = reqObj._chunkBuf.substring(nl + 2, nl + 2 + size);
-    res.push(Buffer.from(chunkData));
-    reqObj._chunkBuf = reqObj._chunkBuf.substring(nl + 2 + size + 2);
+    res.push(reqObj._chunkBuf.slice(nl + 2, nl + 2 + size));
+    reqObj._chunkBuf = reqObj._chunkBuf.slice(nl + 2 + size + 2);
   }
 }
 

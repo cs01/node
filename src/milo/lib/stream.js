@@ -87,6 +87,7 @@ class Readable extends Stream {
       pipes: [],
     };
     if (opts && opts.read) this._read = opts.read;
+    if (opts && opts.destroy) this._destroy = opts.destroy;
   }
 
   _read(_size) {}
@@ -188,16 +189,23 @@ class Readable extends Stream {
       state.length += state.objectMode ? 1 : chunk.length;
     }
   }
-  destroy(err) {
+  destroy(err, cb) {
     if (this._readableState._destroyed) return this;
     this._readableState._destroyed = true;
-    if (err) this.emit('error', err);
-    this.emit('close');
+    const onDestroy = (err2) => {
+      if (err2) { this._readableState.errored = err2; this.emit('error', err2); }
+      this.emit('close');
+      if (cb) cb(err2);
+    };
+    if (this._destroy) this._destroy(err || null, onDestroy);
+    else onDestroy(err);
     return this;
   }
+  _destroy(err, cb) { cb(err); }
 
   get destroyed() { return !!this._readableState._destroyed; }
   set destroyed(v) { this._readableState._destroyed = v; }
+  get errored() { return this._readableState.errored || null; }
   get readableEnded() { return this._readableState.ended; }
   get readableFlowing() { return this._readableState.flowing; }
   get readableHighWaterMark() { return this._readableState.highWaterMark; }
@@ -370,6 +378,7 @@ class Writable extends Stream {
     this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2 };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;
+    if (opts && opts.destroy) this._destroy = opts.destroy;
     if (opts && opts.final) this._final = opts.final;
     if (opts && opts.defaultEncoding) this._defaultEncoding = opts.defaultEncoding;
     if (opts && opts.decodeStrings === false) this._decodeStrings = false;
@@ -391,47 +400,85 @@ class Writable extends Stream {
       err.code = 'ERR_INVALID_ARG_TYPE';
       throw err;
     }
-    if (typeof chunk === 'string' && this._decodeStrings !== false) chunk = Buffer.from(chunk, encoding);
-    this._writableState.writing = true;
+    if (typeof chunk === 'string' && this._decodeStrings !== false) { chunk = Buffer.from(chunk, encoding); encoding = 'buffer'; }
     this._writableState.length += (this._writableState.objectMode ? 1 : (chunk.length || 0));
     const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 16384;
     const ret = this._writableState.length < hwm;
     if (!ret) this._writableState.needDrain = true;
-    this._write(chunk, encoding || 'utf8', (err) => {
+    if (this._writableState.corked > 0) {
+      this._writableState.buffered.push({ chunk, encoding: encoding || 'buffer', cb });
+      return ret;
+    }
+    this._writableState.writing = true;
+    this._doWrite(chunk, encoding || 'buffer', cb);
+    return ret;
+  }
+
+  _doWrite(chunk, encoding, cb) {
+    this._write(chunk, encoding, (err) => {
       this._writableState.writing = false;
       this._writableState.length -= (this._writableState.objectMode ? 1 : (chunk.length || 0));
       if (err) { this.emit('error', err); }
-      else if (this._writableState.needDrain && this._writableState.length < hwm) {
-        this._writableState.needDrain = false;
-        this.emit('drain');
+      else {
+        const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 16384;
+        if (this._writableState.needDrain && this._writableState.length < hwm) {
+          this._writableState.needDrain = false;
+          this.emit('drain');
+        }
       }
       if (cb) cb(err);
+      this._flushBuffered();
     });
-    return ret;
+  }
+
+  _flushBuffered() {
+    while (this._writableState.buffered.length > 0 && this._writableState.corked === 0 && !this._writableState.writing) {
+      const entry = this._writableState.buffered.shift();
+      this._writableState.writing = true;
+      this._doWrite(entry.chunk, entry.encoding, entry.cb);
+      break;
+    }
   }
 
   end(chunk, encoding, cb) {
     if (typeof chunk === 'function') { cb = chunk; chunk = null; }
     if (typeof encoding === 'function') { cb = encoding; encoding = null; }
     if (chunk != null) this.write(chunk, encoding);
+    this._writableState.corked = 0;
     this._writableState.ending = true;
     this._writableState.ended = true;
     this.writable = false;
-    const done = () => { this._writableState.finished = true; this.emit('finish'); if (cb) cb(); };
-    if (this._final) this._final(done);
-    else process.nextTick(done);
+    const finish = () => { this._writableState.finished = true; this.emit('finish'); if (cb) cb(); };
+    const waitDrain = () => {
+      if (this._writableState.buffered.length > 0 || this._writableState.writing) {
+        process.nextTick(waitDrain);
+      } else if (this._final) {
+        this._final(finish);
+      } else {
+        process.nextTick(finish);
+      }
+    };
+    this._flushBuffered();
+    waitDrain();
     return this;
   }
 
   cork() { this._writableState.corked++; }
-  uncork() { this._writableState.corked = Math.max(0, this._writableState.corked - 1); }
-  destroy(err) {
+  uncork() { this._writableState.corked = Math.max(0, this._writableState.corked - 1); this._flushBuffered(); }
+  destroy(err, cb) {
     if (this._writableState._destroyed) return this;
     this._writableState._destroyed = true;
-    if (err) this.emit('error', err);
-    this.emit('close');
+    const onDestroy = (err2) => {
+      if (err2) { this._writableState.errored = err2; this.emit('error', err2); }
+      this.emit('close');
+      if (cb) cb(err2);
+    };
+    if (this._destroy) this._destroy(err || null, onDestroy);
+    else onDestroy(err);
     return this;
   }
+  _destroy(err, cb) { cb(err); }
+  get errored() { return this._writableState.errored || null; }
   setDefaultEncoding(enc) {
     const normalized = typeof enc === 'string' ? enc.toLowerCase() : String(enc);
     if (!Buffer.isEncoding(normalized)) {
@@ -467,6 +514,7 @@ class Duplex extends Readable {
     this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;
+    if (opts && opts.destroy) this._destroy = opts.destroy;
     if (opts && opts.final) this._final = opts.final;
     if (opts && opts.defaultEncoding) this._defaultEncoding = opts.defaultEncoding;
     if (opts && opts.decodeStrings === false) this._decodeStrings = false;
@@ -482,12 +530,17 @@ class Duplex extends Readable {
   get writableCorked() { return (this._writableState && this._writableState.corked) || 0; }
   get writableNeedDrain() { return !!(this._writableState && this._writableState.needDrain); }
 
-  destroy(err) {
+  destroy(err, cb) {
     if (this._readableState._destroyed && this._writableState._destroyed) return this;
     this._readableState._destroyed = true;
     this._writableState._destroyed = true;
-    if (err) this.emit('error', err);
-    this.emit('close');
+    const onDestroy = (err2) => {
+      if (err2) { this._readableState.errored = err2; this._writableState.errored = err2; this.emit('error', err2); }
+      this.emit('close');
+      if (cb) cb(err2);
+    };
+    if (this._destroy) this._destroy(err || null, onDestroy);
+    else onDestroy(err);
     return this;
   }
 }
@@ -503,7 +556,7 @@ class Transform extends Duplex {
   constructor(opts) {
     super(opts);
     if (opts && opts.transform) this._transform = opts.transform;
-    if (opts && opts.flush) this._flush = opts.flush;
+    if (opts && typeof opts.flush === 'function') this._flush = opts.flush;
   }
 
   _transform(chunk, encoding, cb) { cb(null, chunk); }
@@ -616,7 +669,21 @@ module.exports.addAbortSignal = function addAbortSignal(signal, stream) {
 };
 module.exports.promises = promises;
 module.exports.consumers = { arrayBuffer: async (s) => { const c = []; for await (const ch of s) c.push(ch); return Buffer.concat(c).buffer; }, text: async (s) => { const c = []; for await (const ch of s) c.push(ch); return Buffer.concat(c).toString(); }, json: async (s) => JSON.parse(await module.exports.consumers.text(s)), blob: async (s) => { const c = []; for await (const ch of s) c.push(ch); return new Blob([Buffer.concat(c)]); }, buffer: async (s) => { const c = []; for await (const ch of s) c.push(ch); return Buffer.concat(c); }, bytes: async (s) => { const c = []; for await (const ch of s) c.push(ch); return new Uint8Array(Buffer.concat(c)); } };
-module.exports.web = {};
+module.exports.web = {
+  ReadableStream: globalThis.ReadableStream,
+  WritableStream: globalThis.WritableStream,
+  TransformStream: globalThis.TransformStream,
+  ByteLengthQueuingStrategy: globalThis.ByteLengthQueuingStrategy,
+  CountQueuingStrategy: globalThis.CountQueuingStrategy,
+  ReadableStreamDefaultReader: globalThis.ReadableStream ? class ReadableStreamDefaultReader { constructor(stream) { return stream.getReader(); } } : undefined,
+  ReadableByteStreamController: undefined,
+  ReadableStreamBYOBReader: undefined,
+  ReadableStreamBYOBRequest: undefined,
+  ReadableStreamDefaultController: undefined,
+  TransformStreamDefaultController: undefined,
+  WritableStreamDefaultController: undefined,
+  WritableStreamDefaultWriter: globalThis.WritableStream ? class WritableStreamDefaultWriter { constructor(stream) { return stream.getWriter(); } } : undefined,
+};
 
 let _defaultHWM = 16384;
 let _defaultObjectHWM = 16;

@@ -90,8 +90,8 @@ class TLSSocket extends net.Socket {
   write(data, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
     if (this.destroyed || !this._ssl) return false;
-    const str = typeof data === 'string' ? data : data.toString();
-    const n = tcp.sslWrite(this._ssl, str);
+    const toWrite = typeof data === 'string' ? data : (Buffer.isBuffer(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : data);
+    const n = tcp.sslWrite(this._ssl, toWrite);
     if (cb) process.nextTick(cb);
     return n >= 0;
   }

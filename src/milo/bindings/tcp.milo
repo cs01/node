@@ -597,7 +597,7 @@ fn sslConnectContinueOp(info: *u8, _ud: *u8): void {
     }
 }
 
-// sslRead(sslHandle) → string or undefined (closed) or empty string (EAGAIN)
+// sslRead(sslHandle) → Uint8Array or undefined (closed) or empty Uint8Array (EAGAIN)
 fn sslRead(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     unsafe {
@@ -609,17 +609,26 @@ fn sslRead(info: *u8, _ud: *u8): void {
         let buf = calloc(1, 65536)
         let n = nm_ssl_read(ssl, buf, 65535)
         if n > 0 {
-            ci.retStrLen(buf, n)
+            let nLen = n as i64
+            let ab = iso.arraybufferNew(nLen)
+            let result = iso.uint8arrayNew(ab, 0 as i64, nLen)
+            let resultPtr = result.typedArrayData(iso)
+            memcpy(resultPtr, buf, nLen)
+            free(buf)
+            ci.ret(result)
         } else if n == 0 {
+            free(buf)
             ci.retUndefined()
         } else {
-            ci.retStr("" as *u8)
+            free(buf)
+            let ab = iso.arraybufferNew(0 as i64)
+            let result = iso.uint8arrayNew(ab, 0 as i64, 0 as i64)
+            ci.ret(result)
         }
-        free(buf)
     }
 }
 
-// sslWrite(sslHandle, data) → bytes written
+// sslWrite(sslHandle, data) → bytes written — data can be string or Uint8Array
 fn sslWrite(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let iso = ci.isolate()
@@ -628,21 +637,32 @@ fn sslWrite(info: *u8, _ud: *u8): void {
         var sslVal: [f64; 1] = [0.0]
         sslArg.toF64(iso, sslVal as *f64)
         let ssl = sslVal[0] as i64
-        let buf = calloc(1, 65536)
         let arg = ci.arg(1)
-        var len = arg.writeUtf8(iso, buf, 65536)
-        if len > 0 {
-            let last = (buf as i64 + (len - 1) as i64) as *u8
-            if last[0] == 0 { len = len - 1 }
-        }
-        if len <= 0 {
+        if arg.isString(iso) == 1 {
+            let buf = calloc(1, 65536)
+            var len = arg.writeUtf8(iso, buf, 65536)
+            if len > 0 {
+                let last = (buf as i64 + (len - 1) as i64) as *u8
+                if last[0] == 0 { len = len - 1 }
+            }
+            if len <= 0 {
+                free(buf)
+                ci.retI32(0)
+                return
+            }
+            let n = nm_ssl_write(ssl, buf, len)
             free(buf)
-            ci.retI32(0)
-            return
+            ci.retI32(n)
+        } else {
+            let dataPtr = arg.typedArrayData(iso)
+            let dataLen = arg.typedArrayByteLength(iso) as i32
+            if dataLen <= 0 {
+                ci.retI32(0)
+                return
+            }
+            let n = nm_ssl_write(ssl, dataPtr, dataLen)
+            ci.retI32(n)
         }
-        let n = nm_ssl_write(ssl, buf, len)
-        free(buf)
-        ci.retI32(n)
     }
 }
 

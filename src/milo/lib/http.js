@@ -310,11 +310,12 @@ class ClientRequest extends EventEmitter {
       for (const [k, v] of Object.entries(this._headers)) reqStr += `${k}: ${v}\r\n`;
       reqStr += '\r\n';
       socket.write(reqStr);
-      if (body) socket.write(body.toString());
+      if (body) socket.write(body);
       this.emit('finish');
     });
 
-    let responseBuf = '';
+    let responseChunks = [];
+    let responseLen = 0;
     let headersParsed = false;
     let res = null;
     let contentLength = -1;
@@ -322,12 +323,21 @@ class ClientRequest extends EventEmitter {
     let chunked = false;
 
     socket.on('data', (chunk) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       if (!headersParsed) {
-        responseBuf += chunk.toString();
-        const headerEnd = responseBuf.indexOf('\r\n\r\n');
+        responseChunks.push(buf);
+        responseLen += buf.length;
+        const combined = Buffer.concat(responseChunks, responseLen);
+        // Binary-safe header delimiter search
+        let headerEnd = -1;
+        for (let i = 0; i <= combined.length - 4; i++) {
+          if (combined[i] === 0x0d && combined[i+1] === 0x0a && combined[i+2] === 0x0d && combined[i+3] === 0x0a) {
+            headerEnd = i; break;
+          }
+        }
         if (headerEnd === -1) return;
-        const headerPart = responseBuf.substring(0, headerEnd);
-        const bodyPart = responseBuf.substring(headerEnd + 4);
+        const headerPart = combined.slice(0, headerEnd).toString();
+        const bodyPart = combined.slice(headerEnd + 4); // stays as Buffer — preserves binary
         const lines = headerPart.split('\r\n');
         const statusLine = lines[0];
         const match = statusLine.match(/^HTTP\/(\d\.\d) (\d+) ?(.*)$/);
@@ -348,9 +358,10 @@ class ClientRequest extends EventEmitter {
           }
         }
         headersParsed = true;
+        responseChunks = null;
 
         if (res.statusCode === 101 && this.listenerCount('upgrade') > 0) {
-          this.emit('upgrade', res, socket, Buffer.from(bodyPart));
+          this.emit('upgrade', res, socket, bodyPart);
           return;
         }
 
@@ -361,9 +372,9 @@ class ClientRequest extends EventEmitter {
 
         if (bodyPart.length > 0) {
           if (chunked) {
-            this._pushChunked(res, bodyPart);
+            this._pushChunkedBuf(res, bodyPart);
           } else {
-            res.push(Buffer.from(bodyPart));
+            res.push(bodyPart);
             bodyReceived += bodyPart.length;
           }
         }
@@ -372,12 +383,11 @@ class ClientRequest extends EventEmitter {
           res.push(null);
         }
       } else {
-        const str = chunk.toString();
         if (chunked) {
-          this._pushChunked(res, str);
+          this._pushChunkedBuf(res, buf);
         } else {
-          res.push(chunk);
-          bodyReceived += chunk.length;
+          res.push(buf);
+          bodyReceived += buf.length;
           if (contentLength >= 0 && bodyReceived >= contentLength) {
             res.complete = true;
             res.push(null);
@@ -409,21 +419,24 @@ class ClientRequest extends EventEmitter {
     }
   }
 
-  _pushChunked(res, data) {
-    // Simple chunked transfer decoding
-    if (!this._chunkBuf) this._chunkBuf = '';
-    this._chunkBuf += data;
+  // Binary-safe chunked transfer decoding
+  _pushChunkedBuf(res, data) {
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (!this._chunkBuf) this._chunkBuf = buf;
+    else this._chunkBuf = Buffer.concat([this._chunkBuf, buf]);
     while (true) {
-      const nl = this._chunkBuf.indexOf('\r\n');
+      let nl = -1;
+      for (let i = 0; i < this._chunkBuf.length - 1; i++) {
+        if (this._chunkBuf[i] === 0x0d && this._chunkBuf[i+1] === 0x0a) { nl = i; break; }
+      }
       if (nl === -1) break;
-      const sizeStr = this._chunkBuf.substring(0, nl).trim();
+      const sizeStr = this._chunkBuf.slice(0, nl).toString().trim();
       const size = parseInt(sizeStr, 16);
-      if (isNaN(size)) { this._chunkBuf = this._chunkBuf.substring(nl + 2); continue; }
+      if (isNaN(size)) { this._chunkBuf = this._chunkBuf.slice(nl + 2); continue; }
       if (size === 0) { res.complete = true; res.push(null); return; }
       if (this._chunkBuf.length < nl + 2 + size + 2) break;
-      const chunkData = this._chunkBuf.substring(nl + 2, nl + 2 + size);
-      res.push(Buffer.from(chunkData));
-      this._chunkBuf = this._chunkBuf.substring(nl + 2 + size + 2);
+      res.push(this._chunkBuf.slice(nl + 2, nl + 2 + size));
+      this._chunkBuf = this._chunkBuf.slice(nl + 2 + size + 2);
     }
   }
 

@@ -278,6 +278,7 @@
       [Symbol.iterator]() { return this.entries(); }
       toString() { return this.#p.map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&'); }
       get size() { return this.#p.length; }
+      get [Symbol.toStringTag]() { return 'URLSearchParams'; }
     };
     globalThis.URL = class URL {
       constructor(url, base) {
@@ -292,6 +293,7 @@
       }
       toString() { return this.href; }
       toJSON() { return this.href; }
+      get [Symbol.toStringTag]() { return 'URL'; }
     };
   }
   if (typeof TextEncoder === 'undefined') globalThis.TextEncoder = class TextEncoder { encode(s) { const a = []; for (let i = 0; i < s.length; i++) a.push(s.charCodeAt(i) & 0xff); return new Uint8Array(a); } };

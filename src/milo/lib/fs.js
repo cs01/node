@@ -110,6 +110,9 @@ function fstatSync(fd) {
 }
 
 function readSync(fd, buffer, offset, length, position) {
+  if (offset != null && typeof offset === 'object') {
+    ({ offset = 0, length = buffer.length, position = null } = offset);
+  }
   offset = offset || 0;
   length = length || buffer.length - offset;
   if (position != null) b.fdSeek(fd, position, 0);
