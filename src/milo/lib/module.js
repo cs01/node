@@ -20,7 +20,7 @@ class Module {
     'assert', 'buffer', 'child_process', 'cluster', 'console', 'crypto',
     'dgram', 'dns', 'domain', 'events', 'fs', 'http', 'https', 'module',
     'net', 'os', 'path', 'punycode', 'querystring', 'readline', 'stream',
-    'string_decoder', 'tls', 'url', 'util', 'v8', 'vm', 'worker_threads', 'zlib',
+    'string_decoder', 'test', 'tls', 'url', 'util', 'v8', 'vm', 'worker_threads', 'zlib',
   ];
 
   static isBuiltin(name) {

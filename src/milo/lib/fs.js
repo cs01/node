@@ -269,6 +269,64 @@ function appendFile(path, data, opts, cb) {
 }
 function exists(path, cb) { process.nextTick(() => cb(existsSync(path))); }
 
+function linkSync(existingPath, newPath) {
+  const r = b.link(String(existingPath), String(newPath));
+  if (r !== 0) throw _fsError('ENOENT', 'link', existingPath, 'no such file or directory');
+}
+function link(existingPath, newPath, cb) { _async(linkSync, [existingPath, newPath], (err) => cb(err)); }
+
+function fsyncSync(fd) { b.fsync(fd); }
+function fdatasyncSync(fd) { b.fdatasync(fd); }
+function ftruncateSync(fd, len) { b.ftruncate(fd, len || 0); }
+function fchmodSync(fd, mode) { b.fchmod(fd, mode); }
+
+function fsync(fd, cb) { _async(fsyncSync, [fd], (err) => cb(err)); }
+function fdatasync(fd, cb) { _async(fdatasyncSync, [fd], (err) => cb(err)); }
+function ftruncate(fd, len, cb) {
+  if (typeof len === 'function') { cb = len; len = 0; }
+  _async(ftruncateSync, [fd, len], (err) => cb(err));
+}
+function fchmod(fd, mode, cb) { _async(fchmodSync, [fd, mode], (err) => cb(err)); }
+
+function open(path, flags, mode, cb) {
+  if (typeof flags === 'function') { cb = flags; flags = 'r'; mode = 0o666; }
+  if (typeof mode === 'function') { cb = mode; mode = 0o666; }
+  _async(openSync, [path, flags, mode], cb);
+}
+
+function close(fd, cb) { _async(closeSync, [fd], (err) => cb(err)); }
+
+function read(fd, buffer, offset, length, position, cb) {
+  if (typeof position === 'function') { cb = position; position = null; }
+  try {
+    const n = readSync(fd, buffer, offset, length, position);
+    process.nextTick(() => cb(null, n, buffer));
+  } catch (e) { process.nextTick(() => cb(e)); }
+}
+
+function fstat(fd, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _async(fstatSync, [fd], cb);
+}
+
+function readlink(path, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _async(readlinkSync, [path], cb);
+}
+function symlink(target, path, type, cb) {
+  if (typeof type === 'function') { cb = type; type = undefined; }
+  _async(symlinkSync, [target, path], (err) => cb(err));
+}
+function write(fd, buffer, offset, length, position, cb) {
+  if (typeof offset === 'function') { cb = offset; offset = 0; length = buffer.length; position = null; }
+  if (typeof length === 'function') { cb = length; length = buffer.length - offset; position = null; }
+  if (typeof position === 'function') { cb = position; position = null; }
+  try {
+    const n = writeSync(fd, buffer, offset, length, position);
+    process.nextTick(() => cb(null, n, buffer));
+  } catch (e) { process.nextTick(() => cb(e)); }
+}
+
 // --- fs.watch / watchFile / unwatchFile via kqueue EVFILT_VNODE ---
 const EventEmitter = require('events');
 const tcp = internalBinding('tcp');
@@ -409,23 +467,33 @@ const promises = {
   readFile: (path, opts) => Promise.resolve(readFileSync(path, opts)),
   writeFile: (path, data) => Promise.resolve(writeFileSync(path, data)),
   stat: (path) => Promise.resolve(statSync(path)),
+  lstat: (path) => Promise.resolve(lstatSync(path)),
   unlink: (path) => Promise.resolve(unlinkSync(path)),
   mkdir: (path, opts) => Promise.resolve(mkdirSync(path, opts)),
   rmdir: (path) => Promise.resolve(rmdirSync(path)),
   readdir: (path, opts) => Promise.resolve(readdirSync(path, opts)),
   access: (path, mode) => Promise.resolve(accessSync(path, mode)),
   rm: (path, opts) => Promise.resolve(rmSync(path, opts)),
+  link: (existing, newPath) => Promise.resolve(linkSync(existing, newPath)),
+  rename: (o, n) => Promise.resolve(renameSync(o, n)),
+  chmod: (p, m) => Promise.resolve(chmodSync(p, m)),
+  open: (path, flags, mode) => {
+    const fd = openSync(path, flags || 'r', mode);
+    return Promise.resolve({ fd, close() { closeSync(fd); return Promise.resolve(); }, read: (...a) => Promise.resolve(readSync(fd, ...a)), write: (...a) => Promise.resolve(writeSync(fd, ...a)), stat: () => Promise.resolve(fstatSync(fd)) });
+  },
 };
 
 module.exports = {
   readFile, writeFile, appendFile, stat, lstat, mkdir, readdir,
   unlink, rmdir, rename, chmod, access, rm, copyFile, realpath, exists,
+  open, close, read, write, fstat, fsync, fdatasync, ftruncate, fchmod, link, readlink, symlink,
   readFileSync, writeFileSync, appendFileSync, statSync, existsSync,
   mkdirSync, unlinkSync, rmdirSync, renameSync,
   readdirSync, realpathSync, chmodSync,
   rmSync, mkdtempSync, accessSync, copyFileSync,
-  symlinkSync, lstatSync, readlinkSync,
+  symlinkSync, lstatSync, readlinkSync, linkSync,
   openSync, closeSync, fstatSync, writeSync, readSync,
+  fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync,
   createReadStream, createWriteStream,
   watch, watchFile, unwatchFile, FSWatcher, Dirent,
   promises,

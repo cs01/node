@@ -122,7 +122,22 @@ class Readable extends Stream {
   pause() { this._readableState.flowing = false; return this; }
   isPaused() { return this._readableState.flowing === false; }
   unshift(chunk) { this._readableState.buffer.unshift(chunk); }
-  destroy(err) { if (err) this.emit('error', err); this.emit('close'); return this; }
+  destroy(err) {
+    if (this._readableState._destroyed) return this;
+    this._readableState._destroyed = true;
+    if (err) this.emit('error', err);
+    this.emit('close');
+    return this;
+  }
+
+  get destroyed() { return !!this._readableState._destroyed; }
+  set destroyed(v) { this._readableState._destroyed = v; }
+  get readableEnded() { return this._readableState.ended; }
+  get readableFlowing() { return this._readableState.flowing; }
+  get readableHighWaterMark() { return this._readableState.highWaterMark; }
+  get readableLength() { return this._readableState.length; }
+  get readableObjectMode() { return this._readableState.objectMode; }
+  get readableEncoding() { return this._readableState.encoding; }
 
   [Symbol.asyncIterator]() {
     const self = this;
@@ -312,8 +327,24 @@ class Writable extends Stream {
 
   cork() { this._writableState.corked++; }
   uncork() { this._writableState.corked = Math.max(0, this._writableState.corked - 1); }
-  destroy(err) { if (err) this.emit('error', err); this.emit('close'); return this; }
+  destroy(err) {
+    if (this._writableState._destroyed) return this;
+    this._writableState._destroyed = true;
+    if (err) this.emit('error', err);
+    this.emit('close');
+    return this;
+  }
   setDefaultEncoding(enc) { this._defaultEncoding = enc; return this; }
+
+  get destroyed() { return !!this._writableState._destroyed; }
+  set destroyed(v) { this._writableState._destroyed = v; }
+  get writableEnded() { return this._writableState.ended; }
+  get writableFinished() { return this._writableState.finished; }
+  get writableHighWaterMark() { return (this._writableState && this._writableState.highWaterMark) || 16384; }
+  get writableLength() { return (this._writableState && this._writableState.buffered && this._writableState.buffered.length) || 0; }
+  get writableObjectMode() { return !!(this._writableState && this._writableState.objectMode); }
+  get writableCorked() { return (this._writableState && this._writableState.corked) || 0; }
+  get writableNeedDrain() { return !!(this._writableState && this._writableState.needDrain); }
 }
 
 class Duplex extends Readable {
@@ -324,9 +355,32 @@ class Duplex extends Readable {
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.final) this._final = opts.final;
   }
+
+  get destroyed() { return !!(this._readableState._destroyed || this._writableState._destroyed); }
+  set destroyed(v) { this._readableState._destroyed = v; this._writableState._destroyed = v; }
+  get writableEnded() { return this._writableState.ended; }
+  get writableFinished() { return this._writableState.finished; }
+  get writableHighWaterMark() { return (this._writableState && this._writableState.highWaterMark) || 16384; }
+  get writableLength() { return (this._writableState && this._writableState.buffered && this._writableState.buffered.length) || 0; }
+  get writableObjectMode() { return !!(this._writableState && this._writableState.objectMode); }
+  get writableCorked() { return (this._writableState && this._writableState.corked) || 0; }
+  get writableNeedDrain() { return !!(this._writableState && this._writableState.needDrain); }
+
+  destroy(err) {
+    if (this._readableState._destroyed && this._writableState._destroyed) return this;
+    this._readableState._destroyed = true;
+    this._writableState._destroyed = true;
+    if (err) this.emit('error', err);
+    this.emit('close');
+    return this;
+  }
 }
 Object.getOwnPropertyNames(Writable.prototype).forEach(method => {
-  if (!Duplex.prototype[method]) Duplex.prototype[method] = Writable.prototype[method];
+  if (method === 'constructor' || method === 'destroyed' || method === 'destroy') return;
+  if (!Object.getOwnPropertyDescriptor(Duplex.prototype, method)) {
+    const desc = Object.getOwnPropertyDescriptor(Writable.prototype, method);
+    if (desc) Object.defineProperty(Duplex.prototype, method, desc);
+  }
 });
 
 class Transform extends Duplex {
@@ -423,3 +477,8 @@ module.exports.addAbortSignal = function addAbortSignal(signal, stream) {
   return stream;
 };
 module.exports.promises = promises;
+
+let _defaultHWM = 16384;
+let _defaultObjectHWM = 16;
+module.exports.getDefaultHighWaterMark = function(objectMode) { return objectMode ? _defaultObjectHWM : _defaultHWM; };
+module.exports.setDefaultHighWaterMark = function(objectMode, value) { if (objectMode) _defaultObjectHWM = value; else _defaultHWM = value; };
