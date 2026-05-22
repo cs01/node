@@ -57,6 +57,7 @@ class ServerResponse extends OutgoingMessage {
     this.socket = socket;
     this.connection = socket;
     this.statusCode = 200;
+    this.writable = true;
   }
   _implicitHeader() { this._flushHeaders(); }
   writeHead(code, reason, headers) {
@@ -68,6 +69,10 @@ class ServerResponse extends OutgoingMessage {
   _flushHeaders() {
     if (this._headersSent) return;
     this._headersSent = true;
+    if (!this._headers['content-length'] && !this._headers['transfer-encoding']) {
+      this._headers['transfer-encoding'] = 'chunked';
+      this._chunked = true;
+    }
     const statusMsg = STATUS_CODES[this.statusCode] || 'Unknown';
     let head = `HTTP/1.1 ${this.statusCode} ${statusMsg}\r\n`;
     for (const [k,v] of Object.entries(this._headers)) head += `${k}: ${v}\r\n`;
@@ -76,14 +81,26 @@ class ServerResponse extends OutgoingMessage {
   }
   write(chunk, encoding, cb) {
     this._flushHeaders();
-    this._socket.write(chunk, encoding, cb);
+    if (this._chunked) {
+      let data;
+      if (Buffer.isBuffer(chunk)) data = chunk;
+      else if (chunk instanceof Uint8Array) data = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+      else data = Buffer.from(typeof chunk === 'string' ? chunk : String(chunk), encoding);
+      this._socket.write(data.length.toString(16) + '\r\n');
+      this._socket.write(data);
+      this._socket.write('\r\n');
+    } else {
+      this._socket.write(chunk, encoding, cb);
+    }
     return true;
   }
   end(chunk, encoding, cb) {
     if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
     this._flushHeaders();
-    if (chunk) this._socket.write(chunk, encoding);
+    if (chunk) this.write(chunk, encoding);
+    if (this._chunked) this._socket.write('0\r\n\r\n');
     this.finished = true;
+    this.writable = false;
     this.writableEnded = true;
     this._socket.end();
     this.emit('finish');
