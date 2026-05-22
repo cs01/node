@@ -85,15 +85,22 @@ class Readable extends Stream {
       objectMode: _rOM,
       encoding: null,
       pipes: [],
+      errorEmitted: false, errored: null,
     };
     if (opts && opts.read) this._read = opts.read;
     if (opts && opts.destroy) this._destroy = opts.destroy;
+    if (opts && opts.signal) {
+      const signal = opts.signal;
+      if (signal.aborted) this.destroy(new DOMException('The operation was aborted', 'AbortError'));
+      else signal.addEventListener('abort', () => this.destroy(new DOMException('The operation was aborted', 'AbortError')), { once: true });
+    }
   }
 
   _read(_size) {}
 
   read(size) {
     const state = this._readableState;
+    if (state._destroyed) return null;
     if (state.buffer.length === 0) {
       if (state.ended) return null;
       this._read(state.highWaterMark);
@@ -112,13 +119,21 @@ class Readable extends Stream {
   push(chunk, encoding) {
     const state = this._readableState;
     this._didPush = true;
+    if (state._destroyed) return false;
     if (chunk === undefined) return state.length < state.highWaterMark;
     if (chunk === null) {
       state.ended = true;
       if (state.flowing) process.nextTick(() => {
-        if (!state.endEmitted) { state.endEmitted = true; this.emit('end'); }
+        if (!state.endEmitted && !state._destroyed) { state.endEmitted = true; this.emit('end'); }
         if (this.allowHalfOpen === false && this._writableState && !this._writableState.ended) this.end();
       });
+      return false;
+    }
+    if (state.ended) {
+      const err = new Error('stream.push() after EOF');
+      err.code = 'ERR_STREAM_PUSH_AFTER_EOF';
+      state.errored = err;
+      process.nextTick(() => this.emit('error', err));
       return false;
     }
     if (!state.objectMode && typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
@@ -160,7 +175,7 @@ class Readable extends Stream {
 
   _flow() {
     const state = this._readableState;
-    if (!state.flowing) return;
+    if (!state.flowing || state._destroyed) return;
     // Drain buffered data first, even if stream is already ended
     while (state.buffer.length > 0 && state.flowing) {
       const chunk = state.buffer.shift();
@@ -177,12 +192,13 @@ class Readable extends Stream {
         this.emit('data', chunk);
       }
     }
-    if (state.ended && state.buffer.length === 0 && !state.endEmitted) { state.endEmitted = true; this.emit('end'); }
+    if (state.ended && state.buffer.length === 0 && !state.endEmitted && !state._destroyed) { state.endEmitted = true; this.emit('end'); }
   }
   pause() { this._readableState.flowing = false; return this; }
   isPaused() { return this._readableState.flowing === false; }
   unshift(chunk, encoding) {
     const state = this._readableState;
+    if (state._destroyed) return;
     if (!state.objectMode && typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
     if (chunk !== null && chunk !== undefined) {
       state.buffer.unshift(chunk);
@@ -190,21 +206,26 @@ class Readable extends Stream {
     }
   }
   destroy(err, cb) {
-    if (this._readableState._destroyed) return this;
+    if (this._readableState._destroyed) { if (cb) cb(); return this; }
     this._readableState._destroyed = true;
+    if (err) this._readableState.errored = err;
     const onDestroy = (err2) => {
-      if (err2) { this._readableState.errored = err2; this.emit('error', err2); }
-      this.emit('close');
+      const s = this._readableState;
+      const emitErr = err2 != null ? err2 : null;
+      if (emitErr) s.errored = emitErr;
+      process.nextTick(() => {
+        if (emitErr && !s.errorEmitted) { s.errorEmitted = true; this.emit('error', emitErr); }
+        this.emit('close');
+      });
       if (cb) cb(err2);
     };
-    if (this._destroy) this._destroy(err || null, onDestroy);
-    else onDestroy(err);
+    this._destroy(err || null, onDestroy);
     return this;
   }
   _destroy(err, cb) { cb(err); }
 
-  get destroyed() { return !!this._readableState._destroyed; }
-  set destroyed(v) { this._readableState._destroyed = v; }
+  get destroyed() { return !!(this._readableState && this._readableState._destroyed); }
+  set destroyed(v) { if (this._readableState) this._readableState._destroyed = v; }
   get errored() { return this._readableState.errored || null; }
   get readableEnded() { return this._readableState.ended; }
   get readableFlowing() { return this._readableState.flowing; }
@@ -375,7 +396,7 @@ class Writable extends Stream {
     const _wOM2 = !!(opts && opts.objectMode);
     const _wDefaultHWM2 = _wOM2 ? 16 : 65536;
     const _wHWM2 = (opts && opts.writableHighWaterMark != null) ? opts.writableHighWaterMark : (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM2;
-    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2 };
+    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2, errorEmitted: false, errored: null, autoDestroy: !!(opts && opts.autoDestroy) };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;
     if (opts && opts.destroy) this._destroy = opts.destroy;
@@ -383,6 +404,11 @@ class Writable extends Stream {
     if (opts && opts.defaultEncoding) this._defaultEncoding = opts.defaultEncoding;
     if (opts && opts.decodeStrings === false) this._decodeStrings = false;
     if (opts && opts.objectMode) this._writableState.objectMode = true;
+    if (opts && opts.signal) {
+      const signal = opts.signal;
+      if (signal.aborted) this.destroy(new DOMException('The operation was aborted', 'AbortError'));
+      else signal.addEventListener('abort', () => this.destroy(new DOMException('The operation was aborted', 'AbortError')), { once: true });
+    }
   }
 
   _write(chunk, encoding, cb) { cb(); }
@@ -390,6 +416,12 @@ class Writable extends Stream {
   write(chunk, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
     if (!encoding) encoding = this._defaultEncoding || 'utf8';
+    if (this._writableState._destroyed) {
+      const err = new Error('Cannot call write after a stream was destroyed');
+      err.code = 'ERR_STREAM_DESTROYED';
+      if (cb) process.nextTick(cb, err);
+      return false;
+    }
     if (chunk === null) {
       const err = new TypeError('May not write null values to stream');
       err.code = 'ERR_STREAM_NULL_VALUES';
@@ -443,12 +475,21 @@ class Writable extends Stream {
   end(chunk, encoding, cb) {
     if (typeof chunk === 'function') { cb = chunk; chunk = null; }
     if (typeof encoding === 'function') { cb = encoding; encoding = null; }
+    if (this._writableState.ending || this._writableState._destroyed) {
+      if (cb) {
+        const e = this._writableState.finished
+          ? Object.assign(new Error('write after end'), { code: 'ERR_STREAM_ALREADY_FINISHED' })
+          : Object.assign(new Error('Cannot call write after a stream was destroyed'), { code: 'ERR_STREAM_DESTROYED' });
+        process.nextTick(cb, e);
+      }
+      return this;
+    }
     if (chunk != null) this.write(chunk, encoding);
     this._writableState.corked = 0;
     this._writableState.ending = true;
     this._writableState.ended = true;
     this.writable = false;
-    const finish = () => { this._writableState.finished = true; this.emit('finish'); if (cb) cb(); };
+    const finish = () => { this._writableState.finished = true; if (cb) cb(); this.emit('finish'); if (this._writableState.autoDestroy) this.destroy(); };
     const waitDrain = () => {
       if (this._writableState.buffered.length > 0 || this._writableState.writing) {
         process.nextTick(waitDrain);
@@ -466,15 +507,27 @@ class Writable extends Stream {
   cork() { this._writableState.corked++; }
   uncork() { this._writableState.corked = Math.max(0, this._writableState.corked - 1); this._flushBuffered(); }
   destroy(err, cb) {
-    if (this._writableState._destroyed) return this;
+    if (this._writableState._destroyed) { if (cb) cb(); return this; }
     this._writableState._destroyed = true;
+    if (err) this._writableState.errored = err;
+    const s = this._writableState;
+    while (s.buffered.length > 0) {
+      const entry = s.buffered.shift();
+      if (entry.cb) {
+        const e = new Error('Cannot call write after a stream was destroyed'); e.code = 'ERR_STREAM_DESTROYED';
+        process.nextTick(entry.cb, e);
+      }
+    }
     const onDestroy = (err2) => {
-      if (err2) { this._writableState.errored = err2; this.emit('error', err2); }
-      this.emit('close');
+      const emitErr = err2 != null ? err2 : null;
+      if (emitErr) s.errored = emitErr;
+      process.nextTick(() => {
+        if (emitErr && !s.errorEmitted) { s.errorEmitted = true; this.emit('error', emitErr); }
+        this.emit('close');
+      });
       if (cb) cb(err2);
     };
-    if (this._destroy) this._destroy(err || null, onDestroy);
-    else onDestroy(err);
+    this._destroy(err || null, onDestroy);
     return this;
   }
   _destroy(err, cb) { cb(err); }
@@ -491,8 +544,12 @@ class Writable extends Stream {
     return this;
   }
 
-  get destroyed() { return !!this._writableState._destroyed; }
-  set destroyed(v) { this._writableState._destroyed = v; }
+  _undestroy() {
+    const s = this._writableState;
+    s._destroyed = false; s.ended = false; s.ending = false; s.finished = false; s.errorEmitted = false; s.errored = undefined;
+  }
+  get destroyed() { return !!(this._writableState && this._writableState._destroyed); }
+  set destroyed(v) { if (this._writableState) this._writableState._destroyed = v; }
   get writableEnded() { return this._writableState.ended; }
   get writableFinished() { return this._writableState.finished; }
   get writableHighWaterMark() { return this._writableState && this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 65536; }
@@ -511,7 +568,7 @@ class Duplex extends Readable {
     const _wOM = opts ? (opts.writableObjectMode != null ? opts.writableObjectMode : !!opts.objectMode) : false;
     const _wDefaultHWM = _wOM ? 16 : 65536;
     const _wHWM = (opts && opts.writableHighWaterMark != null) ? opts.writableHighWaterMark : (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM;
-    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM };
+    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM, errorEmitted: false, errored: null, autoDestroy: !!(opts && opts.autoDestroy) };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;
     if (opts && opts.destroy) this._destroy = opts.destroy;
@@ -520,8 +577,8 @@ class Duplex extends Readable {
     if (opts && opts.decodeStrings === false) this._decodeStrings = false;
   }
 
-  get destroyed() { return !!(this._readableState._destroyed || this._writableState._destroyed); }
-  set destroyed(v) { this._readableState._destroyed = v; this._writableState._destroyed = v; }
+  get destroyed() { return !!((this._readableState && this._readableState._destroyed) || (this._writableState && this._writableState._destroyed)); }
+  set destroyed(v) { if (this._readableState) this._readableState._destroyed = v; if (this._writableState) this._writableState._destroyed = v; }
   get writableEnded() { return this._writableState.ended; }
   get writableFinished() { return this._writableState.finished; }
   get writableHighWaterMark() { return this._writableState && this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 65536; }
@@ -531,16 +588,21 @@ class Duplex extends Readable {
   get writableNeedDrain() { return !!(this._writableState && this._writableState.needDrain); }
 
   destroy(err, cb) {
-    if (this._readableState._destroyed && this._writableState._destroyed) return this;
+    if (this._readableState._destroyed && this._writableState._destroyed) { if (cb) cb(); return this; }
     this._readableState._destroyed = true;
     this._writableState._destroyed = true;
+    if (err) { this._readableState.errored = err; this._writableState.errored = err; }
     const onDestroy = (err2) => {
-      if (err2) { this._readableState.errored = err2; this._writableState.errored = err2; this.emit('error', err2); }
-      this.emit('close');
+      const rs = this._readableState; const ws = this._writableState;
+      const emitErr = err2 != null ? err2 : null;
+      if (emitErr) { rs.errored = emitErr; ws.errored = emitErr; }
+      process.nextTick(() => {
+        if (emitErr && !ws.errorEmitted) { ws.errorEmitted = true; rs.errorEmitted = true; this.emit('error', emitErr); }
+        this.emit('close');
+      });
       if (cb) cb(err2);
     };
-    if (this._destroy) this._destroy(err || null, onDestroy);
-    else onDestroy(err);
+    this._destroy(err || null, onDestroy);
     return this;
   }
 }
@@ -554,9 +616,12 @@ Object.getOwnPropertyNames(Writable.prototype).forEach(method => {
 
 class Transform extends Duplex {
   constructor(opts) {
+    const userFinal = opts && opts.final;
+    if (opts) delete opts.final;
     super(opts);
     if (opts && opts.transform) this._transform = opts.transform;
     if (opts && typeof opts.flush === 'function') this._flush = opts.flush;
+    if (userFinal) this._userFinal = userFinal;
   }
 
   _transform(chunk, encoding, cb) { cb(null, chunk); }
@@ -568,17 +633,24 @@ class Transform extends Duplex {
     });
   }
 
-  end(chunk, encoding, cb) {
-    if (typeof chunk === 'function') { cb = chunk; chunk = null; }
-    if (chunk != null) this.write(chunk, encoding);
-    const done = (err) => { this._writableState.ended = true; this._writableState.finished = true; process.nextTick(() => { this.emit('finish'); if (cb) cb(err); }); };
-    if (this._flush) this._flush((err, data) => {
-      if (data != null) this.push(data);
-      this.push(null);
-      done(err);
-    });
-    else { this.push(null); done(); }
-    return this;
+  _final(cb) {
+    const doFlush = () => {
+      if (this._flush) {
+        this._flush((err, data) => {
+          if (data != null) this.push(data);
+          this.push(null);
+          cb(err);
+        });
+      } else {
+        this.push(null);
+        cb();
+      }
+    };
+    if (this._userFinal) {
+      this._userFinal(doFlush);
+    } else {
+      doFlush();
+    }
   }
 }
 

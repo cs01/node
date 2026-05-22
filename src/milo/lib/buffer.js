@@ -268,12 +268,24 @@ class Buffer extends Uint8Array {
     return src.length < tgt.length ? -1 : src.length > tgt.length ? 1 : 0;
   }
   copy(target, targetStart, sourceStart, sourceEnd) {
-    if (!target) throw new TypeError('argument should be a Buffer');
-    targetStart = targetStart || 0;
-    sourceStart = sourceStart || 0;
-    sourceEnd = sourceEnd !== undefined ? sourceEnd : this.length;
+    if (!target || typeof target !== 'object' || (!ArrayBuffer.isView(target) && !(target instanceof ArrayBuffer) && !(target instanceof SharedArrayBuffer))) {
+      const err = new TypeError('The "target" argument must be an instance of Buffer or Uint8Array. Received type ' + typeof target);
+      err.code = 'ERR_INVALID_ARG_TYPE'; throw err;
+    }
+    if (ArrayBuffer.isView(target) && !(target instanceof Uint8Array)) {
+      target = new Uint8Array(target.buffer, target.byteOffset, target.byteLength);
+    }
+    targetStart = targetStart !== undefined ? +targetStart : 0;
+    sourceStart = sourceStart !== undefined ? +sourceStart : 0;
+    sourceEnd = sourceEnd !== undefined ? +sourceEnd : this.length;
+    if (targetStart < 0) { const e = new RangeError('The value of "targetStart" is out of range. It must be >= 0. Received ' + targetStart); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    if (sourceStart < 0) { const e = new RangeError('The value of "sourceStart" is out of range. It must be >= 0. Received ' + sourceStart); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    if (sourceEnd < 0) { const e = new RangeError('The value of "sourceEnd" is out of range. It must be >= 0. Received ' + sourceEnd); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    if (sourceStart > this.length) { const e = new RangeError('The value of "sourceStart" is out of range. It must be <= ' + this.length + '. Received ' + sourceStart); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    targetStart >>>= 0; sourceStart >>>= 0; sourceEnd >>>= 0;
+    if (sourceEnd > this.length) sourceEnd = this.length;
     if (targetStart >= target.length || sourceStart >= sourceEnd) return 0;
-    if (_nativeCopy) return _nativeCopy(this, target, targetStart, sourceStart, sourceEnd);
+    if (_nativeCopy) return _nativeCopy(this, target, targetStart, sourceStart, Math.min(sourceEnd, sourceStart + target.length - targetStart));
     const len = Math.min(sourceEnd - sourceStart, target.length - targetStart);
     target.set(this.subarray(sourceStart, sourceStart + len), targetStart);
     return len;

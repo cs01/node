@@ -3,7 +3,8 @@
 
 const EventEmitter = require('events');
 const net = require('net');
-const { Readable } = require('stream');
+const stream = require('stream');
+const { Readable } = stream;
 
 class IncomingMessage extends Readable {
   constructor() {
@@ -40,6 +41,33 @@ class OutgoingMessage extends EventEmitter {
     this.finished = false;
     this.writableEnded = false;
     this.sendDate = true;
+    this._outputData = [];
+    this._outputSize = 0;
+  }
+  get writableObjectMode() { return false; }
+  get writableHighWaterMark() { return this.socket ? this.socket.writableHighWaterMark : 65536; }
+  get writableLength() { return this._outputSize; }
+  get writableFinished() { return this.finished; }
+  get writableCorked() { return 0; }
+  get writableNeedDrain() { return false; }
+  write(chunk, encoding, cb) {
+    if (typeof encoding === 'function') { cb = encoding; encoding = null; }
+    if (!this._headersSent && this._implicitHeader) this._implicitHeader();
+    const data = typeof chunk === 'string' ? Buffer.from(chunk, encoding || 'utf8') : chunk;
+    this._outputData.push(data);
+    this._outputSize += data.length;
+    if (cb) cb();
+    return true;
+  }
+  end(chunk, encoding, cb) {
+    if (typeof chunk === 'function') { cb = chunk; chunk = undefined; encoding = undefined; }
+    if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
+    if (chunk) this.write(chunk, encoding);
+    this.finished = true;
+    this.writableEnded = true;
+    this.emit('finish');
+    if (cb) cb();
+    return this;
   }
   setHeader(k, v) { this._headers[k.toLowerCase()] = v; }
   getHeader(k) { return this._headers[k.toLowerCase()]; }
@@ -251,6 +279,8 @@ class ClientRequest extends EventEmitter {
     this._body = [];
     this.method = (options.method || 'GET').toUpperCase();
     this.path = options.path || '/';
+    this.host = options.hostname || options.host || 'localhost';
+    this.protocol = options.protocol || 'http:';
     this.socket = null;
     this.finished = false;
     this.headersSent = false;
