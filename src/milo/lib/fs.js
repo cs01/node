@@ -298,6 +298,7 @@ function close(fd, cb) { _async(closeSync, [fd], (err) => cb(err)); }
 
 function read(fd, buffer, offset, length, position, cb) {
   if (typeof position === 'function') { cb = position; position = null; }
+  if (fd == null || typeof fd !== 'number') throw new TypeError('The "fd" argument must be of type number. Received ' + typeof fd);
   try {
     const n = readSync(fd, buffer, offset, length, position);
     process.nextTick(() => cb(null, n, buffer));
@@ -318,6 +319,7 @@ function symlink(target, path, type, cb) {
   _async(symlinkSync, [target, path], (err) => cb(err));
 }
 function write(fd, buffer, offset, length, position, cb) {
+  if (fd == null || typeof fd !== 'number') throw new TypeError('The "fd" argument must be of type number. Received ' + typeof fd);
   if (typeof offset === 'function') { cb = offset; offset = 0; length = buffer.length; position = null; }
   if (typeof length === 'function') { cb = length; length = buffer.length - offset; position = null; }
   if (typeof position === 'function') { cb = position; position = null; }

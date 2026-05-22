@@ -13,14 +13,14 @@ class Domain extends EventEmitter {
   add(emitter) {
     if (emitter.domain === this) return;
     if (emitter.domain) emitter.domain.remove(emitter);
-    emitter.domain = this;
+    Object.defineProperty(emitter, 'domain', { value: this, writable: true, enumerable: false, configurable: true });
     this.members.push(emitter);
   }
 
   remove(emitter) {
     const idx = this.members.indexOf(emitter);
     if (idx >= 0) this.members.splice(idx, 1);
-    emitter.domain = null;
+    Object.defineProperty(emitter, 'domain', { value: null, writable: true, enumerable: false, configurable: true });
   }
 
   run(fn) {
@@ -65,4 +65,5 @@ function create() { return new Domain(); }
 
 exports.Domain = Domain;
 exports.create = create;
+exports.createDomain = create;
 exports.active = null;

@@ -11,7 +11,14 @@ class Channel {
 
   get hasSubscribers() { return this._subscribers.length > 0; }
 
-  subscribe(fn) { this._subscribers.push(fn); }
+  subscribe(fn) {
+    if (typeof fn !== 'function') {
+      const err = new TypeError('The "onMessage" argument must be of type function. Received ' + typeof fn);
+      err.code = 'ERR_INVALID_ARG_TYPE';
+      throw err;
+    }
+    this._subscribers.push(fn);
+  }
   unsubscribe(fn) {
     const idx = this._subscribers.indexOf(fn);
     if (idx >= 0) { this._subscribers.splice(idx, 1); return true; }
@@ -47,6 +54,20 @@ class TracingChannel {
   subscribe(handlers) { for (const [k, fn] of Object.entries(handlers)) { if (this[k]) this[k].subscribe(fn); } }
   unsubscribe(handlers) { for (const [k, fn] of Object.entries(handlers)) { if (this[k]) this[k].unsubscribe(fn); } }
   traceSync(fn, ctx) { this.start.publish(ctx); try { return fn(ctx); } catch(e) { ctx.error = e; this.error.publish(ctx); throw e; } finally { this.end.publish(ctx); } }
+  tracePromise(fn, ctx) {
+    this.start.publish(ctx);
+    try {
+      const result = fn(ctx);
+      return Promise.resolve(result).then(
+        (v) => { this.asyncStart.publish(ctx); this.asyncEnd.publish(ctx); this.end.publish(ctx); return v; },
+        (e) => { ctx.error = e; this.error.publish(ctx); this.asyncStart.publish(ctx); this.asyncEnd.publish(ctx); this.end.publish(ctx); throw e; }
+      );
+    } catch (e) { ctx.error = e; this.error.publish(ctx); this.end.publish(ctx); throw e; }
+  }
+  traceCallback(fn, position, ctx, thisArg, ...args) {
+    this.start.publish(ctx);
+    try { return fn.apply(thisArg, args); } catch(e) { ctx.error = e; this.error.publish(ctx); throw e; } finally { this.end.publish(ctx); }
+  }
 }
 
 function tracingChannel(name) { return new TracingChannel(name); }
