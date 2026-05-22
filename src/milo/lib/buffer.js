@@ -428,7 +428,7 @@ function isUtf8(input) {
 }
 
 module.exports = {
-  Buffer, SlowBuffer, kMaxLength: 2 ** 31 - 1,
+  Buffer, SlowBuffer, kMaxLength: 2 ** 31 - 1, kStringMaxLength: 2 ** 28 - 16,
   isAscii, isUtf8,
   constants: { MAX_LENGTH: 2 ** 31 - 1, MAX_STRING_LENGTH: 2 ** 28 - 16 },
   atob: globalThis.atob, btoa: globalThis.btoa,

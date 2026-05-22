@@ -332,6 +332,16 @@ class Writable extends Stream {
 
   write(chunk, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = 'utf8'; }
+    if (chunk === null) {
+      const err = new TypeError('May not write null values to stream');
+      err.code = 'ERR_STREAM_NULL_VALUES';
+      throw err;
+    }
+    if (!this._writableState.objectMode && chunk !== undefined && typeof chunk !== 'string' && !Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) {
+      const err = new TypeError('The "chunk" argument must be of type string or an instance of Buffer or Uint8Array. Received type ' + typeof chunk);
+      err.code = 'ERR_INVALID_ARG_TYPE';
+      throw err;
+    }
     if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
     this._write(chunk, encoding || 'utf8', (err) => {
       if (err) this.emit('error', err);
