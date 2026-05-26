@@ -263,7 +263,7 @@ class AssertionError extends Error {
     this.actual = options.actual;
     this.expected = options.expected;
     this.operator = options.operator;
-    this.generatedMessage = !options.message;
+    this.generatedMessage = 'generatedMessage' in options ? options.generatedMessage : !options.message;
     this.code = 'ERR_ASSERTION';
   }
 }
@@ -342,8 +342,13 @@ function assert(value, message) {
 }
 
 function fail(actual, expected, message, operator) {
+  if (arguments.length === 0 || (arguments.length === 1 && typeof actual === 'undefined')) {
+    message = 'Failed';
+  } else if (arguments.length === 1) {
+    message = actual; actual = undefined;
+  }
   if (message instanceof Error) throw message;
-  throw new AssertionError({ actual, expected, message, operator });
+  throw new AssertionError({ actual, expected, message: message || 'Failed', operator: operator || 'fail', generatedMessage: message === 'Failed' });
 }
 
 function ok(value, message) {
