@@ -101,19 +101,11 @@ process._tickCallback = function() {
 process.nextTick = (fn, ...args) => { process._nextTickQueue.push([fn, args]); };
 
 if (!process.on) {
-  const _h = {};
-  process.on = (ev, fn) => { (_h[ev] ??= []).push(fn); return process; };
-  process.addListener = process.on;
-  process.once = (ev, fn) => { const w = (...a) => { process.removeListener(ev, w); fn(...a); }; return process.on(ev, w); };
-  process.removeListener = (ev, fn) => { const h = _h[ev]; if (h) { const i = h.indexOf(fn); if (i >= 0) h.splice(i, 1); } return process; };
-  process.emit = (ev, ...args) => { const hs = _h[ev]; if (!hs || hs.length === 0) return false; for (const fn of [...hs]) fn(...args); return true; };
-  process.listeners = (ev) => [...(_h[ev] || [])];
-  process.listenerCount = (ev) => (_h[ev] || []).length;
-  process.removeAllListeners = (ev) => { if (ev) delete _h[ev]; else for (const k of Object.keys(_h)) delete _h[k]; return process; };
-  process.prependListener = (ev, fn) => { (_h[ev] ??= []).unshift(fn); return process; };
-  process.prependOnceListener = (ev, fn) => { const w = (...a) => { process.removeListener(ev, w); fn(...a); }; return process.prependListener(ev, w); };
-  process.off = process.removeListener;
-  process.eventNames = () => Object.keys(_h).filter(k => _h[k] && _h[k].length > 0);
+  const EventEmitter = require('events');
+  function ProcessProto() {}
+  Object.setPrototypeOf(ProcessProto.prototype, EventEmitter.prototype);
+  Object.setPrototypeOf(process, ProcessProto.prototype);
+  EventEmitter.call(process);
 }
 
 const _startTime = Date.now();
