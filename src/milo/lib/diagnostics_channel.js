@@ -53,7 +53,7 @@ class TracingChannel {
   }
   subscribe(handlers) { for (const [k, fn] of Object.entries(handlers)) { if (this[k]) this[k].subscribe(fn); } }
   unsubscribe(handlers) { for (const [k, fn] of Object.entries(handlers)) { if (this[k]) this[k].unsubscribe(fn); } }
-  traceSync(fn, ctx) { this.start.publish(ctx); try { return fn(ctx); } catch(e) { ctx.error = e; this.error.publish(ctx); throw e; } finally { this.end.publish(ctx); } }
+  traceSync(fn, ctx, thisArg, ...args) { this.start.publish(ctx); try { const result = fn.apply(thisArg, args); ctx.result = result; return result; } catch(e) { ctx.error = e; this.error.publish(ctx); throw e; } finally { this.end.publish(ctx); } }
   tracePromise(fn, ctx) {
     this.start.publish(ctx);
     try {

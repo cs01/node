@@ -31,7 +31,7 @@ EventEmitter.prototype.emit = function(type) {
 };
 
 EventEmitter.prototype.on = function(type, fn) {
-  if (typeof fn !== 'function') throw new TypeError('listener must be a function');
+  if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   if (!this._events) this._events = Object.create(null);
   (this._events[type] || (this._events[type] = [])).push(fn);
   if (type !== 'newListener') this.emit('newListener', type, fn);
@@ -41,7 +41,7 @@ EventEmitter.prototype.on = function(type, fn) {
 EventEmitter.prototype.addListener = EventEmitter.prototype.on;
 
 EventEmitter.prototype.prependListener = function(type, fn) {
-  if (typeof fn !== 'function') throw new TypeError('listener must be a function');
+  if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   if (!this._events) this._events = Object.create(null);
   (this._events[type] || (this._events[type] = [])).unshift(fn);
   return this;

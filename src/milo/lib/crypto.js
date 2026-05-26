@@ -91,7 +91,7 @@ function createHmac(algorithm, key) {
 }
 
 function timingSafeEqual(a, b) {
-  if (a.length !== b.length) throw new RangeError('Input buffers must have the same byte length');
+  if (a.length !== b.length) { const e = new RangeError('Input buffers must have the same byte length'); e.code = 'ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH'; throw e; }
   let result = 0;
   for (let i = 0; i < a.length; i++) result |= a[i] ^ b[i];
   return result === 0;
@@ -377,6 +377,16 @@ function generateKeyPairSync(type, options) {
   throw new Error(`Unsupported key type: ${type}`);
 }
 
+function generateKeyPair(type, options, cb) {
+  if (typeof options === 'function') { cb = options; options = {}; }
+  try {
+    const result = generateKeyPairSync(type, options);
+    process.nextTick(() => cb(null, result.publicKey, result.privateKey));
+  } catch (err) {
+    process.nextTick(() => cb(err));
+  }
+}
+
 function createPublicKey(key) {
   if (key instanceof KeyObject) return key;
   const pem = typeof key === 'object' ? key.key : key;
@@ -435,10 +445,12 @@ module.exports = {
   randomBytes, randomFillSync, randomFill, randomUUID, randomInt, createHash, createHmac, timingSafeEqual,
   createCipheriv, createDecipheriv,
   pbkdf2, pbkdf2Sync, scrypt, scryptSync,
-  createSign, createVerify, generateKeyPairSync, generateKeySync,
+  createSign, createVerify, generateKeyPair, generateKeyPairSync, generateKeySync,
   KeyObject, createSecretKey, createPublicKey, createPrivateKey,
   webcrypto, subtle,
   constants: {},
+  getFips: () => 0,
+  setFips: () => {},
   getHashes: () => ['md5', 'sha1', 'sha256', 'sha384', 'sha512'],
   getCiphers: () => [...Object.keys(CIPHER_MAP), ...Object.keys(GCM_MAP)],
   getCurves: () => Object.keys(EC_CURVE_MAP),

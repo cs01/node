@@ -23,9 +23,9 @@ class Domain extends EventEmitter {
     Object.defineProperty(emitter, 'domain', { value: null, writable: true, enumerable: false, configurable: true });
   }
 
-  run(fn) {
+  run(fn, ...args) {
     this.enter();
-    try { const r = fn(); return r; }
+    try { const r = fn.apply(this, args); return r; }
     catch (e) { this.emit('error', e); }
     finally { this.exit(); }
   }

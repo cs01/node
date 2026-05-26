@@ -53,7 +53,10 @@
       },
     },
     uv: {
-      errname(code) { return 'UV_UNKNOWN'; },
+      errname(code) {
+        const names = { [-2]: 'ENOENT', [-1]: 'EPERM', [-13]: 'EACCES', [-17]: 'EEXIST', [-22]: 'EINVAL', [-4058]: 'ENOENT', [-4048]: 'EPERM', [-48]: 'EADDRINUSE', [-61]: 'ECONNREFUSED', [-54]: 'ECONNRESET', [-60]: 'ETIMEDOUT', [-9]: 'EBADF', [-40]: 'EMSGSIZE', [-56]: 'EISCONN', [-57]: 'ENOTCONN', [-53]: 'ECONNABORTED', [-49]: 'EADDRNOTAVAIL', [-4]: 'EINTR', [-35]: 'EAGAIN', [-32]: 'EPIPE' };
+        return names[code] || `Unknown system error ${code}`;
+      },
       getErrorMap() {
         return new Map([
           [-2, ['ENOENT', 'no such file or directory']],
@@ -485,6 +488,45 @@
     globalThis.File = class File extends Blob { #name; #lastModified; constructor(parts, name, opts = {}) { super(parts, opts); this.#name = name; this.#lastModified = opts.lastModified || Date.now(); } get name() { return this.#name; } get lastModified() { return this.#lastModified; } };
   }
 
+  // --- node error helpers ---
+  function _makeNodeError(Base, code, msg) {
+    const e = new Base(msg);
+    e.code = code;
+    return e;
+  }
+  globalThis._ERR_INVALID_ARG_TYPE = function(name, expected, actual) {
+    let actualStr;
+    if (actual === null) actualStr = 'null';
+    else if (actual === undefined) actualStr = 'undefined';
+    else if (typeof actual === 'function') actualStr = 'function ' + (actual.name || '');
+    else if (typeof actual === 'object') actualStr = 'an instance of ' + (actual.constructor?.name || 'Object');
+    else actualStr = 'type ' + typeof actual + ' (' + actual + ')';
+    return _makeNodeError(TypeError, 'ERR_INVALID_ARG_TYPE', `The "${name}" argument must be of type ${expected}. Received ${actualStr}`);
+  };
+  globalThis._ERR_INVALID_ARG_VALUE = function(name, value, reason) {
+    const inspected = typeof value === 'string' ? `'${value}'` : String(value);
+    return _makeNodeError(TypeError, 'ERR_INVALID_ARG_VALUE', `The argument '${name}' ${reason || 'is invalid'}. Received ${inspected}`);
+  };
+  globalThis._ERR_OUT_OF_RANGE = function(name, range, input) {
+    return _makeNodeError(RangeError, 'ERR_OUT_OF_RANGE', `The value of "${name}" is out of range. It must be ${range}. Received ${input}`);
+  };
+  globalThis._ERR_BUFFER_OUT_OF_BOUNDS = function(name) {
+    return _makeNodeError(RangeError, 'ERR_BUFFER_OUT_OF_BOUNDS', name ? `"${name}" is outside the bounds of the buffer` : 'Attempt to access memory outside buffer bounds');
+  };
+  globalThis._ERR_UNKNOWN_ENCODING = function(encoding) {
+    return _makeNodeError(TypeError, 'ERR_UNKNOWN_ENCODING', `Unknown encoding: ${encoding}`);
+  };
+  globalThis._ERR_UNESCAPED_CHARACTERS = function(name) {
+    return _makeNodeError(TypeError, 'ERR_UNESCAPED_CHARACTERS', `Request path contains unescaped characters`);
+  };
+  globalThis._ERR_METHOD_NOT_IMPLEMENTED = function(method) {
+    return _makeNodeError(Error, 'ERR_METHOD_NOT_IMPLEMENTED', `The ${method} method is not implemented`);
+  };
+  globalThis._ERR_MISSING_ARGS = function(...args) {
+    const msg = args.length === 1 ? `The "${args[0]}" argument must be specified` : `The ${args.map(a => `"${a}"`).join(', ')} arguments must be specified`;
+    return _makeNodeError(TypeError, 'ERR_MISSING_ARGS', msg);
+  };
+
   // --- require() ---
   const _fsBinding = _nativeBinding('fs');
   const _fs = {
@@ -907,6 +949,47 @@
             kValidateObjectNone: 0, kValidateObjectAllowNullable: 1, kValidateObjectAllowArray: 2,
             kValidateObjectAllowFunction: 4, kValidateObjectAllowObjects: 6, kValidateObjectAllowObjectsAndNull: 7,
           };
+        } else if (id === 'internal/fs/utils') {
+          function validateRmOptionsSync(path, options) {
+            // defaults
+            const defaults = { retryDelay: 100, maxRetries: 0, recursive: false, force: false };
+            if (options === undefined) return defaults;
+            if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+              const e = new TypeError('The "options" argument must be of type object. Received ' + (options === null ? 'null' : typeof options));
+              e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+            }
+            const result = { ...defaults };
+            if ('recursive' in options) {
+              if (typeof options.recursive !== 'boolean') {
+                const e = new TypeError('The "options.recursive" property must be of type boolean. Received ' + typeof options.recursive);
+                e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+              }
+              result.recursive = options.recursive;
+            }
+            if ('force' in options) {
+              if (typeof options.force !== 'boolean') {
+                const e = new TypeError('The "options.force" property must be of type boolean. Received ' + typeof options.force);
+                e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+              }
+              result.force = options.force;
+            }
+            if ('retryDelay' in options) {
+              if (typeof options.retryDelay !== 'number' || options.retryDelay < 0) {
+                const e = new RangeError('The value of "options.retryDelay" is out of range. It must be >= 0. Received ' + options.retryDelay);
+                e.code = 'ERR_OUT_OF_RANGE'; throw e;
+              }
+              result.retryDelay = options.retryDelay;
+            }
+            if ('maxRetries' in options) {
+              if (typeof options.maxRetries !== 'number' || options.maxRetries < 0) {
+                const e = new RangeError('The value of "options.maxRetries" is out of range. It must be >= 0. Received ' + options.maxRetries);
+                e.code = 'ERR_OUT_OF_RANGE'; throw e;
+              }
+              result.maxRetries = options.maxRetries;
+            }
+            return result;
+          }
+          stub = { validateRmOptionsSync };
         } else if (id === 'internal/util') {
           stub = {
             emitExperimentalWarning: (feature) => { process.emitWarning(`${feature} is an experimental feature`, 'ExperimentalWarning'); },

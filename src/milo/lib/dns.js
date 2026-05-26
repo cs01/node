@@ -6,6 +6,7 @@ const b = internalBinding('dns');
 function lookup(hostname, options, cb) {
   if (typeof options === 'function') { cb = options; options = {}; }
   if (typeof options === 'number') options = { family: options };
+  if (typeof hostname !== 'string' && hostname != null) throw _ERR_INVALID_ARG_TYPE('hostname', 'string', hostname);
   const opts = options || {};
   const family = opts.family || 0;
 

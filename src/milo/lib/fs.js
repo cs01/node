@@ -3,15 +3,24 @@
 
 const b = internalBinding('fs');
 
-function _validatePath(path, name) {
-  if (typeof path !== 'string' && !Buffer.isBuffer(path)) {
-    if (path instanceof URL) return;
-    const err = new TypeError(`The "${name || 'path'}" argument must be of type string or an instance of Buffer or URL. Received ${typeof path === 'object' ? (path === null ? 'null' : 'an instance of ' + (path.constructor && path.constructor.name || 'Object')) : 'type ' + typeof path} (${String(path)})`);
+function _validatePath(p, name) {
+  if (typeof p !== 'string' && !Buffer.isBuffer(p)) {
+    if (p instanceof URL) {
+      // URL with null bytes in pathname or encoded as %00
+      const pathname = p.pathname;
+      if (pathname.indexOf('\0') !== -1 || pathname.indexOf('%00') !== -1) {
+        const err = new TypeError(`The "${name || 'path'}" argument must be of type string without null bytes. Received ${JSON.stringify(pathname)}`);
+        err.code = 'ERR_INVALID_ARG_VALUE';
+        throw err;
+      }
+      return;
+    }
+    const err = new TypeError(`The "${name || 'path'}" argument must be of type string or an instance of Buffer or URL. Received ${typeof p === 'object' ? (p === null ? 'null' : 'an instance of ' + (p.constructor && p.constructor.name || 'Object')) : 'type ' + typeof p} (${String(p)})`);
     err.code = 'ERR_INVALID_ARG_TYPE';
     throw err;
   }
-  if (typeof path === 'string' && path.indexOf('\0') !== -1) {
-    const err = new TypeError('The "path" argument must be of type string without null bytes. Received ' + JSON.stringify(path));
+  if (typeof p === 'string' && p.indexOf('\0') !== -1) {
+    const err = new TypeError('The "path" argument must be of type string without null bytes. Received ' + JSON.stringify(p));
     err.code = 'ERR_INVALID_ARG_VALUE';
     throw err;
   }
@@ -25,9 +34,22 @@ function _validateCallback(cb, name) {
   }
 }
 
+// convert URL/Buffer/string to string path
+function _toPath(p) {
+  if (p instanceof URL) {
+    if (p.protocol !== 'file:') {
+      const err = new TypeError('The URL must be of scheme file');
+      err.code = 'ERR_INVALID_URL_SCHEME';
+      throw err;
+    }
+    return decodeURIComponent(p.pathname);
+  }
+  return String(p);
+}
+
 function readFileSync(path, opts) {
   _validatePath(path, 'path');
-  const r = b.readFile(String(path));
+  const r = b.readFile(_toPath(path));
   if (r === -1) { const e = new Error(`ENOENT: no such file or directory, open '${path}'`); e.code = 'ENOENT'; e.syscall = 'open'; e.path = String(path); throw e; }
   const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
   if (encoding === 'utf8' || encoding === 'utf-8') return r;
@@ -35,15 +57,17 @@ function readFileSync(path, opts) {
 }
 
 function _fsError(code, syscall, path, msg) {
-  const e = new Error(`${code}: ${msg}, ${syscall} '${path}'`);
-  e.code = code; e.syscall = syscall; e.path = String(path);
+  const pathStr = path != null ? ` '${path}'` : '';
+  const e = new Error(`${code}: ${msg}, ${syscall}${pathStr}`);
+  e.code = code; e.syscall = syscall; if (path != null) e.path = String(path);
   return e;
 }
 
 function writeFileSync(path, data) {
   _validatePath(path, 'path');
-  const r = b.writeFile(String(path), typeof data === 'string' ? data : data.toString());
-  if (r === -1) throw _fsError('EIO', 'write', path, 'write failed');
+  const p = _toPath(path);
+  const r = b.writeFile(p, typeof data === 'string' ? data : data.toString());
+  if (r === -1) throw _fsError('EIO', 'write', p, 'write failed');
 }
 
 function appendFileSync(path, data) {
@@ -68,18 +92,24 @@ function _wrapStats(s) {
 
 function statSync(path) {
   _validatePath(path, 'path');
-  const s = b.stat(String(path));
-  if (s === -1) throw _fsError('ENOENT', 'stat', path, 'no such file or directory');
+  const p = _toPath(path);
+  const s = b.stat(p);
+  if (s === -1) throw _fsError('ENOENT', 'stat', p, 'no such file or directory');
   return _wrapStats(s);
 }
 
-function existsSync(path) { return !!b.exists(String(path)); }
+function existsSync(path) {
+  // null bytes in path means file can't exist
+  if (typeof path === 'string' && path.indexOf('\0') !== -1) return false;
+  try { return !!b.exists(_toPath(path)); } catch { return false; }
+}
 
 function mkdirSync(path, opts) {
   _validatePath(path, 'path');
+  const sp = _toPath(path);
   const mode = (opts && opts.mode) || 0o777;
   if (opts && opts.recursive) {
-    const parts = String(path).split('/');
+    const parts = sp.split('/');
     let cur = parts[0] === '' ? '/' : '';
     for (const p of parts) {
       if (!p) { if (!cur) cur = '/'; continue; }
@@ -88,32 +118,38 @@ function mkdirSync(path, opts) {
     }
     return cur;
   }
-  const r = b.mkdir(String(path), mode);
-  if (r !== 0) throw _fsError('EEXIST', 'mkdir', path, 'file already exists');
+  const r = b.mkdir(sp, mode);
+  if (r !== 0) throw _fsError('EEXIST', 'mkdir', sp, 'file already exists');
 }
 
-function unlinkSync(path) { _validatePath(path, 'path'); b.unlink(String(path)); }
-function rmdirSync(path) { _validatePath(path, 'path'); b.rmdir(String(path)); }
-function renameSync(old, n) { _validatePath(old, 'oldPath'); _validatePath(n, 'newPath'); b.rename(String(old), String(n)); }
+function unlinkSync(path) {
+  _validatePath(path, 'path');
+  const sp = _toPath(path);
+  const r = b.unlink(sp);
+  if (r !== 0 && r !== undefined) throw _fsError('EACCES', 'unlink', sp, 'permission denied');
+}
+function rmdirSync(path) { _validatePath(path, 'path'); b.rmdir(_toPath(path)); }
+function renameSync(old, n) { _validatePath(old, 'oldPath'); _validatePath(n, 'newPath'); b.rename(_toPath(old), _toPath(n)); }
 function readdirSync(path, opts) {
   _validatePath(path, 'path');
-  const entries = b.readdir(String(path)) || [];
+  const sp = _toPath(path);
+  const entries = b.readdir(sp) || [];
   if (opts && opts.withFileTypes) {
-    const dir = String(path);
-    return entries.map(name => new Dirent(name, dir));
+    return entries.map(name => new Dirent(name, sp));
   }
   return entries;
 }
-function realpathSync(path) { _validatePath(path, 'path'); return b.realpath(String(path)); }
-function chmodSync(path, mode) { _validatePath(path, 'path'); b.chmod(String(path), mode); }
-function symlinkSync(target, path) { _validatePath(target, 'target'); _validatePath(path, 'path'); b.symlink(String(target), String(path)); }
+function realpathSync(path) { _validatePath(path, 'path'); return b.realpath(_toPath(path)); }
+function chmodSync(path, mode) { _validatePath(path, 'path'); b.chmod(_toPath(path), mode); }
+function symlinkSync(target, path) { _validatePath(target, 'target'); _validatePath(path, 'path'); b.symlink(_toPath(target), _toPath(path)); }
 function lstatSync(path) {
   _validatePath(path, 'path');
-  const result = b.lstat(String(path));
-  if (typeof result === 'number') throw _fsError('ENOENT', 'lstat', path, 'no such file or directory');
+  const sp = _toPath(path);
+  const result = b.lstat(sp);
+  if (typeof result === 'number') throw _fsError('ENOENT', 'lstat', sp, 'no such file or directory');
   return _wrapStats(result);
 }
-function readlinkSync(path) { _validatePath(path, 'path'); return b.readlink ? b.readlink(String(path)) : String(path); }
+function readlinkSync(path) { _validatePath(path, 'path'); const sp = _toPath(path); return b.readlink ? b.readlink(sp) : sp; }
 // POSIX open flags
 const O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0x200, O_TRUNC = 0x400, O_APPEND = 0x8, O_EXCL = 0x800;
 const FLAG_MAP = {
@@ -125,9 +161,10 @@ const FLAG_MAP = {
 
 function openSync(path, flags, mode) {
   _validatePath(path, 'path');
+  const sp = _toPath(path);
   const f = typeof flags === 'string' ? (FLAG_MAP[flags] ?? 0) : (flags || 0);
-  const fd = b.open(String(path), f, mode || 0o666);
-  if (fd < 0) throw _fsError('ENOENT', 'open', path, 'no such file or directory');
+  const fd = b.open(sp, f, mode || 0o666);
+  if (fd < 0) throw _fsError('ENOENT', 'open', sp, 'no such file or directory');
   return fd;
 }
 
@@ -135,7 +172,7 @@ function closeSync(fd) { b.close(fd); }
 
 function fstatSync(fd) {
   const result = b.fstat(fd);
-  if (typeof result === 'number') throw _fsError('EBADF', 'fstat', fd, 'bad file descriptor');
+  if (typeof result === 'number') throw _fsError('EBADF', 'fstat', null, 'bad file descriptor');
   return _wrapStats(result);
 }
 
@@ -163,25 +200,56 @@ function writeSync(fd, data, offset, length, position) {
 }
 
 function rmSync(path, opts) {
+  _validatePath(path, 'path');
+  const p = _toPath(path);
+  let s;
   try {
-    const s = lstatSync(String(path));
-    if (s.isDirectory()) {
-      if (opts && opts.recursive) {
-        const entries = readdirSync(String(path));
-        for (const e of entries) rmSync(String(path) + '/' + e, opts);
-        rmdirSync(String(path));
-      } else {
-        rmdirSync(String(path));
-      }
-    } else {
-      unlinkSync(String(path));
-    }
+    s = lstatSync(p);
   } catch (e) {
-    if (!(opts && opts.force)) throw e;
+    // lstat failed — could be ENOENT or EACCES (binding doesn't distinguish errno)
+    if (opts && opts.force) {
+      // only suppress genuine ENOENT; check parent readdir to distinguish
+      const lastSlash = p.lastIndexOf('/');
+      if (lastSlash > 0) {
+        const parentDir = p.substring(0, lastSlash);
+        const childName = p.substring(lastSlash + 1);
+        try {
+          const entries = readdirSync(parentDir);
+          if (entries.includes(childName)) {
+            // file is listed but lstat failed — permission issue, not ENOENT
+            e.code = 'EACCES'; e.syscall = 'lstat';
+            throw e;
+          }
+        } catch (pe) {
+          if (pe === e) throw e;
+          // can't read parent — genuinely gone
+        }
+      }
+      return;
+    }
+    e.syscall = 'lstat';
+    throw e;
+  }
+  if (s.isDirectory()) {
+    if (opts && opts.recursive) {
+      const entries = readdirSync(p);
+      for (const entry of entries) rmSync(p + '/' + entry, opts);
+      rmdirSync(p);
+    } else {
+      // removing a directory without recursive is an error
+      const e = new Error(`Path is a directory: rm returned EISDIR (is a directory) '${p}'`);
+      e.code = 'ERR_FS_EISDIR';
+      e.syscall = 'rm';
+      e.path = p;
+      throw e;
+    }
+  } else {
+    unlinkSync(p);
   }
 }
 
 function mkdtempSync(prefix) {
+  _validatePath(prefix, 'prefix');
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let suffix = '';
   for (let i = 0; i < 6; i++) suffix += chars[Math.floor(Math.random() * chars.length)];
@@ -192,19 +260,24 @@ function mkdtempSync(prefix) {
 
 function mkdtemp(prefix, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(prefix, 'prefix');
   try { const r = mkdtempSync(prefix); if (cb) process.nextTick(cb, null, r); }
   catch (e) { if (cb) process.nextTick(cb, e); else throw e; }
 }
 
 function accessSync(path, mode) {
-  if (!existsSync(String(path))) {
-    const err = new Error('ENOENT: no such file or directory: ' + path);
+  _validatePath(path, 'path');
+  const sp = _toPath(path);
+  if (!existsSync(sp)) {
+    const err = new Error('ENOENT: no such file or directory: ' + sp);
     err.code = 'ENOENT';
     throw err;
   }
 }
 
 function copyFileSync(src, dest) {
+  _validatePath(src, 'src');
+  _validatePath(dest, 'dest');
   const data = readFileSync(src);
   writeFileSync(dest, data);
 }
@@ -265,57 +338,69 @@ function _async(syncFn, args, cb) {
 
 function readFile(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(path, 'path');
   _async(readFileSync, [path, opts], cb);
 }
 
 function writeFile(path, data, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(path, 'path');
   _validateCb(cb);
   _async(writeFileSync, [path, data], (err) => cb(err));
 }
 
 function stat(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(path, 'path');
   _async(statSync, [path], cb);
 }
 
 function lstat(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(path, 'path');
   _async(lstatSync, [path], cb);
 }
 
 function mkdir(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(path, 'path');
   _async(mkdirSync, [path, opts], cb);
 }
 
 function readdir(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(path, 'path');
   _async(readdirSync, [path, opts], cb);
 }
 
-function unlink(path, cb) { _validateCb(cb); _async(unlinkSync, [path], (err) => cb(err)); }
-function rmdir(path, cb) { _validateCb(cb); _async(rmdirSync, [path], (err) => cb(err)); }
-function rename(oldPath, newPath, cb) { _validateCb(cb); _async(renameSync, [oldPath, newPath], (err) => cb(err)); }
-function chmod(path, mode, cb) { _validateCb(cb); _async(chmodSync, [path, mode], (err) => cb(err)); }
+function unlink(path, cb) { _validatePath(path, 'path'); _validateCb(cb); _async(unlinkSync, [path], (err) => cb(err)); }
+function rmdir(path, cb) { _validatePath(path, 'path'); _validateCb(cb); _async(rmdirSync, [path], (err) => cb(err)); }
+function rename(oldPath, newPath, cb) { _validatePath(oldPath, 'oldPath'); _validatePath(newPath, 'newPath'); _validateCb(cb); _async(renameSync, [oldPath, newPath], (err) => cb(err)); }
+function chmod(path, mode, cb) { _validatePath(path, 'path'); _validateCb(cb); _async(chmodSync, [path, mode], (err) => cb(err)); }
 function access(path, mode, cb) {
   if (typeof mode === 'function') { cb = mode; mode = undefined; }
+  _validatePath(path, 'path');
   _validateCb(cb); _async(accessSync, [path, mode], (err) => cb(err));
 }
 function rm(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(path, 'path');
   _validateCb(cb); _async(rmSync, [path, opts], (err) => cb(err));
 }
 function copyFile(src, dest, flags, cb) {
   if (typeof flags === 'function') { cb = flags; flags = 0; }
+  _validatePath(src, 'src');
+  _validatePath(dest, 'dest');
   _validateCb(cb); _async(copyFileSync, [src, dest], (err) => cb(err));
 }
 function realpath(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(path, 'path');
   _async(realpathSync, [path], cb);
 }
 function appendFile(path, data, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(path, 'path');
   _validateCb(cb); _async(appendFileSync, [path, data], (err) => cb(err));
 }
 function exists(path, cb) {
@@ -327,10 +412,13 @@ function exists(path, cb) {
 }
 
 function linkSync(existingPath, newPath) {
-  const r = b.link(String(existingPath), String(newPath));
-  if (r !== 0) throw _fsError('ENOENT', 'link', existingPath, 'no such file or directory');
+  _validatePath(existingPath, 'existingPath');
+  _validatePath(newPath, 'newPath');
+  const ep = _toPath(existingPath), np = _toPath(newPath);
+  const r = b.link(ep, np);
+  if (r !== 0) throw _fsError('ENOENT', 'link', ep, 'no such file or directory');
 }
-function link(existingPath, newPath, cb) { _async(linkSync, [existingPath, newPath], (err) => cb(err)); }
+function link(existingPath, newPath, cb) { _validatePath(existingPath, 'existingPath'); _validatePath(newPath, 'newPath'); _async(linkSync, [existingPath, newPath], (err) => cb(err)); }
 
 function fsyncSync(fd) { b.fsync(fd); }
 function fdatasyncSync(fd) { b.fdatasync(fd); }
@@ -348,6 +436,7 @@ function fchmod(fd, mode, cb) { _async(fchmodSync, [fd, mode], (err) => cb(err))
 function open(path, flags, mode, cb) {
   if (typeof flags === 'function') { cb = flags; flags = 'r'; mode = 0o666; }
   if (typeof mode === 'function') { cb = mode; mode = 0o666; }
+  _validatePath(path, 'path');
   _async(openSync, [path, flags, mode], cb);
 }
 
@@ -369,10 +458,13 @@ function fstat(fd, opts, cb) {
 
 function readlink(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(path, 'path');
   _async(readlinkSync, [path], cb);
 }
 function symlink(target, path, type, cb) {
   if (typeof type === 'function') { cb = type; type = undefined; }
+  _validatePath(target, 'target');
+  _validatePath(path, 'path');
   _async(symlinkSync, [target, path], (err) => cb(err));
 }
 function write(fd, buffer, offset, length, position, cb) {
@@ -466,6 +558,7 @@ class FSWatcher extends EventEmitter {
 
 function watch(filename, options, listener) {
   if (typeof options === 'function') { listener = options; options = {}; }
+  _validatePath(filename, 'filename');
   const watcher = new FSWatcher(String(filename), options);
   if (listener) watcher.on('change', listener);
   return watcher;
@@ -475,6 +568,7 @@ const _watchFileTimers = new Map();
 
 function watchFile(filename, options, listener) {
   if (typeof options === 'function') { listener = options; options = {}; }
+  _validatePath(filename, 'filename');
   const interval = (options && options.interval) || 5007;
   const fname = String(filename);
   let prev = null;
@@ -493,6 +587,7 @@ function watchFile(filename, options, listener) {
 }
 
 function unwatchFile(filename, listener) {
+  _validatePath(filename, 'filename');
   const fname = String(filename);
   const timer = _watchFileTimers.get(fname);
   if (timer) { clearInterval(timer); _watchFileTimers.delete(fname); }
@@ -570,19 +665,21 @@ const promises = {
 
 function fchown(fd, uid, gid, cb) { const _f = internalBinding('fs'); _f.fchown(fd, uid, gid); if (cb) process.nextTick(cb, null); }
 function fchownSync(fd, uid, gid) { internalBinding('fs').fchown(fd, uid, gid); }
-function chown(p, uid, gid, cb) { const _f = internalBinding('fs'); _f.chown(p, uid, gid); if (cb) process.nextTick(cb, null); }
-function lchown(p, uid, gid, cb) { const _f = internalBinding('fs'); _f.lchown ? _f.lchown(p, uid, gid) : _f.chown(p, uid, gid); if (cb) process.nextTick(cb, null); }
-function utimes(p, atime, mtime, cb) { const _f = internalBinding('fs'); _f.utimes(p, Math.floor(atime), Math.floor(mtime)); if (cb) process.nextTick(cb, null); }
-function lutimes(p, atime, mtime, cb) { if (cb) process.nextTick(cb, null); }
-function chownSync(p, uid, gid) { const _f = internalBinding('fs'); _f.chown(p, uid, gid); }
-function lchownSync(p, uid, gid) { chownSync(p, uid, gid); }
-function utimesSync(p, atime, mtime) { const _f = internalBinding('fs'); _f.utimes(p, Math.floor(atime), Math.floor(mtime)); }
+function chown(p, uid, gid, cb) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); _f.chown(sp, uid, gid); if (cb) process.nextTick(cb, null); }
+function lchown(p, uid, gid, cb) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); _f.lchown ? _f.lchown(sp, uid, gid) : _f.chown(sp, uid, gid); if (cb) process.nextTick(cb, null); }
+function utimes(p, atime, mtime, cb) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); _f.utimes(sp, Math.floor(atime), Math.floor(mtime)); if (cb) process.nextTick(cb, null); }
+function lutimes(p, atime, mtime, cb) { _validatePath(p, 'path'); if (cb) process.nextTick(cb, null); }
+function chownSync(p, uid, gid) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); _f.chown(sp, uid, gid); }
+function lchownSync(p, uid, gid) { _validatePath(p, 'path'); chownSync(p, uid, gid); }
+function utimesSync(p, atime, mtime) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); _f.utimes(sp, Math.floor(atime), Math.floor(mtime)); }
 function truncateSync(p, len) {
-  const fd = openSync(p, 'r+');
+  _validatePath(p, 'path');
+  const fd = openSync(_toPath(p), 'r+');
   try { ftruncateSync(fd, len || 0); } finally { closeSync(fd); }
 }
 function truncate(p, len, cb) {
   if (typeof len === 'function') { cb = len; len = 0; }
+  _validatePath(p, 'path');
   try { truncateSync(p, len); if (cb) process.nextTick(cb, null); }
   catch (e) { if (cb) process.nextTick(cb, e); else throw e; }
 }

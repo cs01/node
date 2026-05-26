@@ -465,6 +465,8 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
     parser.addBool("expose-internals", "", "Expose internal modules")
     parser.addBool("no-warnings", "", "Suppress process warnings")
     parser.addBool("expose-gc", "", "Expose global gc() function")
+    parser.addString("unhandled-rejections", "", "Unhandled rejection mode (throw/warn/none/strict)", "")
+    parser.addString("stack-trace-limit", "", "Error.stackTraceLimit override", "")
     parser.addOptionalPositional("file", "JavaScript file to execute")
     parser.enableTrailingArgs()
     parser.enableIgnoreUnknown()
@@ -643,6 +645,36 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
 
         if exposeGc {
             ctx.setMethod(global, "gc" as *u8, nativeGc as *u8)
+        }
+
+        if parsed.has("unhandled-rejections") {
+            let mode = parsed.getString("unhandled-rejections")
+            ctx.objectSet(proc, "_unhandledRejections" as *u8, iso.string(mode.cstr()))
+        }
+
+        if parsed.has("stack-trace-limit") {
+            let limitStr = parsed.getString("stack-trace-limit")
+            let limit = atoi(limitStr.cstr())
+            if limit >= 0 {
+                // Set Error.stackTraceLimit via JS
+                var stlCode: [u8; 64] = [0; 64]
+                let stlPrefix = "Error.stackTraceLimit="
+                var si: i64 = 0
+                var sj: i64 = 0
+                while sj < strlen(stlPrefix) {
+                    stlCode[si] = stlPrefix[sj]
+                    si = si + 1
+                    sj = sj + 1
+                }
+                sj = 0
+                let limitCstr = limitStr.cstr()
+                while sj < strlen(limitCstr) {
+                    stlCode[si] = limitCstr[sj]
+                    si = si + 1
+                    sj = sj + 1
+                }
+                ctx.compileRun(stlCode as *u8, si as i32, "[stack-trace-limit]" as *u8)
+            }
         }
 
         // Set process._eval and process.execArgv for fork bomb protection

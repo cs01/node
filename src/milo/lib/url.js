@@ -2,6 +2,7 @@
 'use strict';
 
 function parse(urlStr, parseQueryString, slashesDenoteHost) {
+  if (typeof urlStr !== 'string') throw _ERR_INVALID_ARG_TYPE('url', 'string', urlStr);
   const result = {
     protocol: null, slashes: null, auth: null, host: null, port: null,
     hostname: null, hash: null, search: null, query: null, pathname: null,

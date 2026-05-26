@@ -87,6 +87,10 @@ class Readable extends Stream {
       pipes: [],
       errorEmitted: false, errored: null,
     };
+    if (opts && opts.encoding) this.setEncoding(opts.encoding);
+    if (opts && opts.defaultEncoding !== undefined) {
+      if (!Buffer.isEncoding(opts.defaultEncoding)) throw _ERR_UNKNOWN_ENCODING(opts.defaultEncoding);
+    }
     if (opts && opts.read) this._read = opts.read;
     if (opts && opts.destroy) this._destroy = opts.destroy;
     if (opts && opts.signal) {
@@ -388,6 +392,30 @@ Readable.from = function(iterable, opts) {
   return r;
 };
 
+Readable.fromWeb = function(readableStream, opts) {
+  const r = new Readable({ ...opts });
+  const reader = readableStream.getReader();
+  r._read = async () => {
+    try {
+      const { value, done } = await reader.read();
+      if (done) r.push(null);
+      else r.push(value);
+    } catch (e) { r.destroy(e); }
+  };
+  return r;
+};
+
+Readable.toWeb = function(readable) {
+  return new ReadableStream({
+    start(controller) {
+      readable.on('data', (chunk) => controller.enqueue(chunk));
+      readable.on('end', () => controller.close());
+      readable.on('error', (err) => controller.error(err));
+    },
+    cancel() { readable.destroy(); }
+  });
+};
+
 class Writable extends Stream {
   constructor(opts) {
     super();
@@ -411,7 +439,7 @@ class Writable extends Stream {
     }
   }
 
-  _write(chunk, encoding, cb) { cb(); }
+  _write(chunk, encoding, cb) { cb(_ERR_METHOD_NOT_IMPLEMENTED('_write()')); }
 
   write(chunk, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
@@ -489,7 +517,10 @@ class Writable extends Stream {
     this._writableState.ending = true;
     this._writableState.ended = true;
     this.writable = false;
-    const finish = () => { this._writableState.finished = true; if (cb) cb(); this.emit('finish'); if (this._writableState.autoDestroy) this.destroy(); };
+    const finish = (err) => {
+      if (err) { if (cb) cb(err); this.destroy(err); return; }
+      this._writableState.finished = true; if (cb) cb(); this.emit('finish'); if (this._writableState.autoDestroy) this.destroy();
+    };
     const waitDrain = () => {
       if (this._writableState.buffered.length > 0 || this._writableState.writing) {
         process.nextTick(waitDrain);

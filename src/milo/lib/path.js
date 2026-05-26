@@ -4,6 +4,10 @@
 const SLASH = 47;  // '/'
 const DOT = 46;    // '.'
 
+function validateString(value, name) {
+  if (typeof value !== 'string') throw _ERR_INVALID_ARG_TYPE(name, 'string', value);
+}
+
 function normalizeString(path, allowAboveRoot) {
   let res = '', lastSegLen = 0, lastSlash = -1, dots = 0, code;
   for (let i = 0; i <= path.length; i++) {
@@ -41,7 +45,8 @@ function resolve(...args) {
   let resolved = '', resolvedAbsolute = false;
   for (let i = args.length - 1; i >= -1 && !resolvedAbsolute; i--) {
     const path = i >= 0 ? args[i] : (process.cwd ? process.cwd() : '/');
-    if (typeof path !== 'string' || path.length === 0) continue;
+    validateString(path, 'path');
+    if (path.length === 0) continue;
     resolved = path + '/' + resolved;
     resolvedAbsolute = path.charCodeAt(0) === SLASH;
   }
@@ -50,6 +55,7 @@ function resolve(...args) {
 }
 
 function normalize(path) {
+  validateString(path, 'path');
   if (path.length === 0) return '.';
   const isAbsolute = path.charCodeAt(0) === SLASH;
   const trailingSep = path.charCodeAt(path.length - 1) === SLASH;
@@ -63,16 +69,17 @@ function join(...args) {
   let joined = '';
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (typeof arg !== 'string') throw new TypeError('Path must be a string');
+    validateString(arg, 'path');
     if (arg.length > 0) joined += (joined.length > 0 ? '/' : '') + arg;
   }
   if (joined.length === 0) return '.';
   return normalize(joined);
 }
 
-function isAbsolute(path) { return path.length > 0 && path.charCodeAt(0) === SLASH; }
+function isAbsolute(path) { validateString(path, 'path'); return path.length > 0 && path.charCodeAt(0) === SLASH; }
 
 function dirname(path) {
+  validateString(path, 'path');
   if (path.length === 0) return '.';
   const hasRoot = path.charCodeAt(0) === SLASH;
   let end = -1, matchedSlash = true;
@@ -85,6 +92,8 @@ function dirname(path) {
 }
 
 function basename(path, ext) {
+  validateString(path, 'path');
+  if (ext !== undefined) validateString(ext, 'ext');
   let start = 0, end = -1, matchedSlash = true;
   if (ext !== undefined && ext.length > 0 && ext.length <= path.length) {
     if (ext === path) return '';
@@ -112,6 +121,7 @@ function basename(path, ext) {
 }
 
 function extname(path) {
+  validateString(path, 'path');
   let startDot = -1, startPart = 0, end = -1, matchedSlash = true, preDotState = 0;
   for (let i = path.length - 1; i >= 0; i--) {
     const code = path.charCodeAt(i);
@@ -125,6 +135,8 @@ function extname(path) {
 }
 
 function relative(from, to) {
+  validateString(from, 'from');
+  validateString(to, 'to');
   if (from === to) return '';
   from = resolve(from); to = resolve(to);
   if (from === to) return '';
@@ -149,6 +161,7 @@ function relative(from, to) {
 }
 
 function parse(path) {
+  validateString(path, 'path');
   const ret = { root: '', dir: '', base: '', ext: '', name: '' };
   if (path.length === 0) return ret;
   const isAbs = path.charCodeAt(0) === SLASH;
@@ -189,17 +202,17 @@ const delimiter = ':';
 // win32 — minimal implementation for test compatibility
 const win32 = {
   sep: '\\', delimiter: ';',
-  resolve(...args) { return resolve(...args).replace(/\//g, '\\'); },
-  normalize(p) { return normalize(p.replace(/\\/g, '/')).replace(/\//g, '\\'); },
-  isAbsolute(p) { return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\'); },
-  join(...args) { if (args.length === 0) return '.'; const joined = args.filter(a => a !== '').map(a => a.replace(/\\/g, '/')).join('/'); if (!joined) return '.'; return normalize(joined).replace(/\//g, '\\'); },
-  dirname(p) { const n = p.replace(/\\/g, '/'); const d = dirname(n); return d.replace(/\//g, '\\'); },
-  basename(p, ext) { const parts = p.replace(/\\+$/, '').split(/[\\/]/); const b = parts[parts.length - 1] || ''; if (ext && b.endsWith(ext)) return b.slice(0, -ext.length); return b; },
-  extname(p) { return extname(p.replace(/\\/g, '/')); },
-  parse(p) { return parse(p.replace(/\\/g, '/')); },
+  resolve(...args) { for (const a of args) validateString(a, 'path'); return resolve(...args).replace(/\//g, '\\'); },
+  normalize(p) { validateString(p, 'path'); return normalize(p.replace(/\\/g, '/')).replace(/\//g, '\\'); },
+  isAbsolute(p) { validateString(p, 'path'); return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\'); },
+  join(...args) { if (args.length === 0) return '.'; for (const a of args) validateString(a, 'path'); const joined = args.filter(a => a !== '').map(a => a.replace(/\\/g, '/')).join('/'); if (!joined) return '.'; return normalize(joined).replace(/\//g, '\\'); },
+  dirname(p) { validateString(p, 'path'); const n = p.replace(/\\/g, '/'); const d = dirname(n); return d.replace(/\//g, '\\'); },
+  basename(p, ext) { validateString(p, 'path'); if (ext !== undefined) validateString(ext, 'ext'); const parts = p.replace(/\\+$/, '').split(/[\\/]/); const b = parts[parts.length - 1] || ''; if (ext && b.endsWith(ext)) return b.slice(0, -ext.length); return b; },
+  extname(p) { validateString(p, 'path'); return extname(p.replace(/\\/g, '/')); },
+  parse(p) { validateString(p, 'path'); return parse(p.replace(/\\/g, '/')); },
   format(o) { return format(o); },
   toNamespacedPath(p) { return p; },
-  relative(from, to) { return relative(from.replace(/\\/g, '/'), to.replace(/\\/g, '/')).replace(/\//g, '\\'); },
+  relative(from, to) { validateString(from, 'from'); validateString(to, 'to'); return relative(from.replace(/\\/g, '/'), to.replace(/\\/g, '/')).replace(/\//g, '\\'); },
 };
 win32.posix = null;
 win32.win32 = win32;

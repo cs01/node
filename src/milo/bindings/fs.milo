@@ -97,22 +97,29 @@ fn fsWriteFile(info: *u8, _ud: *u8): void {
         let dataArg = ci.arg(1)
 
         let dataLen = dataArg.writeUtf8(iso, 0 as *u8, 0)
-        if dataLen <= 0 { return }
-
-        let dataBuf = malloc(dataLen as i64 + 1)
-        if dataBuf as i64 == 0 { return }
-        dataArg.writeUtf8(iso, dataBuf, dataLen + 1)
-
-        let writeLen = dataLen
 
         // O_WRONLY | O_CREAT | O_TRUNC = 1 | 512 | 1024 = 1537 on macOS
         let fd = nm_fs_open(pathBuf as *u8, 1537, 438)  // 0666
         if fd < 0 {
-            free(dataBuf)
             ci.retI32(-1)
             return
         }
 
+        // empty string: just create the file and close
+        if dataLen <= 0 {
+            close(fd)
+            ci.retI32(0)
+            return
+        }
+
+        let dataBuf = malloc(dataLen as i64 + 1)
+        if dataBuf as i64 == 0 {
+            close(fd)
+            return
+        }
+        dataArg.writeUtf8(iso, dataBuf, dataLen + 1)
+
+        let writeLen = dataLen
         var written: i64 = 0
         while written < writeLen as i64 {
             let ptr = (dataBuf as i64 + written) as *u8

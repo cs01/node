@@ -140,7 +140,7 @@ if (!process.setgid) process.setgid = () => {};
 
 let _uncaughtExceptionCallback = null;
 process.setUncaughtExceptionCaptureCallback = (fn) => {
-  if (fn !== null && typeof fn !== 'function') throw new TypeError('The "fn" argument must be of type function or null');
+  if (fn !== null && typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('fn', 'function or null', fn);
   _uncaughtExceptionCallback = fn;
 };
 process.hasUncaughtExceptionCaptureCallback = () => _uncaughtExceptionCallback !== null;
