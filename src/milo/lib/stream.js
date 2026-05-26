@@ -20,18 +20,25 @@ Stream.prototype.pipe = function pipe(dest, opts) {
     this._readableState.pipes.push(dest);
   }
   if (!this._pipeListeners) this._pipeListeners = [];
+  const src = this;
   const ondata = (chunk) => {
     if (dest.writable !== false) {
       const canContinue = dest.write(chunk);
-      if (canContinue === false && this.pause) this.pause();
+      if (canContinue === false && src.pause) src.pause();
     }
   };
   this.on('data', ondata);
   const onend = () => { if (!opts || opts.end !== false) dest.end(); };
   this.on('end', onend);
-  const ondrain = () => { if (this.resume) this.resume(); };
+  const ondrain = () => { if (src.resume) src.resume(); };
   dest.on('drain', ondrain);
-  this._pipeListeners.push({ dest, ondata, onend, ondrain });
+  const onclose = () => { src.unpipe(dest); };
+  dest.on('close', onclose);
+  const onfinish = () => { src.unpipe(dest); };
+  dest.on('finish', onfinish);
+  const onerror = (err) => { src.unpipe(dest); };
+  dest.on('error', onerror);
+  this._pipeListeners.push({ dest, ondata, onend, ondrain, onclose, onfinish, onerror });
   dest.emit('pipe', this);
   if (this.resume) this.resume();
   return dest;
@@ -47,9 +54,14 @@ Stream.prototype.unpipe = function unpipe(dest) {
           this.removeListener('data', entry.ondata);
           this.removeListener('end', entry.onend);
           entry.dest.removeListener('drain', entry.ondrain);
+          if (entry.onclose) entry.dest.removeListener('close', entry.onclose);
+          if (entry.onfinish) entry.dest.removeListener('finish', entry.onfinish);
+          if (entry.onerror) entry.dest.removeListener('error', entry.onerror);
         }
         this._pipeListeners = [];
       }
+      this._readableState.flowing = false;
+      this.emit('pause');
       for (const d of pipes) d.emit('unpipe', this);
     } else {
       const idx = this._readableState.pipes.indexOf(dest);
@@ -62,8 +74,15 @@ Stream.prototype.unpipe = function unpipe(dest) {
             this.removeListener('data', entry.ondata);
             this.removeListener('end', entry.onend);
             dest.removeListener('drain', entry.ondrain);
+            if (entry.onclose) dest.removeListener('close', entry.onclose);
+            if (entry.onfinish) dest.removeListener('finish', entry.onfinish);
+            if (entry.onerror) dest.removeListener('error', entry.onerror);
             this._pipeListeners.splice(li, 1);
           }
+        }
+        if (this._readableState.pipes.length === 0) {
+          this._readableState.flowing = false;
+          this.emit('pause');
         }
         dest.emit('unpipe', this);
       }
@@ -161,6 +180,7 @@ class Readable extends Stream {
       return false;
     }
     if (!state.objectMode && typeof chunk === 'string') chunk = Buffer.from(chunk, encoding || state.defaultEncoding);
+    if (state.encoding && Buffer.isBuffer(chunk)) chunk = chunk.toString(state.encoding);
     if (state.flowing) {
       this.emit('data', chunk);
       if (state.readableListening && !state._readableEmitScheduled) {
@@ -533,13 +553,18 @@ class Writable extends Stream {
     this._write(chunk, encoding, (err) => {
       if (called) { const e = new Error('Callback called multiple times'); e.code = 'ERR_MULTIPLE_CALLBACK'; this.emit('error', e); return; }
       called = true;
-      this._writableState.writing = false;
-      this._writableState.length -= (this._writableState.objectMode ? 1 : (chunk.length || 0));
-      if (err) { this.emit('error', err); }
+      const state = this._writableState;
+      state.writing = false;
+      state.length -= (state.objectMode ? 1 : (chunk.length || 0));
+      if (state._destroyed) {
+        if (cb) cb(err);
+        return;
+      }
+      if (err) { state.errored = err; this.emit('error', err); }
       else {
-        const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 65536;
-        if (this._writableState.needDrain && this._writableState.length < hwm) {
-          this._writableState.needDrain = false;
+        const hwm = state.highWaterMark != null ? state.highWaterMark : 65536;
+        if (state.needDrain && state.length < hwm) {
+          state.needDrain = false;
           this.emit('drain');
         }
       }
@@ -563,9 +588,16 @@ class Writable extends Stream {
     if (typeof encoding === 'function') { cb = encoding; encoding = null; }
     if (this._writableState.ending || this._writableState._destroyed) {
       if (cb) {
-        const e = new Error('write after end');
-        e.code = 'ERR_STREAM_WRITE_AFTER_END';
-        process.nextTick(cb, e);
+        const err = this._writableState.errored;
+        if (err) {
+          process.nextTick(cb, err);
+        } else if (this._writableState._endCbs) {
+          this._writableState._endCbs.push(cb);
+        } else {
+          const e = new Error('write after end');
+          e.code = 'ERR_STREAM_WRITE_AFTER_END';
+          process.nextTick(cb, e);
+        }
       }
       if (chunk != null && !this._writableState._destroyed) {
         const e = new Error('write after end');
@@ -579,12 +611,31 @@ class Writable extends Stream {
     this._writableState.ending = true;
     this._writableState.ended = true;
     this.writable = false;
+    if (!this._writableState._endCbs) this._writableState._endCbs = [];
+    if (cb) this._writableState._endCbs.push(cb);
     const finish = (err) => {
-      if (err) { if (cb) cb(err); this.destroy(err); return; }
-      this._writableState.finished = true; if (cb) cb(); this.emit('finish'); if (this._writableState.autoDestroy) this.destroy();
+      const cbs = this._writableState._endCbs || [];
+      this._writableState._endCbs = [];
+      if (err) {
+        for (const c of cbs) c(err);
+        this.destroy(err);
+        return;
+      }
+      this._writableState.finished = true;
+      for (const c of cbs) c(null);
+      this.emit('finish');
+      if (this._writableState.autoDestroy) this.destroy();
     };
     const waitDrain = () => {
-      if (this._writableState.buffered.length > 0 || this._writableState.writing) {
+      const s = this._writableState;
+      if (s._destroyed || s.errored) {
+        const cbs = s._endCbs || [];
+        s._endCbs = [];
+        const e = s.errored;
+        for (const c of cbs) c(e);
+        return;
+      }
+      if (s.buffered.length > 0 || s.writing) {
         process.nextTick(waitDrain);
       } else if (this._final) {
         let called = false;
@@ -651,7 +702,7 @@ class Writable extends Stream {
   get writableEnded() { return this._writableState.ended; }
   get writableFinished() { return this._writableState.finished; }
   get writableHighWaterMark() { return this._writableState && this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 65536; }
-  get writableLength() { return (this._writableState && this._writableState.buffered && this._writableState.buffered.length) || 0; }
+  get writableLength() { return (this._writableState && this._writableState.length) || 0; }
   get writableObjectMode() { return !!(this._writableState && this._writableState.objectMode); }
   get writableCorked() { return (this._writableState && this._writableState.corked) || 0; }
   get writableNeedDrain() { return !!(this._writableState && this._writableState.needDrain); }
@@ -680,7 +731,7 @@ class Duplex extends Readable {
   get writableEnded() { return this._writableState.ended; }
   get writableFinished() { return this._writableState.finished; }
   get writableHighWaterMark() { return this._writableState && this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 65536; }
-  get writableLength() { return (this._writableState && this._writableState.buffered && this._writableState.buffered.length) || 0; }
+  get writableLength() { return (this._writableState && this._writableState.length) || 0; }
   get writableObjectMode() { return !!(this._writableState && this._writableState.objectMode); }
   get writableCorked() { return (this._writableState && this._writableState.corked) || 0; }
   get writableNeedDrain() { return !!(this._writableState && this._writableState.needDrain); }

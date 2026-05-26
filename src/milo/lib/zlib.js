@@ -63,6 +63,9 @@ function _validateFlushFlag(val, name) {
   }
 }
 
+// Compression modes where windowBits=0 is invalid (must be 9-15)
+const _COMPRESS_MODES = new Set([0, 2, 4]); // gzip, deflate, deflateRaw
+
 class ZlibTransform extends Transform {
   constructor(mode, opts) {
     if (opts) {
@@ -72,6 +75,15 @@ class ZlibTransform extends Transform {
         if (typeof opts.windowBits !== 'number') {
           const e = new TypeError(`The "options.windowBits" property must be of type number. Received type ${typeof opts.windowBits}`);
           e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+        }
+        if (_COMPRESS_MODES.has(mode)) {
+          if (opts.windowBits < 9 || opts.windowBits > 15) {
+            const e = new RangeError(`The value of "options.windowBits" is out of range. It must be >= 9 and <= 15. Received ${opts.windowBits}`);
+            e.code = 'ERR_OUT_OF_RANGE'; throw e;
+          }
+        } else if (opts.windowBits !== 0 && (opts.windowBits < 8 || opts.windowBits > 15)) {
+          const e = new RangeError(`The value of "options.windowBits" is out of range. It must be >= 8 and <= 15. Received ${opts.windowBits}`);
+          e.code = 'ERR_OUT_OF_RANGE'; throw e;
         }
       }
     }

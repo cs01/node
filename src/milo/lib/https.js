@@ -13,7 +13,16 @@ class Agent {
 
 function request(url, options, cb) {
   if (typeof url === 'string') {
-    const parsed = new URL(url);
+    let parsed;
+    try { parsed = new URL(url); } catch (e) {
+      const err = new TypeError(`Invalid URL: ${url}`); err.code = 'ERR_INVALID_URL'; err.input = url; throw err;
+    }
+    if (!parsed.protocol || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
+      const err = new TypeError(`Invalid URL: ${url}`); err.code = 'ERR_INVALID_URL'; err.input = url; throw err;
+    }
+    if (!parsed.hostname) {
+      const err = new TypeError(`Invalid URL: ${url}`); err.code = 'ERR_INVALID_URL'; err.input = url; throw err;
+    }
     const opts = typeof options === 'function' ? {} : (options || {});
     opts.hostname = parsed.hostname;
     opts.port = parsed.port || 443;

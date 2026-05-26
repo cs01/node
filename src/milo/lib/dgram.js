@@ -70,19 +70,37 @@ class Socket extends EventEmitter {
   }
 
   send(msg, offset, length, port, address, cb) {
-    // Handle flexible arguments: send(msg, port, address, cb)
     if (typeof offset === 'number' && typeof length === 'number' && typeof port === 'number') {
-      // send(msg, offset, length, port, address, cb)
       msg = typeof msg === 'string' ? msg.substring(offset, offset + length) : msg.slice(offset, offset + length);
-    } else {
+    } else if (typeof offset === 'number' && typeof length === 'string') {
       // send(msg, port, address, cb)
+      cb = port;
+      address = length;
+      port = offset;
+    } else if (typeof offset === 'number' && typeof length === 'function') {
+      // send(msg, port, cb) — connected mode
+      cb = length;
+      port = offset;
+      address = undefined;
+    } else if (typeof offset === 'function') {
+      // send(msg, cb) — connected mode
+      cb = offset;
+      port = undefined;
+      address = undefined;
+    } else if (typeof offset === 'undefined') {
+      // send(msg) — connected mode
+    } else {
       cb = address;
       address = port;
       port = offset;
-      // offset/length not used
     }
 
     if (typeof address === 'function') { cb = address; address = undefined; }
+
+    if (this._connected) {
+      if (port === undefined) port = this._remotePort;
+      if (address === undefined) address = this._remoteAddress;
+    }
     address = address || '127.0.0.1';
 
     if (!this._bound) {
@@ -93,9 +111,37 @@ class Socket extends EventEmitter {
       }
     }
 
-    const str = typeof msg === 'string' ? msg : msg.toString();
-    const n = tcp.udpSend(this._fd, str, port, address);
+    // Handle array of buffers
+    if (Array.isArray(msg)) msg = Buffer.concat(msg.map(b => Buffer.isBuffer(b) ? b : Buffer.from(b)));
+    const buf = typeof msg === 'string' ? Buffer.from(msg) : (Buffer.isBuffer(msg) ? msg : Buffer.from(msg));
+    const n = tcp.udpSend(this._fd, buf.toString(), port, address);
     if (cb) process.nextTick(() => cb(n < 0 ? new Error('send failed') : null));
+  }
+
+  connect(port, address, cb) {
+    if (typeof address === 'function') { cb = address; address = undefined; }
+    this._remotePort = port;
+    this._remoteAddress = address || '127.0.0.1';
+    this._connected = true;
+    if (!this._bound) {
+      this._fd = tcp.udpSocket();
+      if (this._fd < 0) {
+        const err = new Error('socket() failed');
+        if (cb) cb(err); else this.emit('error', err);
+        return;
+      }
+      tcp.udpBind(this._fd, 0, '0.0.0.0');
+      this._bound = true;
+      this._startReceiving();
+    }
+    if (cb) process.nextTick(cb);
+    process.nextTick(() => this.emit('connect'));
+  }
+
+  disconnect() {
+    this._remotePort = undefined;
+    this._remoteAddress = undefined;
+    this._connected = false;
   }
 
   close(cb) {

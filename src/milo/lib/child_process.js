@@ -246,11 +246,14 @@ function spawn(file, args, options) {
 function exec(command, options, cb) {
   if (typeof options === 'function') { cb = options; options = {}; }
   const opts = options || {};
+  const enc = opts.encoding !== undefined ? opts.encoding : 'utf8';
   const child = spawn('/bin/sh', ['-c', command], opts);
   let stdout = '';
   let stderr = '';
-  child.stdout.on('data', (d) => { stdout += d.toString(); });
-  child.stderr.on('data', (d) => { stderr += d.toString(); });
+  if (enc && child.stdout) child.stdout.setEncoding(enc);
+  if (enc && child.stderr) child.stderr.setEncoding(enc);
+  child.stdout.on('data', (d) => { stdout += typeof d === 'string' ? d : d.toString(); });
+  child.stderr.on('data', (d) => { stderr += typeof d === 'string' ? d : d.toString(); });
   child.on('close', (code) => {
     if (cb) {
       if (code !== 0) {
@@ -270,11 +273,14 @@ function execFile(file, args, options, cb) {
   if (typeof args === 'function') { cb = args; args = []; options = {}; }
   if (typeof options === 'function') { cb = options; options = {}; }
   const opts = options || {};
+  const enc = opts.encoding !== undefined ? opts.encoding : 'utf8';
   const child = spawn(file, args || [], opts);
   let stdout = '';
   let stderr = '';
-  child.stdout.on('data', (d) => { stdout += d.toString(); });
-  child.stderr.on('data', (d) => { stderr += d.toString(); });
+  if (enc && child.stdout) child.stdout.setEncoding(enc);
+  if (enc && child.stderr) child.stderr.setEncoding(enc);
+  child.stdout.on('data', (d) => { stdout += typeof d === 'string' ? d : d.toString(); });
+  child.stderr.on('data', (d) => { stderr += typeof d === 'string' ? d : d.toString(); });
   child.on('close', (code) => {
     if (cb) {
       if (code !== 0) {

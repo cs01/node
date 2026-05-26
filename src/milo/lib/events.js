@@ -158,7 +158,7 @@ EventEmitter.setMaxListeners = function(n) {
   if (arguments.length <= 1) { EventEmitter.defaultMaxListeners = n; return; }
   for (let i = 1; i < arguments.length; i++) {
     const emitter = arguments[i];
-    if (typeof emitter !== 'object' || emitter === null || (typeof emitter.setMaxListeners !== 'function' && typeof emitter.on !== 'function')) {
+    if (typeof emitter !== 'object' || emitter === null || (typeof emitter.setMaxListeners !== 'function' && typeof emitter.on !== 'function' && typeof emitter.addEventListener !== 'function')) {
       const e = new TypeError('The "eventTargets" argument must be an instance of EventTarget or EventEmitter. Received ' + typeof emitter + ' (' + String(emitter) + ')');
       e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
     }
