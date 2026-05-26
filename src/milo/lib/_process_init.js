@@ -125,7 +125,30 @@ if (!process.execPath) {
 if (!process.argv0) process.argv0 = process.argv[0] || '';
 if (!process.execArgv) process.execArgv = [];
 if (!process.allowedNodeEnvironmentFlags) process.allowedNodeEnvironmentFlags = new Set();
-if (!process.kill) process.kill = () => {};
+if (!process.kill) {
+  const _signals = { SIGHUP:1, SIGINT:2, SIGQUIT:3, SIGILL:4, SIGTRAP:5, SIGABRT:6, SIGBUS:10, SIGFPE:8, SIGKILL:9, SIGUSR1:30, SIGSEGV:11, SIGUSR2:31, SIGPIPE:13, SIGALRM:14, SIGTERM:15, SIGCHLD:20, SIGCONT:19, SIGSTOP:17, SIGTSTP:18, SIGTTIN:21, SIGTTOU:22, SIGURG:16, SIGXCPU:24, SIGXFSZ:25, SIGVTALRM:26, SIGPROF:27, SIGWINCH:28, SIGIO:23, SIGINFO:29, SIGSYS:12 };
+  const _spawnB = internalBinding('spawn');
+  process._kill = function(pid, sig) {
+    if (_spawnB.killPid) return _spawnB.killPid(pid, sig);
+    return 0;
+  };
+  process.kill = function(pid, signal) {
+    if (typeof pid === 'string') pid = Number(pid);
+    if (typeof pid !== 'number' || Number.isNaN(pid) || !Number.isFinite(pid)) {
+      const e = new TypeError('The "pid" argument must be of type number. Received ' + (pid === null ? 'null' : pid === undefined ? 'undefined' : 'type ' + typeof pid + ' (' + String(pid) + ')'));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    let sig;
+    if (signal === undefined) { sig = 15; }
+    else if (typeof signal === 'number') { sig = signal; }
+    else if (typeof signal === 'string') {
+      sig = _signals[signal];
+      if (sig === undefined) { const e = new TypeError('Unknown signal: ' + signal); e.code = 'ERR_UNKNOWN_SIGNAL'; throw e; }
+    } else { sig = signal; }
+    const r = process._kill(pid, sig);
+    if (r === -1) { const e = new Error('kill EINVAL'); e.code = 'EINVAL'; throw e; }
+  };
+}
 // Wrap process.exit to emit 'exit' event before native exit
 const _nativeExit = process.exit;
 process.exit = function(code) {

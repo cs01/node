@@ -213,6 +213,7 @@ function openSync(path, flags, mode) {
 function closeSync(fd) { _validateFd(fd); b.close(fd); }
 
 function fstatSync(fd) {
+  _validateFd(fd);
   const result = b.fstat(fd);
   if (typeof result === 'number') throw _fsError('EBADF', 'fstat', null, 'bad file descriptor');
   return _wrapStats(result);
@@ -303,8 +304,8 @@ function mkdtempSync(prefix) {
 function mkdtemp(prefix, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
   _validatePath(prefix, 'prefix');
-  try { const r = mkdtempSync(prefix); if (cb) process.nextTick(cb, null, r); }
-  catch (e) { if (cb) process.nextTick(cb, e); else throw e; }
+  _validateCb(cb);
+  _async(mkdtempSync, [prefix], cb);
 }
 
 function accessSync(path, mode) {
@@ -377,12 +378,36 @@ function _async(syncFn, args, cb) {
 
 function readFile(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  if (typeof path === 'number') {
+    // fd mode — read all data from fd
+    process.nextTick(() => {
+      try {
+        const chunks = [];
+        const buf = Buffer.alloc(8192);
+        let n;
+        while ((n = readSync(path, buf, 0, 8192, null)) > 0) chunks.push(buf.slice(0, n));
+        const result = Buffer.concat(chunks);
+        const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
+        cb(null, encoding ? result.toString(encoding) : result);
+      } catch (e) { cb(e); }
+    });
+    return;
+  }
   _validatePath(path, 'path');
   _async(readFileSync, [path, opts], cb);
 }
 
 function writeFile(path, data, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  if (typeof path === 'number') {
+    // fd mode
+    _validateCb(cb);
+    process.nextTick(() => {
+      try { writeSync(path, typeof data === 'string' ? data : data.toString()); cb(null); }
+      catch (e) { cb(e); }
+    });
+    return;
+  }
   _validatePath(path, 'path');
   _validateCb(cb);
   _async(writeFileSync, [path, data], (err) => cb(err));
@@ -443,11 +468,8 @@ function appendFile(path, data, opts, cb) {
   _validateCb(cb); _async(appendFileSync, [path, data], (err) => cb(err));
 }
 function exists(path, cb) {
-  if (typeof cb !== 'function') {
-    const e = new TypeError('The "cb" argument must be of type function. Received ' + typeof cb);
-    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
-  }
-  process.nextTick(() => cb(existsSync(path)));
+  if (typeof cb !== 'function') throw _ERR_INVALID_ARG_TYPE('cb', 'function', cb);
+  process.nextTick(() => { try { cb(existsSync(path)); } catch { cb(false); } });
 }
 
 function linkSync(existingPath, newPath) {
@@ -502,6 +524,7 @@ function read(fd, buffer, offset, length, position, cb) {
 
 function fstat(fd, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validateFd(fd);
   _async(fstatSync, [fd], cb);
 }
 
