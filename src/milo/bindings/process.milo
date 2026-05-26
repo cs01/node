@@ -31,6 +31,7 @@ extern fn kill(pid: i32, sig: i32): i32
 extern fn getrusage(who: i32, usage: *Rusage): i32
 extern fn utimes(path: *u8, times: *Timeval): i32
 extern fn futimes(fd: i32, times: *Timeval): i32
+extern fn chdir(path: *u8): i32
 
 // --- mach task info for memoryUsage ---
 extern fn mach_task_self(): u32
@@ -148,6 +149,18 @@ fn processMemoryUsage(info: *u8, _ud: *u8): void {
     }
 }
 
+fn processChdir(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    if ci.length() < 1 { return }
+    var pathBuf: [u8; 4096] = [0; 4096]
+    unsafe {
+        let pathLen = ci.arg(0).writeUtf8(iso, pathBuf as *u8, 4096)
+        if pathLen <= 0 { return }
+        chdir(pathBuf as *u8)
+    }
+}
+
 fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
     let i = Isolate { ptr: iso }
     let c = Context { ptr: ctx }
@@ -158,6 +171,7 @@ fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "kill" as *u8, processKill as *u8)
         c.setMethod(exp, "cpuUsage" as *u8, processCpuUsage as *u8)
         c.setMethod(exp, "memoryUsage" as *u8, processMemoryUsage as *u8)
+        c.setMethod(exp, "chdir" as *u8, processChdir as *u8)
 
         let ab = i.arraybufferNew(20)
         let u32arr = i.uint32arrayNew(ab, 0, 5)

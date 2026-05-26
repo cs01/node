@@ -51,6 +51,7 @@ class TracingChannel {
     this.asyncEnd = channel(`tracing:${name}:asyncEnd`);
     this.error = channel(`tracing:${name}:error`);
   }
+  get hasSubscribers() { return this.start.hasSubscribers || this.end.hasSubscribers || this.asyncStart.hasSubscribers || this.asyncEnd.hasSubscribers || this.error.hasSubscribers; }
   subscribe(handlers) { for (const [k, fn] of Object.entries(handlers)) { if (this[k]) this[k].subscribe(fn); } }
   unsubscribe(handlers) { for (const [k, fn] of Object.entries(handlers)) { if (this[k]) this[k].unsubscribe(fn); } }
   traceSync(fn, ctx, thisArg, ...args) { this.start.publish(ctx); try { const result = fn.apply(thisArg, args); ctx.result = result; return result; } catch(e) { ctx.error = e; this.error.publish(ctx); throw e; } finally { this.end.publish(ctx); } }

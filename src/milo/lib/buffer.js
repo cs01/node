@@ -129,7 +129,7 @@ function _base64Encode(buf, start, end) {
 class Buffer extends Uint8Array {
   static alloc(size, fill, encoding) {
     if (typeof size !== 'number') throw _ERR_INVALID_ARG_TYPE('size', 'number', size);
-    if (size < 0 || size > Buffer.kMaxLength) {
+    if (size < 0 || Number.isNaN(size) || size > Buffer.kMaxLength) {
       const err = new RangeError(`The value "${size}" is invalid for option "size"`);
       err.code = 'ERR_OUT_OF_RANGE';
       throw err;
@@ -163,7 +163,7 @@ class Buffer extends Uint8Array {
 
   static allocUnsafe(size) {
     if (typeof size !== 'number') throw _ERR_INVALID_ARG_TYPE('size', 'number', size);
-    if (size < 0 || size > Buffer.kMaxLength) {
+    if (size < 0 || Number.isNaN(size) || size > Buffer.kMaxLength) {
       const err = new RangeError(`The value "${size}" is invalid for option "size"`);
       err.code = 'ERR_OUT_OF_RANGE';
       throw err;
@@ -173,7 +173,7 @@ class Buffer extends Uint8Array {
 
   static allocUnsafeSlow(size) {
     if (typeof size !== 'number') throw _ERR_INVALID_ARG_TYPE('size', 'number', size);
-    if (size < 0 || size > Buffer.kMaxLength) {
+    if (size < 0 || Number.isNaN(size) || size > Buffer.kMaxLength) {
       const err = new RangeError(`The value "${size}" is invalid for option "size"`);
       err.code = 'ERR_OUT_OF_RANGE';
       throw err;
@@ -756,7 +756,10 @@ const Buffer_callable = new Proxy(_BufferClass, {
   apply(target, thisArg, args) {
     // Buffer(size) or Buffer(string, encoding) or Buffer(array)
     const arg = args[0];
-    if (typeof arg === 'number') return _BufferClass.allocUnsafe(arg);
+    if (typeof arg === 'number') {
+      if (arg < 0 || Number.isNaN(arg)) { const e = new RangeError(`The value "${arg}" is invalid for option "size"`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+      return _BufferClass.allocUnsafe(arg);
+    }
     if (typeof arg === 'string') return _BufferClass.from(arg, args[1]);
     if (arg instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && arg instanceof SharedArrayBuffer)) {
       return _BufferClass.from(arg, args[1], args[2]);

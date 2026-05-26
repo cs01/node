@@ -164,12 +164,16 @@ function inherits(ctor, superCtor) {
   Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
 }
 
-function deprecate(fn, msg) {
+function deprecate(fn, msg, code) {
+  if (code !== undefined && typeof code !== 'string') {
+    throw _ERR_INVALID_ARG_TYPE('code', 'string', code);
+  }
   let warned = false;
-  return function(...args) {
-    if (!warned) { warned = true; console.error('DeprecationWarning:', msg); }
+  const wrapped = function(...args) {
+    if (!warned) { warned = true; process.emitWarning(msg, 'DeprecationWarning', code); }
     return fn.apply(this, args);
   };
+  return wrapped;
 }
 
 function promisify(fn) {

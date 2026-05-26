@@ -101,12 +101,14 @@ class OutgoingMessage extends EventEmitter {
     const lower = k.toLowerCase();
     this._headers[lower] = v;
     this._rawHeaderNames[lower] = k;
+    return this;
   }
   getHeader(k) { return this._headers[k.toLowerCase()]; }
   removeHeader(k) {
     const lower = k.toLowerCase();
     delete this._headers[lower];
     delete this._rawHeaderNames[lower];
+    return this;
   }
   hasHeader(k) { return k.toLowerCase() in this._headers; }
   getHeaderNames() { return Object.keys(this._headers); }
@@ -142,9 +144,16 @@ class ServerResponse extends OutgoingMessage {
   }
   _implicitHeader() { this._flushHeaders(); }
   writeHead(code, reason, headers) {
-    if (typeof reason === 'object') { headers = reason; reason = undefined; }
+    if (typeof reason === 'object' || Array.isArray(reason)) { headers = reason; reason = undefined; }
     this.statusCode = code;
-    if (headers) for (const [k,v] of Object.entries(headers)) this.setHeader(k, v);
+    if (headers) {
+      if (Array.isArray(headers)) {
+        if (headers.length % 2 !== 0) { const e = new TypeError('Invalid number of arguments'); e.code = 'ERR_INVALID_ARG_VALUE'; throw e; }
+        for (let i = 0; i < headers.length; i += 2) this.setHeader(String(headers[i]), String(headers[i + 1]));
+      } else {
+        for (const [k,v] of Object.entries(headers)) this.setHeader(k, v);
+      }
+    }
     return this;
   }
   _flushHeaders() {

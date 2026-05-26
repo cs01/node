@@ -1026,7 +1026,7 @@
             emitExperimentalWarning: (feature) => { process.emitWarning(`${feature} is an experimental feature`, 'ExperimentalWarning'); },
             getSystemErrorName: (err) => `ERRNO_${err}`,
             promisify: require('util').promisify,
-            deprecate: (fn) => fn,
+            deprecate: require('util').deprecate,
             kEmptyObject: Object.freeze({}),
           };
         } else {

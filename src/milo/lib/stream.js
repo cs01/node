@@ -180,8 +180,13 @@ class Readable extends Stream {
       this._readableState.readingMore = true;
       if (this._readableState.flowing !== false) this.resume();
     } else if (ev === 'readable') {
-      this._readableState.readableListening = true;
-      this._readableState.flowing = false;
+      const state = this._readableState;
+      state.readableListening = true;
+      state.flowing = false;
+      // emit 'readable' if data already buffered or stream ended
+      if (state.length > 0 || state.ended) {
+        process.nextTick(() => this.emit('readable'));
+      }
     }
     return this;
   }
@@ -260,6 +265,14 @@ class Readable extends Stream {
   get readableObjectMode() { return this._readableState.objectMode; }
   get readableEncoding() { return this._readableState.encoding; }
   get readableDidRead() { return !!this._didPush; }
+
+  wrap(stream) {
+    stream.on('data', (chunk) => { this.push(chunk); });
+    stream.on('end', () => { this.push(null); });
+    stream.on('error', (err) => { this.destroy(err); });
+    this._read = () => { if (stream.resume) stream.resume(); };
+    return this;
+  }
 
   [Symbol.asyncIterator]() {
     const self = this;
@@ -727,13 +740,25 @@ function pipeline(...streams) {
 
 function finished(stream, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = {}; }
-  const onFinish = () => { cleanup(); cb(null); };
-  const onEnd = () => { cleanup(); cb(null); };
-  const onError = (err) => { cleanup(); cb(err); };
+  opts = opts || {};
+  let called = false;
+  const done = (err) => { if (called) return; called = true; cleanup(); cb(err || null); };
+  const onFinish = () => done();
+  const onEnd = () => done();
+  const onClose = () => done();
+  const onError = (err) => done(err);
   stream.on('finish', onFinish);
   stream.on('end', onEnd);
+  stream.on('close', onClose);
   stream.on('error', onError);
-  function cleanup() { stream.removeListener('finish', onFinish); stream.removeListener('end', onEnd); stream.removeListener('error', onError); }
+  function cleanup() {
+    stream.removeListener('finish', onFinish); stream.removeListener('end', onEnd);
+    stream.removeListener('close', onClose); stream.removeListener('error', onError);
+  }
+  // Handle already-finished/ended streams
+  if (stream._writableState && stream._writableState.finished) process.nextTick(done);
+  else if (stream._readableState && stream._readableState.endEmitted) process.nextTick(done);
+  else if (stream.destroyed) process.nextTick(done);
 }
 
 function compose(...streams) {

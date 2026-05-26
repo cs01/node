@@ -55,7 +55,13 @@ Object.assign(process.versions, {
 });
 process.version = 'v24.0.0'; process.release = { name: 'node' };
 if (!process.cwd) process.cwd = () => _envB.get('PWD') || '/';
-if (!process.chdir) process.chdir = () => {};
+if (!process.chdir) {
+  const _pmb3 = internalBinding('process_methods');
+  process.chdir = (dir) => {
+    if (typeof dir !== 'string') throw _ERR_INVALID_ARG_TYPE('directory', 'string', dir);
+    _pmb3.chdir(dir);
+  };
+}
 if (!process.umask) process.umask = (mask) => { if (mask !== undefined) return 0o22; return 0o22; };
 
 process.getActiveResourcesInfo = () => [];

@@ -46,21 +46,37 @@ function spawnSync(file, args, options) {
   if (_SPAWN_DEPTH >= _MAX_SPAWN_DEPTH) {
     return { status: 1, signal: null, stdout: '', stderr: 'spawn depth exceeded\n', error: new Error('spawn depth limit exceeded') };
   }
-  // Propagate depth counter to child via env
+  // Save and set env (native spawnSync inherits process.env)
+  const savedEnv = {};
+  const addedKeys = [];
+  if (opts.env) {
+    for (const k of Object.keys(opts.env)) {
+      if (k in process.env) savedEnv[k] = process.env[k];
+      else addedKeys.push(k);
+      process.env[k] = opts.env[k];
+    }
+  }
   const savedDepth = process.env._MILO_SPAWN_DEPTH;
   process.env._MILO_SPAWN_DEPTH = String(_SPAWN_DEPTH + 1);
-  const allArgs = a;
+  // Handle cwd by chdir (restore after)
+  let savedCwd;
+  if (opts.cwd) { try { savedCwd = process.cwd(); process.chdir(String(opts.cwd)); } catch {} }
   const input = opts.input != null ? String(opts.input) : undefined;
   const [stdinMode, stdoutMode, stderrMode] = parseStdio(opts);
   let result;
-  try { result = b.spawnSync(file, allArgs, input, stdinMode, stdoutMode, stderrMode); }
-  finally { if (savedDepth !== undefined) process.env._MILO_SPAWN_DEPTH = savedDepth; else delete process.env._MILO_SPAWN_DEPTH; }
+  try { result = b.spawnSync(file, a, input, stdinMode, stdoutMode, stderrMode); }
+  finally {
+    if (savedDepth !== undefined) process.env._MILO_SPAWN_DEPTH = savedDepth; else delete process.env._MILO_SPAWN_DEPTH;
+    if (opts.env) { for (const k of Object.keys(savedEnv)) process.env[k] = savedEnv[k]; for (const k of addedKeys) delete process.env[k]; }
+    if (savedCwd) { try { process.chdir(savedCwd); } catch {} }
+  }
   if (result.error) {
     const err = new Error('spawnSync ' + file + ' ENOENT');
     err.code = 'ENOENT';
     err.errno = -2;
     err.syscall = 'spawnSync ' + file;
     err.path = file;
+    err.spawnargs = a;
     return { status: null, signal: null, output: [null, Buffer.alloc(0), Buffer.alloc(0)], stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error: err, pid: 0 };
   }
   const encoding = opts.encoding || 'buffer';
