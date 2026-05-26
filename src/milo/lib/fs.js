@@ -342,6 +342,11 @@ function copyFileSync(src, dest) {
 }
 
 function createReadStream(path, opts) {
+  if (opts !== undefined && opts !== null && typeof opts !== 'string' && typeof opts !== 'object') {
+    const e = new TypeError(`The "options" argument must be of type string or an instance of Object. Received type ${typeof opts}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (typeof opts === 'string') opts = { encoding: opts };
   const { Readable } = require('stream');
   const highWaterMark = (opts && opts.highWaterMark) || 65536;
   const encoding = opts && opts.encoding;
@@ -368,6 +373,11 @@ function createReadStream(path, opts) {
 }
 
 function createWriteStream(path, opts) {
+  if (opts !== undefined && opts !== null && typeof opts !== 'string' && typeof opts !== 'object') {
+    const e = new TypeError(`The "options" argument must be of type string or an instance of Object. Received type ${typeof opts}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (typeof opts === 'string') opts = { encoding: opts };
   const { Writable } = require('stream');
   const flags = (opts && opts.flags) || 'w';
   const fd = openSync(path, flags);

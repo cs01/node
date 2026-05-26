@@ -191,6 +191,10 @@ class Buffer extends Uint8Array {
       e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
     }
     if (typeof value === 'string') {
+      if (typeof encodingOrOffset === 'number' || (encodingOrOffset !== undefined && typeof encodingOrOffset !== 'string')) {
+        const e = new TypeError(`Unknown encoding: ${encodingOrOffset}`);
+        e.code = 'ERR_UNKNOWN_ENCODING'; throw e;
+      }
       const enc = (encodingOrOffset || 'utf8').toLowerCase();
       if (!Buffer.isEncoding(enc)) throw _ERR_UNKNOWN_ENCODING(encodingOrOffset || 'utf8');
       if (enc === 'hex') {

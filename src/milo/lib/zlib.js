@@ -7,6 +7,15 @@ const b = internalBinding('zlib');
 // mode: 0=gzip, 1=gunzip, 2=deflate, 3=inflate, 4=deflateRaw, 5=inflateRaw
 function _syncOp(mode, buf, opts) {
   if (typeof buf === 'string') buf = Buffer.from(buf);
+  else if (buf == null || typeof buf === 'boolean' || typeof buf === 'number' ||
+           (typeof buf === 'object' && !Buffer.isBuffer(buf) && !(buf instanceof Uint8Array) && !(buf instanceof ArrayBuffer) && !(buf instanceof DataView) && !ArrayBuffer.isView(buf))) {
+    const received = buf === null ? 'null' : buf === undefined ? 'undefined'
+      : Array.isArray(buf) ? 'an instance of Array'
+      : typeof buf === 'object' ? `an instance of ${buf.constructor ? buf.constructor.name : 'Object'}`
+      : `type ${typeof buf} (${String(buf)})`;
+    const e = new TypeError(`The "buffer" argument must be of type string or an instance of Buffer, TypedArray, DataView, or ArrayBuffer. Received ${received}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
   const input = new Uint8Array(buf.buffer || buf, buf.byteOffset || 0, buf.length);
   const level = (opts && opts.level != null) ? opts.level : -1;
   const result = b.zlibOp(input, mode, level);
@@ -55,6 +64,10 @@ class ZlibTransform extends Transform {
   }
   _transform(chunk, encoding, cb) {
     if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
+    else if (chunk != null && !Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) {
+      const e = new TypeError('The "chunk" argument must be of type string or an instance of Buffer or Uint8Array');
+      e.code = 'ERR_INVALID_ARG_TYPE'; return cb(e);
+    }
     this._chunks.push(chunk);
     cb();
   }

@@ -21,9 +21,19 @@ function ensurePoll() {
 class Socket extends EventEmitter {
   constructor(options) {
     super();
-    this._fd = (options && options._fd) || -1;
-    this.readable = true;
-    this.writable = true;
+    if (options && options.fd !== undefined) {
+      if (typeof options.fd !== 'number') {
+        const e = new TypeError(`The "options.fd" property must be of type number. Received type ${typeof options.fd}`);
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
+      if (options.fd < 0) {
+        const e = new RangeError(`The value of "options.fd" is out of range. It must be >= 0. Received ${options.fd}`);
+        e.code = 'ERR_OUT_OF_RANGE'; throw e;
+      }
+    }
+    this._fd = (options && (options._fd !== undefined ? options._fd : options.fd)) || -1;
+    this.readable = (options && options.readable !== undefined) ? options.readable : true;
+    this.writable = (options && options.writable !== undefined) ? options.writable : true;
     this.destroyed = false;
     this._connecting = false;
     this._readableState = { ended: false, endEmitted: false, length: 0, objectMode: false };
