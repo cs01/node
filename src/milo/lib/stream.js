@@ -810,8 +810,8 @@ module.exports.isDisturbed = function isDisturbed(stream) { return !!(stream && 
 module.exports.isReadable = function isReadable(stream) { return !!(stream && stream.readable && !stream.destroyed && !stream._readableState.ended); };
 module.exports.isErrored = function isErrored(stream) { return !!(stream && stream._readableState && stream._readableState.errored || stream && stream._writableState && stream._writableState.errored); };
 module.exports.destroy = function destroy(stream, err) {
-  const e = err || (() => { const a = new DOMException('The operation was aborted', 'AbortError'); a.name = 'AbortError'; return a; })();
-  process.nextTick(() => stream.destroy(e));
+  if (!err) { const a = new DOMException('The operation was aborted', 'AbortError'); a.name = 'AbortError'; err = a; }
+  stream.destroy(err);
 };
 module.exports.compose = compose;
 module.exports.addAbortSignal = function addAbortSignal(signal, stream) {

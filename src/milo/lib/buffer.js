@@ -410,11 +410,16 @@ class Buffer extends Uint8Array {
   get offset() { return this.byteOffset; }
 
   inspect(recurseTimes, ctx) {
+    const max = _exports.INSPECT_MAX_BYTES;
     const hex = [];
-    for (let i = 0; i < Math.min(this.length, 50); i++) hex.push(this[i].toString(16).padStart(2, '0'));
+    for (let i = 0; i < Math.min(this.length, max); i++) hex.push(this[i].toString(16).padStart(2, '0'));
     let str = hex.join(' ');
-    if (this.length > 50) str += ' ... ' + (this.length - 50) + ' more bytes';
+    if (this.length > max) str += ' ... ' + (this.length - max) + ' more bytes';
     return '<Buffer ' + str + '>';
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](recurseTimes, ctx) {
+    return this.inspect(recurseTimes, ctx);
   }
 
   toJSON() { return { type: 'Buffer', data: Array.from(this) }; }
@@ -793,10 +798,12 @@ function isUtf8(input) {
   return true;
 }
 
-module.exports = {
+const _exports = {
   Buffer, SlowBuffer, kMaxLength: 2 ** 31 - 1, kStringMaxLength: 2 ** 28 - 16,
+  INSPECT_MAX_BYTES: 50,
   isAscii, isUtf8,
   constants: { MAX_LENGTH: 2 ** 31 - 1, MAX_STRING_LENGTH: 2 ** 28 - 16 },
   atob: globalThis.atob, btoa: globalThis.btoa,
   File: globalThis.File, Blob: globalThis.Blob,
 };
+module.exports = _exports;

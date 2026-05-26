@@ -179,7 +179,40 @@ process._emitExit = function() {
 };
 Object.defineProperty(globalThis, '__runExitHandlers', { value: function() { process._emitExit(); }, enumerable: false });
 if (!process.abort) process.abort = () => { process.exit(134); };
-if (!process.binding) process.binding = (name) => { throw new Error('process.binding is not supported'); };
+if (!process.binding) process.binding = (name) => {
+  if (name === 'util') {
+    return {
+      isArrayBuffer: (v) => v instanceof ArrayBuffer,
+      isArrayBufferView: (v) => ArrayBuffer.isView(v),
+      isAnyArrayBuffer: (v) => v instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer),
+      isDataView: (v) => v instanceof DataView,
+      isDate: (v) => v instanceof Date,
+      isMap: (v) => v instanceof Map,
+      isMapIterator: () => false,
+      isSet: (v) => v instanceof Set,
+      isSetIterator: () => false,
+      isRegExp: (v) => v instanceof RegExp,
+      isPromise: (v) => v instanceof Promise,
+      isNativeError: (v) => v instanceof Error,
+      isTypedArray: (v) => ArrayBuffer.isView(v) && !(v instanceof DataView),
+      isUint8Array: (v) => v instanceof Uint8Array,
+      isExternal: () => false,
+      isAsyncFunction: (v) => typeof v === 'function' && v.constructor && v.constructor.name === 'AsyncFunction',
+      isGeneratorFunction: (v) => typeof v === 'function' && v.constructor && v.constructor.name === 'GeneratorFunction',
+      isGeneratorObject: (v) => v != null && typeof v.next === 'function' && typeof v.throw === 'function',
+      isWeakMap: (v) => v instanceof WeakMap,
+      isWeakSet: (v) => v instanceof WeakSet,
+      isNumberObject: (v) => typeof v === 'object' && v !== null && v instanceof Number,
+      isStringObject: (v) => typeof v === 'object' && v !== null && v instanceof String,
+      isBooleanObject: (v) => typeof v === 'object' && v !== null && v instanceof Boolean,
+      isSymbolObject: (v) => typeof v === 'object' && v !== null && typeof Object.valueOf.call(v) === 'symbol',
+      isBigIntObject: (v) => typeof v === 'object' && v !== null && typeof Object.valueOf.call(v) === 'bigint',
+      isProxy: () => false,
+      isModuleNamespaceObject: () => false,
+    };
+  }
+  throw new Error('process.binding is not supported');
+};
 
 const _osB = internalBinding('os');
 if (!process.getuid) process.getuid = () => _osB.getUid();

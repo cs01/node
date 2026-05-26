@@ -575,8 +575,35 @@ function get(url, options, cb) {
 }
 
 const Agent_class = class Agent {
-  constructor(opts) { this.maxSockets = (opts && opts.maxSockets) || Infinity; }
-  destroy() {}
+  constructor(opts) {
+    opts = opts || {};
+    this.maxSockets = opts.maxSockets || Infinity;
+    this.maxFreeSockets = opts.maxFreeSockets || 256;
+    this.maxTotalSockets = opts.maxTotalSockets || Infinity;
+    this.keepAlive = opts.keepAlive || false;
+    this.keepAliveMsecs = opts.keepAliveMsecs || 1000;
+    this.timeout = opts.timeout;
+    this.scheduling = opts.scheduling || 'lifo';
+    this.requests = {};
+    this.sockets = {};
+    this.freeSockets = {};
+    this.totalSocketCount = 0;
+    this.options = opts;
+  }
+  getName(options) {
+    let name = options.host || 'localhost';
+    if (options.port) name += ':' + options.port;
+    if (options.localAddress) name += ':' + options.localAddress;
+    return name;
+  }
+  createConnection(options, cb) {
+    const net = require('net');
+    const s = net.createConnection(options);
+    if (cb) s.once('connect', cb);
+    return s;
+  }
+  addRequest(req, options) {}
+  destroy() { this.sockets = {}; this.freeSockets = {}; this.requests = {}; }
 };
 
 const METHODS = ['GET','HEAD','POST','PUT','DELETE','CONNECT','OPTIONS','TRACE','PATCH'];

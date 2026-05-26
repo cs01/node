@@ -36,6 +36,14 @@ const types = {
   isNumberObject: (v) => Object.prototype.toString.call(v) === '[object Number]' && typeof v === 'object',
   isBooleanObject: (v) => Object.prototype.toString.call(v) === '[object Boolean]' && typeof v === 'object',
   isSymbolObject: (v) => Object.prototype.toString.call(v) === '[object Symbol]' && typeof v === 'object',
+  isBigIntObject: (v) => Object.prototype.toString.call(v) === '[object BigInt]' && typeof v === 'object',
+  isAnyArrayBuffer: (v) => v instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer),
+  isSharedArrayBuffer: (v) => typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer,
+  isModuleNamespaceObject: () => false,
+  isArgumentsObject: (v) => Object.prototype.toString.call(v) === '[object Arguments]',
+  isBoxedPrimitive: (v) => v instanceof Number || v instanceof String || v instanceof Boolean || (typeof Symbol !== 'undefined' && Object.prototype.toString.call(v) === '[object Symbol]' && typeof v === 'object') || (typeof BigInt !== 'undefined' && Object.prototype.toString.call(v) === '[object BigInt]' && typeof v === 'object'),
+  isCryptoKey: () => false,
+  isKeyObject: () => false,
 };
 
 function inspect(obj, opts) {
