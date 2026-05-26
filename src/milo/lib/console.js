@@ -21,8 +21,10 @@ class Console {
 
   log(...args) {
     const msg = this._groupIndent + args.map(a => typeof a === 'object' && a !== null ? inspect(a) : String(a)).join(' ') + '\n';
-    if (this._stdout && this._stdout.write) this._stdout.write(msg);
-    else internalBinding('_console').write(msg);
+    try {
+      if (this._stdout && this._stdout.write) this._stdout.write(msg);
+      else internalBinding('_console').write(msg);
+    } catch {}
   }
 
   info(...args) { this.log(...args); }
@@ -31,8 +33,10 @@ class Console {
 
   error(...args) {
     const msg = this._groupIndent + args.map(a => typeof a === 'object' && a !== null ? inspect(a) : String(a)).join(' ') + '\n';
-    if (this._stderr && this._stderr.write) this._stderr.write(msg);
-    else internalBinding('_console').writeError(msg);
+    try {
+      if (this._stderr && this._stderr.write) this._stderr.write(msg);
+      else internalBinding('_console').writeError(msg);
+    } catch {}
   }
 
   warn(...args) { this.error(...args); }

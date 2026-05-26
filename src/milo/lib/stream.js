@@ -198,6 +198,15 @@ class Readable extends Stream {
 
   addListener(ev, fn) { return this.on(ev, fn); }
 
+  removeListener(ev, fn) {
+    super.removeListener(ev, fn);
+    if (ev === 'readable' && this.listenerCount('readable') === 0) {
+      this._readableState.readableListening = false;
+      if (!this._readableState.flowing) this._readableState.flowing = null;
+    }
+    return this;
+  }
+
   setEncoding(enc) { this._readableState.encoding = enc || 'utf8'; return this; }
   resume() {
     const state = this._readableState;
