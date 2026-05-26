@@ -167,6 +167,10 @@ class Readable extends Stream {
         state._readableEmitScheduled = true;
         process.nextTick(() => { state._readableEmitScheduled = false; state.emittedReadable = true; this.emit('readable'); });
       }
+      if (state.length <= state.highWaterMark && !state.ended && !state.reading) {
+        state.reading = true;
+        process.nextTick(() => { state.reading = false; if (state.flowing && !state.ended) this._flow(); });
+      }
     } else {
       state.buffer.push(chunk);
       state.length += chunk.length || 1;

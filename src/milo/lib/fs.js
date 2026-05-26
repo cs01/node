@@ -567,6 +567,9 @@ function symlink(target, path, type, cb) {
 }
 function write(fd, buffer, offset, length, position, cb) {
   if (fd == null || typeof fd !== 'number') throw new TypeError('The "fd" argument must be of type number. Received ' + typeof fd);
+  if (offset != null && typeof offset === 'object') {
+    cb = length; ({ offset = 0, length = buffer.length - offset, position = null } = offset);
+  }
   if (typeof offset === 'function') { cb = offset; offset = 0; length = buffer.length; position = null; }
   if (typeof length === 'function') { cb = length; length = buffer.length - offset; position = null; }
   if (typeof position === 'function') { cb = position; position = null; }
