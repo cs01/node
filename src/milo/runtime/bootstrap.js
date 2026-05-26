@@ -925,29 +925,59 @@
         } else if (id === 'internal/options') {
           stub = { getOptionValue: (name) => { if (name === '--insecure-http-parser') return false; if (name === '--use-env-proxy') return false; if (name === '--force-fips') return false; if (name === '--enable-source-maps') return false; if (name === '--pending-deprecation') return false; return undefined; } };
         } else if (id === 'internal/validators') {
-          const _throwType = (name, type) => { const e = new TypeError(`The "${name}" argument must be of type ${type}`); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; };
+          const _throwType = (name, type, actual) => {
+            let r; if (actual == null) r = String(actual); else if (typeof actual === 'object') r = 'an instance of ' + (actual.constructor?.name || 'Object'); else r = 'type ' + typeof actual + ' (' + String(actual) + ')';
+            const e = new TypeError(`The "${name}" argument must be of type ${type}. Received ${r}`); e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+          };
+          const _throwRange = (name, range, actual) => { const e = new RangeError(`The value of "${name}" is out of range. It must be ${range}. Received ${actual}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; };
+          const kNone = 0, kNullable = 1, kAllowArray = 2, kAllowFunction = 4;
           stub = {
-            validateFunction: (v, name) => { if (typeof v !== 'function') _throwType(name, 'function'); },
-            validateString: (v, name) => { if (typeof v !== 'string') _throwType(name, 'string'); },
-            validateNumber: (v, name) => { if (typeof v !== 'number') _throwType(name, 'number'); },
-            validateBoolean: (v, name) => { if (typeof v !== 'boolean') _throwType(name, 'boolean'); },
-            validateObject: (v, name) => { if (v === null || typeof v !== 'object') _throwType(name, 'object'); },
-            validateArray: (v, name) => { if (!Array.isArray(v)) _throwType(name, 'Array'); },
-            validateInt32: (v, name) => { if (typeof v !== 'number' || v !== (v | 0)) _throwType(name, 'int32'); },
-            validateUint32: (v, name) => { if (typeof v !== 'number' || v < 0 || v > 0xFFFFFFFF || v !== (v >>> 0)) _throwType(name, 'uint32'); },
-            validateInteger: (v, name) => { if (typeof v !== 'number' || !Number.isInteger(v)) _throwType(name, 'integer'); },
-            validateBuffer: (v, name) => { if (!Buffer.isBuffer(v)) _throwType(name, 'Buffer'); },
-            validateEncoding: (v, name) => { if (typeof v !== 'string') _throwType(name, 'string'); },
+            validateFunction: (v, name) => { if (typeof v !== 'function') _throwType(name, 'function', v); },
+            validateString: (v, name) => { if (typeof v !== 'string') _throwType(name, 'string', v); },
+            validateNumber: (v, name, min, max) => {
+              if (typeof v !== 'number') _throwType(name, 'number', v);
+              if ((min != null && v < min) || (max != null && v > max) || Number.isNaN(v)) _throwRange(name, `>= ${min != null ? min : '-Infinity'} && <= ${max != null ? max : 'Infinity'}`, v);
+            },
+            validateBoolean: (v, name) => { if (typeof v !== 'boolean') _throwType(name, 'boolean', v); },
+            validateObject: (v, name, options) => {
+              const flags = options || 0;
+              if (v === null && !(flags & kNullable)) _throwType(name, 'Object', v);
+              if (Array.isArray(v) && !(flags & kAllowArray)) _throwType(name, 'Object', v);
+              if (typeof v === 'function' && !(flags & kAllowFunction)) _throwType(name, 'Object', v);
+              if (typeof v !== 'object' && typeof v !== 'function') _throwType(name, 'Object', v);
+            },
+            validateArray: (v, name) => { if (!Array.isArray(v)) _throwType(name, 'Array', v); },
+            validateInt32: (v, name, min, max) => {
+              if (typeof v !== 'number') _throwType(name, 'number', v);
+              if (!Number.isInteger(v)) _throwRange(name, 'an integer', v);
+              min = min ?? -2147483648; max = max ?? 2147483647;
+              if (v < min || v > max) _throwRange(name, `>= ${min} && <= ${max}`, v);
+            },
+            validateUint32: (v, name, positive) => {
+              if (typeof v !== 'number') _throwType(name, 'number', v);
+              if (!Number.isInteger(v)) _throwRange(name, 'an integer', v);
+              const min = positive ? 1 : 0;
+              if (v < min || v > 4294967295) _throwRange(name, `>= ${min} && <= 4294967295`, v);
+            },
+            validateInteger: (v, name, min, max) => {
+              if (typeof v !== 'number') _throwType(name, 'number', v);
+              if (!Number.isInteger(v)) _throwRange(name, 'an integer', v);
+              if (min == null) min = Number.MIN_SAFE_INTEGER; if (max == null) max = Number.MAX_SAFE_INTEGER;
+              if (v < min || v > max) _throwRange(name, `>= ${min} && <= ${max}`, v);
+            },
+            validateBuffer: (v, name) => { if (!Buffer.isBuffer(v)) _throwType(name, 'Buffer', v); },
+            validateEncoding: (v, name) => { if (typeof v !== 'string') _throwType(name, 'string', v); },
             validatePort: (v, name) => { if (typeof v !== 'number' || v < 0 || v > 65535) { const e = new RangeError(`${name || 'port'} should be >= 0 and < 65536`); e.code = 'ERR_SOCKET_BAD_PORT'; throw e; } return v | 0; },
             validateAbortSignal: () => {},
             validateOneOf: (v, name, oneOf) => { if (!oneOf.includes(v)) { const e = new TypeError(`${name} must be one of: ${oneOf.join(', ')}`); e.code = 'ERR_INVALID_ARG_VALUE'; throw e; } },
-            validateSignalName: (v) => { if (typeof v !== 'string') _throwType('signal', 'string'); },
-            validatePlainFunction: (v, name) => { if (typeof v !== 'function') _throwType(name, 'function'); },
-            validateUndefined: (v, name) => { if (v !== undefined) _throwType(name, 'undefined'); },
+            validateSignalName: (v) => { if (typeof v !== 'string') _throwType('signal', 'string', v); },
+            validatePlainFunction: (v, name) => { if (typeof v !== 'function') _throwType(name, 'function', v); },
+            validateUndefined: (v, name) => { if (v !== undefined) _throwType(name, 'undefined', v); },
+            validateLinkHeaderValue: (v) => { if (typeof v !== 'object' || v === null) _throwType('value', 'Object', v); },
             isInt32: (v) => typeof v === 'number' && v === (v | 0),
             isUint32: (v) => typeof v === 'number' && v === (v >>> 0),
-            kValidateObjectNone: 0, kValidateObjectAllowNullable: 1, kValidateObjectAllowArray: 2,
-            kValidateObjectAllowFunction: 4, kValidateObjectAllowObjects: 6, kValidateObjectAllowObjectsAndNull: 7,
+            kValidateObjectNone: kNone, kValidateObjectAllowNullable: kNullable, kValidateObjectAllowArray: kAllowArray,
+            kValidateObjectAllowFunction: kAllowFunction, kValidateObjectAllowObjects: kAllowArray | kAllowFunction, kValidateObjectAllowObjectsAndNull: kNullable | kAllowArray | kAllowFunction,
           };
         } else if (id === 'internal/fs/utils') {
           function validateRmOptionsSync(path, options) {

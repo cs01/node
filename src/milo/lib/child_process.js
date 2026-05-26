@@ -4,6 +4,10 @@
 const EventEmitter = require('events');
 const b = internalBinding('spawn');
 
+// Fork bomb guard: track spawn depth, kill if too deep
+const _SPAWN_DEPTH = parseInt(process.env._MILO_SPAWN_DEPTH || '0', 10);
+const _MAX_SPAWN_DEPTH = 8;
+
 function normalizeArgs(cmd, args, opts) {
   if (typeof args === 'object' && !Array.isArray(args)) { opts = args; args = []; }
   return { args: args || [], opts: opts || {} };
@@ -31,12 +35,26 @@ function parseStdio(opts) {
   return [0, 0, 0];
 }
 
+function _injectDepth(opts) {
+  const env = opts.env ? { ...opts.env } : { ...process.env };
+  env._MILO_SPAWN_DEPTH = String(_SPAWN_DEPTH + 1);
+  return env;
+}
+
 function spawnSync(file, args, options) {
   const { args: a, opts } = normalizeArgs(file, args, options);
+  if (_SPAWN_DEPTH >= _MAX_SPAWN_DEPTH) {
+    return { status: 1, signal: null, stdout: '', stderr: 'spawn depth exceeded\n', error: new Error('spawn depth limit exceeded') };
+  }
+  // Propagate depth counter to child via env
+  const savedDepth = process.env._MILO_SPAWN_DEPTH;
+  process.env._MILO_SPAWN_DEPTH = String(_SPAWN_DEPTH + 1);
   const allArgs = a;
   const input = opts.input != null ? String(opts.input) : undefined;
   const [stdinMode, stdoutMode, stderrMode] = parseStdio(opts);
-  const result = b.spawnSync(file, allArgs, input, stdinMode, stdoutMode, stderrMode);
+  let result;
+  try { result = b.spawnSync(file, allArgs, input, stdinMode, stdoutMode, stderrMode); }
+  finally { if (savedDepth !== undefined) process.env._MILO_SPAWN_DEPTH = savedDepth; else delete process.env._MILO_SPAWN_DEPTH; }
   if (result.error) {
     const err = new Error('spawnSync ' + file + ' ENOENT');
     err.code = 'ENOENT';
@@ -98,6 +116,12 @@ function spawn(file, args, options) {
   child.signalCode = null;
   child.killed = false;
   child.connected = false;
+
+  if (_SPAWN_DEPTH >= _MAX_SPAWN_DEPTH) {
+    child.pid = 0; child.stdin = null; child.stdout = null; child.stderr = null;
+    process.nextTick(() => child.emit('error', new Error('spawn depth limit exceeded')));
+    return child;
+  }
 
   const result = b.spawnAsync(file, a, stdinMode, stdoutMode, stderrMode);
   if (!result || result === -1) {
