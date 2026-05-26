@@ -18,8 +18,10 @@ process.emitWarning = (warning, typeOrOptions, code, ctor) => {
   let msg;
   if (warning instanceof Error) { msg = warning; }
   else { msg = new Error(warning); msg.name = type; if (code) msg.code = code; }
-  if (process.listenerCount && process.listenerCount('warning') > 0) process.emit('warning', msg);
-  else console.error(`${type}: ${typeof warning === 'string' ? warning : warning.message}`);
+  process.nextTick(() => {
+    console.error(`(${msg.name}) ${msg.message}`);
+    process.emit('warning', msg);
+  });
 };
 
 const _envB = internalBinding('env');
@@ -167,6 +169,10 @@ process.exit = function(code) {
   _nativeExit(exitCode);
 };
 // Called by runtime before normal program completion (via __runExitHandlers global)
+process._emitBeforeExit = function() {
+  const code = process.exitCode || 0;
+  try { process.emit('beforeExit', code); } catch {}
+};
 process._emitExit = function() {
   const code = process.exitCode || 0;
   if (!process._exiting) {

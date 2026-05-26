@@ -350,7 +350,7 @@ class ClientRequest extends EventEmitter {
     this._body = [];
     this.method = (options.method || 'GET').toUpperCase();
     this.path = options.path || '/';
-    if (typeof this.path === 'string' && /[^\x20-\x7e]/.test(this.path)) throw _ERR_UNESCAPED_CHARACTERS('Request path');
+    if (typeof this.path === 'string' && /[\x00-\x20\x7f-\xff]/.test(this.path)) throw _ERR_UNESCAPED_CHARACTERS('Request path');
     this.host = options.hostname || options.host || 'localhost';
     this.protocol = options.protocol || 'http:';
     this.socket = null;

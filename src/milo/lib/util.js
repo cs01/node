@@ -185,12 +185,17 @@ function deprecate(fn, msg, code) {
 }
 
 function promisify(fn) {
-  return function(...args) {
+  if (typeof fn !== 'function') { const e = new TypeError('The "original" argument must be of type Function'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+  if (fn[promisify.custom]) return fn[promisify.custom];
+  const promisified = function(...args) {
     return new Promise((resolve, reject) => {
-      fn(...args, (err, result) => err ? reject(err) : resolve(result));
+      fn.call(this, ...args, (err, ...vals) => err ? reject(err) : resolve(vals.length > 1 ? vals : vals[0]));
     });
   };
+  Object.defineProperty(promisified, 'name', { value: fn.name });
+  return promisified;
 }
+promisify.custom = Symbol.for('nodejs.util.promisify.custom');
 
 function callbackify(fn) {
   return function(...args) {

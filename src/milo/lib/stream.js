@@ -95,6 +95,7 @@ class Readable extends Stream {
     if (opts && opts.encoding) this.setEncoding(opts.encoding);
     if (opts && opts.defaultEncoding !== undefined) {
       if (!Buffer.isEncoding(opts.defaultEncoding)) throw _ERR_UNKNOWN_ENCODING(opts.defaultEncoding);
+      this._readableState.defaultEncoding = opts.defaultEncoding;
     }
     if (opts && opts.read) this._read = opts.read;
     if (opts && opts.destroy) this._destroy = opts.destroy;
@@ -159,9 +160,13 @@ class Readable extends Stream {
       process.nextTick(() => this.emit('error', err));
       return false;
     }
-    if (!state.objectMode && typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
+    if (!state.objectMode && typeof chunk === 'string') chunk = Buffer.from(chunk, encoding || state.defaultEncoding);
     if (state.flowing) {
       this.emit('data', chunk);
+      if (state.readableListening && !state._readableEmitScheduled) {
+        state._readableEmitScheduled = true;
+        process.nextTick(() => { state._readableEmitScheduled = false; state.emittedReadable = true; this.emit('readable'); });
+      }
     } else {
       state.buffer.push(chunk);
       state.length += chunk.length || 1;

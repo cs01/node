@@ -5,10 +5,18 @@
 const _stores = new Map();
 
 class AsyncLocalStorage {
-  constructor() {
+  constructor(opts) {
+    if (opts !== undefined && (typeof opts !== 'object' || opts === null)) {
+      const e = new TypeError('The "options" argument must be of type object'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
     this._id = AsyncLocalStorage._nextId++;
+    if (opts && 'defaultValue' in opts) {
+      this._defaultValue = opts.defaultValue;
+      this._hasDefault = true;
+    }
+    if (opts && opts.name !== undefined) this.name = opts.name;
   }
-  getStore() { return _stores.get(this._id); }
+  getStore() { return _stores.has(this._id) ? _stores.get(this._id) : (this._hasDefault ? this._defaultValue : undefined); }
   run(store, fn, ...args) {
     const prev = _stores.get(this._id);
     _stores.set(this._id, store);

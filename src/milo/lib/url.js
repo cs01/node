@@ -116,11 +116,20 @@ function fileURLToPath(u) {
 }
 
 function urlToHttpOptions(url) {
-  const u = typeof url === 'string' ? new URL(url) : url;
+  if (typeof url !== 'object' || url === null) {
+    const e = new TypeError(`The "url" argument must be of type object. Received type ${typeof url} (${typeof url === 'string' ? "'" + url + "'" : String(url)})`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  let hostname = url.hostname;
+  if (!hostname && url.href) {
+    const m = url.href.match(/\/\/\[([^\]]+)\]/);
+    if (m) hostname = m[1];
+  }
+  if (hostname && hostname.startsWith('[')) hostname = hostname.slice(1, -1);
   return {
-    protocol: u.protocol, hostname: u.hostname, port: u.port,
-    path: u.pathname + u.search, hash: u.hash,
-    auth: u.username ? u.username + (u.password ? ':' + u.password : '') : undefined,
+    protocol: url.protocol, hostname, port: url.port === '' ? undefined : Number(url.port),
+    path: (url.pathname || '') + (url.search || ''), pathname: url.pathname, search: url.search, hash: url.hash, href: url.href,
+    auth: url.username ? url.username + (url.password ? ':' + url.password : '') : undefined,
   };
 }
 

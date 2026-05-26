@@ -41,8 +41,15 @@ function _safeCall(fn, args) {
   }
 }
 
+let _negativeTimerWarned = false;
 globalThis.setTimeout = function(fn, delay, ...args) {
   if (typeof fn !== 'function') fn = Function(fn);
+  if (typeof delay === 'number' && delay < 0 && !_negativeTimerWarned) {
+    _negativeTimerWarned = true;
+    const w = new Error(`${delay} is a negative number.\nTimers in Node.js can not span more than 2147483647 ms (approximately 24.8 days).`);
+    w.name = 'TimeoutNegativeWarning';
+    process.emitWarning(w);
+  }
   const t = new Timeout(0, fn, delay, args, false);
   const wrapped = () => { _timerCallbacks.delete(t._id); _safeCall(fn, args); };
   t._id = _tb.schedule(wrapped, Math.max(0, delay || 0), 0);
@@ -108,7 +115,16 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     }
     const hasIO = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
     const hasTicks = process._nextTickQueue && process._nextTickQueue.length > 0;
-    if (!hasTimers && !hasIO && !hasTicks) break;
+    if (!hasTimers && !hasIO && !hasTicks) {
+      // Emit beforeExit — handlers may schedule new work
+      if (process._emitBeforeExit) process._emitBeforeExit();
+      if (process._tickCallback) process._tickCallback();
+      // Re-check if beforeExit handlers added work
+      const hasTimers2 = _tb.hasPending() && (() => { for (const id of _timerCallbacks.keys()) { if (!_unrefTimers.has(id)) return true; } return false; })();
+      const hasIO2 = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
+      const hasTicks2 = process._nextTickQueue && process._nextTickQueue.length > 0;
+      if (!hasTimers2 && !hasIO2 && !hasTicks2) break;
+    }
 
     let waitMs = 100;
     if (hasTimers) {

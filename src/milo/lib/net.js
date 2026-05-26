@@ -43,6 +43,11 @@ class Socket extends EventEmitter {
   }
 
   connect(port, host, cb) {
+    if (typeof port === 'object') {
+      const opts = port;
+      cb = typeof host === 'function' ? host : cb;
+      port = opts.port; host = opts.host || opts.hostname;
+    }
     if (typeof host === 'function') { cb = host; host = '127.0.0.1'; }
     if (!host) host = '127.0.0.1';
     if (cb) this.once('connect', cb);
@@ -211,8 +216,9 @@ class Server extends EventEmitter {
   }
 
   listen(port, host, backlog, cb) {
-    if (typeof port === 'object') {
-      // listen(opts, cb)
+    if (typeof port === 'function') {
+      cb = port; port = 0; host = '0.0.0.0'; backlog = 128;
+    } else if (typeof port === 'object' && port !== null) {
       cb = typeof host === 'function' ? host : cb;
       const opts = port;
       port = opts.port;
@@ -224,6 +230,15 @@ class Server extends EventEmitter {
     }
     if (!host) host = '0.0.0.0';
     if (!backlog) backlog = 128;
+    if (port !== undefined && port !== null && port !== '') {
+      port = +port;
+      if (Number.isNaN(port) || port !== (port >>> 0) || port > 65535) {
+        const e = new RangeError(`options.port should be >= 0 and < 65536. Received ${port}.`);
+        e.code = 'ERR_SOCKET_BAD_PORT'; throw e;
+      }
+    } else {
+      port = 0;
+    }
     if (cb) this.once('listening', cb);
 
     ensurePoll();
@@ -250,6 +265,8 @@ class Server extends EventEmitter {
     this._listening = true;
     tcp.pollAdd(this._fd, EVFILT_READ);
     Server._servers.set(this._fd, this);
+    const addr = this.address();
+    if (addr) this._connectionKey = `${addr.family === 'IPv6' ? '6' : '4'}:${addr.address}:${addr.port}`;
 
     // emit listening async like Node does
     process.nextTick(() => this.emit('listening'));
@@ -357,9 +374,9 @@ function createServer(options, connectionListener) {
   return new Server(options, connectionListener);
 }
 
-function connect(port, host, cb) {
+function connect(...args) {
   const sock = new Socket();
-  return sock.connect(port, host, cb);
+  return sock.connect(...args);
 }
 
 function isIP(s) {

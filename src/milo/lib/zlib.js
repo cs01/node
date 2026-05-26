@@ -47,6 +47,11 @@ class ZlibTransform extends Transform {
     this._mode = mode;
     this._chunks = [];
     this._opts = opts || {};
+    this._handle = {};
+  }
+  _destroy(err, cb) {
+    this._handle = null;
+    cb(err);
   }
   _transform(chunk, encoding, cb) {
     if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
