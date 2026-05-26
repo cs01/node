@@ -18,7 +18,7 @@
       UV_UDP_REUSEADDR: 4,
       dlopen: { RTLD_LAZY: 1, RTLD_NOW: 2, RTLD_GLOBAL: 8, RTLD_LOCAL: 4 },
     },
-    fs: { O_RDONLY:0, O_WRONLY:1, O_RDWR:2, O_CREAT:512, O_EXCL:2048, O_TRUNC:1024, O_APPEND:8, O_DIRECTORY:1048576, O_NOFOLLOW:256, O_SYNC:128, O_SYMLINK:2097152, O_NONBLOCK:4, S_IFMT:61440, S_IFREG:32768, S_IFDIR:16384, S_IFLNK:40960, S_IFCHR:8192, S_IFBLK:24576, S_IFIFO:4096, S_IFSOCK:49152, S_IRWXU:448, S_IRUSR:256, S_IWUSR:128, S_IXUSR:64, S_IRWXG:56, S_IRGRP:32, S_IWGRP:16, S_IXGRP:8, S_IRWXO:7, S_IROTH:4, S_IWOTH:2, S_IXOTH:1, F_OK:0, R_OK:4, W_OK:2, X_OK:1, UV_FS_COPYFILE_EXCL:1, UV_FS_COPYFILE_FICLONE:2, COPYFILE_EXCL:1, COPYFILE_FICLONE:2 },
+    fs: { O_RDONLY:0, O_WRONLY:1, O_RDWR:2, O_CREAT:512, O_EXCL:2048, O_TRUNC:1024, O_APPEND:8, O_DIRECTORY:1048576, O_NOFOLLOW:256, O_SYNC:128, O_DSYNC:0x400000, O_SYMLINK:2097152, O_NONBLOCK:4, S_IFMT:61440, S_IFREG:32768, S_IFDIR:16384, S_IFLNK:40960, S_IFCHR:8192, S_IFBLK:24576, S_IFIFO:4096, S_IFSOCK:49152, S_IRWXU:448, S_IRUSR:256, S_IWUSR:128, S_IXUSR:64, S_IRWXG:56, S_IRGRP:32, S_IWGRP:16, S_IXGRP:8, S_IRWXO:7, S_IROTH:4, S_IWOTH:2, S_IXOTH:1, F_OK:0, R_OK:4, W_OK:2, X_OK:1, UV_FS_COPYFILE_EXCL:1, UV_FS_COPYFILE_FICLONE:2, COPYFILE_EXCL:1, COPYFILE_FICLONE:2 },
   };
   const _types = {
     isDate: (v) => v instanceof Date, isMap: (v) => v instanceof Map, isSet: (v) => v instanceof Set,
@@ -989,7 +989,8 @@
             }
             return result;
           }
-          stub = { validateRmOptionsSync };
+          const fs = require('fs');
+          stub = { validateRmOptionsSync, stringToFlags: fs.stringToFlags };
         } else if (id === 'internal/util') {
           stub = {
             emitExperimentalWarning: (feature) => { process.emitWarning(`${feature} is an experimental feature`, 'ExperimentalWarning'); },
@@ -1198,5 +1199,27 @@
       set onmessage(fn) { if (this._onmessage) this.removeEventListener('message', this._onmessage); this._onmessage = fn; if (fn) this.addEventListener('message', fn); }
     }
     globalThis.BroadcastChannel = BroadcastChannel;
+  }
+})();
+
+// Node.js C++ sets up most globals as non-enumerable. Make ours match
+// so that test/common/index.js leakedGlobals() check passes.
+(function() {
+  const nonEnum = [
+    'internalBinding', 'getInternalBinding', 'primordials', 'require',
+    'process', 'Buffer', 'crypto',
+    'AbortSignal', 'DOMException', 'Event', 'EventTarget',
+    'URL', 'URLSearchParams', 'TextEncoder', 'TextDecoder',
+    'ReadableStream', 'WritableStream', 'TransformStream',
+    'ByteLengthQueuingStrategy', 'CountQueuingStrategy',
+    'Headers', 'Request', 'Response', 'Blob', 'File',
+    'PerformanceObserver', 'Navigator', 'navigator', 'CustomEvent',
+    'MessageEvent', 'MessageChannel', 'MessagePort', 'BroadcastChannel',
+  ];
+  for (const key of Object.getOwnPropertyNames(globalThis)) {
+    if (key.startsWith('_') || nonEnum.includes(key)) {
+      const desc = Object.getOwnPropertyDescriptor(globalThis, key);
+      if (desc && desc.enumerable) Object.defineProperty(globalThis, key, { ...desc, enumerable: false });
+    }
   }
 })();

@@ -3,6 +3,22 @@
 
 const b = internalBinding('fs');
 
+function _ERR_INVALID_ARG_TYPE(name, expected, actual) {
+  let actualStr;
+  if (actual == null) actualStr = String(actual);
+  else if (typeof actual === 'function') actualStr = 'function ' + (actual.name || '');
+  else if (typeof actual === 'object') actualStr = 'an instance of ' + (actual.constructor && actual.constructor.name || 'Object');
+  else {
+    let inspected = String(actual);
+    if (typeof actual === 'string') inspected = "'" + actual + "'";
+    if (inspected.length > 28) inspected = inspected.slice(0, 25) + '...';
+    actualStr = 'type ' + typeof actual + ' (' + inspected + ')';
+  }
+  const e = new TypeError(`The "${name}" argument must be of type ${expected}. Received ${actualStr}`);
+  e.code = 'ERR_INVALID_ARG_TYPE';
+  return e;
+}
+
 function _validatePath(p, name) {
   if (typeof p !== 'string' && !Buffer.isBuffer(p)) {
     if (p instanceof URL) {
@@ -27,11 +43,7 @@ function _validatePath(p, name) {
 }
 
 function _validateCallback(cb, name) {
-  if (typeof cb !== 'function') {
-    const err = new TypeError(`Callback must be a function. Received ${typeof cb === 'object' ? (cb === null ? 'null' : 'an instance of ' + (cb.constructor && cb.constructor.name || 'Object')) : 'type ' + typeof cb}`);
-    err.code = 'ERR_INVALID_ARG_TYPE';
-    throw err;
-  }
+  if (typeof cb !== 'function') throw _ERR_INVALID_ARG_TYPE(name || 'callback', 'function', cb);
 }
 
 function _validateFd(fd) {
@@ -163,13 +175,31 @@ function lstatSync(path) {
 }
 function readlinkSync(path) { _validatePath(path, 'path'); const sp = _toPath(path); return b.readlink ? b.readlink(sp) : sp; }
 // POSIX open flags
-const O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0x200, O_TRUNC = 0x400, O_APPEND = 0x8, O_EXCL = 0x800;
+const O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0x200, O_TRUNC = 0x400, O_APPEND = 0x8, O_EXCL = 0x800, O_SYNC = 0x80;
 const FLAG_MAP = {
-  'r': O_RDONLY, 'r+': O_RDWR, 'w': O_WRONLY | O_CREAT | O_TRUNC,
-  'w+': O_RDWR | O_CREAT | O_TRUNC, 'a': O_WRONLY | O_CREAT | O_APPEND,
-  'a+': O_RDWR | O_CREAT | O_APPEND, 'wx': O_WRONLY | O_CREAT | O_TRUNC | O_EXCL,
-  'ax': O_WRONLY | O_CREAT | O_APPEND | O_EXCL,
+  'r': O_RDONLY, 'r+': O_RDWR,
+  'rs+': O_RDWR | O_SYNC, 'sr+': O_RDWR | O_SYNC,
+  'w': O_WRONLY | O_CREAT | O_TRUNC, 'w+': O_RDWR | O_CREAT | O_TRUNC,
+  'a': O_WRONLY | O_CREAT | O_APPEND, 'a+': O_RDWR | O_CREAT | O_APPEND,
+  'wx': O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, 'xw': O_WRONLY | O_CREAT | O_TRUNC | O_EXCL,
+  'wx+': O_RDWR | O_CREAT | O_TRUNC | O_EXCL, 'xw+': O_RDWR | O_CREAT | O_TRUNC | O_EXCL,
+  'ax': O_WRONLY | O_CREAT | O_APPEND | O_EXCL, 'xa': O_WRONLY | O_CREAT | O_APPEND | O_EXCL,
+  'as': O_WRONLY | O_CREAT | O_APPEND | O_SYNC, 'sa': O_WRONLY | O_CREAT | O_APPEND | O_SYNC,
+  'ax+': O_RDWR | O_CREAT | O_APPEND | O_EXCL, 'xa+': O_RDWR | O_CREAT | O_APPEND | O_EXCL,
+  'as+': O_RDWR | O_CREAT | O_APPEND | O_SYNC, 'sa+': O_RDWR | O_CREAT | O_APPEND | O_SYNC,
 };
+
+function stringToFlags(flags) {
+  if (typeof flags === 'number') return flags;
+  if (typeof flags !== 'string') {
+    const e = new TypeError(`The "flags" argument must be of type number. Received type ${typeof flags} (${String(flags)})`);
+    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+  }
+  const f = FLAG_MAP[flags];
+  if (f !== undefined) return f;
+  const e = new TypeError(`The argument 'flags' is invalid. Received '${flags}'`);
+  e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+}
 
 function openSync(path, flags, mode) {
   _validatePath(path, 'path');
@@ -180,7 +210,7 @@ function openSync(path, flags, mode) {
   return fd;
 }
 
-function closeSync(fd) { b.close(fd); }
+function closeSync(fd) { _validateFd(fd); b.close(fd); }
 
 function fstatSync(fd) {
   const result = b.fstat(fd);
@@ -338,10 +368,7 @@ function createWriteStream(path, opts) {
 
 // Async callback wrappers — run sync on next tick to match Node.js API shape
 function _validateCb(cb) {
-  if (typeof cb !== 'function') {
-    const e = new TypeError('Callback must be a function. Received ' + typeof cb);
-    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
-  }
+  if (typeof cb !== 'function') throw _ERR_INVALID_ARG_TYPE('callback', 'function', cb);
 }
 function _async(syncFn, args, cb) {
   _validateCb(cb);
@@ -437,8 +464,8 @@ function fdatasyncSync(fd) { _validateFd(fd); b.fdatasync(fd); }
 function ftruncateSync(fd, len) { _validateFd(fd); b.ftruncate(fd, len || 0); }
 function fchmodSync(fd, mode) { _validateFd(fd); mode = _validateMode(mode, 'mode'); b.fchmod(fd, mode); }
 
-function fsync(fd, cb) { _async(fsyncSync, [fd], (err) => cb(err)); }
-function fdatasync(fd, cb) { _async(fdatasyncSync, [fd], (err) => cb(err)); }
+function fsync(fd, cb) { _validateFd(fd); _validateCb(cb); _async(fsyncSync, [fd], (err) => cb(err)); }
+function fdatasync(fd, cb) { _validateFd(fd); _validateCb(cb); _async(fdatasyncSync, [fd], (err) => cb(err)); }
 function ftruncate(fd, len, cb) {
   if (typeof len === 'function') { cb = len; len = 0; }
   _async(ftruncateSync, [fd, len], (err) => cb(err));
@@ -452,7 +479,17 @@ function open(path, flags, mode, cb) {
   _async(openSync, [path, flags, mode], cb);
 }
 
-function close(fd, cb) { _async(closeSync, [fd], (err) => cb(err)); }
+function close(fd, cb) {
+  _validateFd(fd);
+  if (cb !== undefined && typeof cb !== 'function') {
+    throw _ERR_INVALID_ARG_TYPE('callback', 'function', cb);
+  }
+  if (typeof cb === 'function') {
+    _async(closeSync, [fd], (err) => cb(err));
+  } else {
+    process.nextTick(() => { try { closeSync(fd); } catch {} });
+  }
+}
 
 function read(fd, buffer, offset, length, position, cb) {
   if (typeof position === 'function') { cb = position; position = null; }
@@ -722,6 +759,6 @@ module.exports = {
   createReadStream, createWriteStream,
   ReadStream: createReadStream, WriteStream: createWriteStream,
   watch, watchFile, unwatchFile, FSWatcher, Dirent,
-  promises, assertEncoding,
+  promises, assertEncoding, stringToFlags,
   constants: internalBinding('constants').fs,
 };

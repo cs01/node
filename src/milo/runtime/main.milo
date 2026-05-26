@@ -783,6 +783,15 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         if fileBuf as i64 != 0 {
             free(fileBuf)
         }
+
+        // Emit process 'exit' event before V8 teardown
+        let emitExit = ctx.objectGet(global, "__runExitHandlers" as *u8)
+        if emitExit.slot >= 0 {
+            let undef = iso.undefined()
+            v8c_function_call(ctxPtr, emitExit.slot, undef.slot, 0, 0 as *i32)
+            v8c_isolate_run_microtasks(isoPtr)
+        }
+
         v8c_context_exit(ctxPtr)
         v8c_handle_scope_delete(hs)
         v8c_context_dispose(ctxPtr)

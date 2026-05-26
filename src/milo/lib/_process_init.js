@@ -126,6 +126,29 @@ if (!process.argv0) process.argv0 = process.argv[0] || '';
 if (!process.execArgv) process.execArgv = [];
 if (!process.allowedNodeEnvironmentFlags) process.allowedNodeEnvironmentFlags = new Set();
 if (!process.kill) process.kill = () => {};
+// Wrap process.exit to emit 'exit' event before native exit
+const _nativeExit = process.exit;
+process.exit = function(code) {
+  if (code !== undefined) process.exitCode = code;
+  const exitCode = process.exitCode || 0;
+  if (!process._exiting) {
+    process._exiting = true;
+    try { process.emit('exit', exitCode); } catch {}
+  }
+  _nativeExit(exitCode);
+};
+// Called by runtime before normal program completion (via __runExitHandlers global)
+process._emitExit = function() {
+  const code = process.exitCode || 0;
+  if (!process._exiting) {
+    process._exiting = true;
+    try { process.emit('exit', code); } catch (e) {
+      if (e && e.code === 'ERR_ASSERTION') { process.exitCode = 1; _nativeExit(1); }
+    }
+    if (process.exitCode && process.exitCode !== 0) _nativeExit(process.exitCode);
+  }
+};
+Object.defineProperty(globalThis, '__runExitHandlers', { value: function() { process._emitExit(); }, enumerable: false });
 if (!process.abort) process.abort = () => { process.exit(134); };
 if (!process.binding) process.binding = (name) => { throw new Error('process.binding is not supported'); };
 
@@ -218,4 +241,24 @@ if (!process.resourceUsage) process.resourceUsage = () => ({ userCPUTime: 0, sys
     ref() { ipcObj._unref = false; },
     unref() { ipcObj._unref = true; }
   };
+})();
+
+// Make internal globals non-enumerable (Node.js C++ sets these up as non-enumerable;
+// tests check for leaked enumerable globals)
+(function() {
+  const internal = [
+    'internalBinding', 'getInternalBinding', '__loadBuiltin', '__libDir',
+    'primordials', '_requireStack', '_makeRequire', 'require',
+    '__eventLoopUtilization', '__ref', '__unref', '__hasIO',
+    '_ERR_INVALID_ARG_TYPE', '_ERR_INVALID_ARG_VALUE', '_ERR_OUT_OF_RANGE',
+    '_ERR_BUFFER_OUT_OF_BOUNDS', '_ERR_UNKNOWN_ENCODING', '_ERR_UNESCAPED_CHARACTERS',
+    '_ERR_METHOD_NOT_IMPLEMENTED', '_ERR_MISSING_ARGS',
+    'process', 'Buffer',
+  ];
+  for (const key of internal) {
+    if (key in globalThis) {
+      const desc = Object.getOwnPropertyDescriptor(globalThis, key);
+      if (desc && desc.enumerable) Object.defineProperty(globalThis, key, { ...desc, enumerable: false });
+    }
+  }
 })();

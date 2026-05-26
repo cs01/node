@@ -85,7 +85,7 @@ let _eluIdleMs = 0;
 let _eluActiveMs = 0;
 const _now = Date.now;
 
-globalThis.__runEventLoop = function() {
+Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEventLoop() {
   let net = null;
   try { net = require('net'); } catch {}
   const poll = net && net._pollOnce;
@@ -127,19 +127,19 @@ globalThis.__runEventLoop = function() {
     _eluIdleMs += _now() - pollStart;
     if (process._tickCallback) process._tickCallback();
   }
-};
+}, enumerable: false });
 
-globalThis.__eventLoopUtilization = function() {
+Object.defineProperty(globalThis, '__eventLoopUtilization', { value: function() {
   const total = _eluIdleMs + _eluActiveMs;
   return { idle: _eluIdleMs, active: _eluActiveMs, utilization: total > 0 ? _eluActiveMs / total : 0 };
-};
+}, enumerable: false });
 
-// Ref counter for keeping event loop alive (e.g., async iterators, pending promises)
+// Ref counter for keeping event loop alive
 let _activeRefs = 0;
-globalThis.__ref = function() { _activeRefs++; };
-globalThis.__unref = function() { _activeRefs--; };
+Object.defineProperty(globalThis, '__ref', { value: function() { _activeRefs++; }, enumerable: false });
+Object.defineProperty(globalThis, '__unref', { value: function() { _activeRefs--; }, enumerable: false });
 
-globalThis.__hasIO = function() {
+Object.defineProperty(globalThis, '__hasIO', { value: function() {
   if (_activeRefs > 0) return true;
   try {
     const net = require('net');
@@ -156,4 +156,4 @@ globalThis.__hasIO = function() {
     }
     return false;
   } catch { return false; }
-};
+}, enumerable: false });
