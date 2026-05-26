@@ -31,9 +31,7 @@ function _validatePath(p, name) {
       }
       return;
     }
-    const err = new TypeError(`The "${name || 'path'}" argument must be of type string or an instance of Buffer or URL. Received ${typeof p === 'object' ? (p === null ? 'null' : 'an instance of ' + (p.constructor && p.constructor.name || 'Object')) : 'type ' + typeof p} (${String(p)})`);
-    err.code = 'ERR_INVALID_ARG_TYPE';
-    throw err;
+    throw _ERR_INVALID_ARG_TYPE(name || 'path', 'string or an instance of Buffer or URL', p);
   }
   if (typeof p === 'string' && p.indexOf('\0') !== -1) {
     const err = new TypeError('The "path" argument must be of type string without null bytes. Received ' + JSON.stringify(p));
@@ -180,7 +178,9 @@ function readdirSync(path, opts) {
   return entries;
 }
 function realpathSync(path) { _validatePath(path, 'path'); return b.realpath(_toPath(path)); }
-function chmodSync(path, mode) { _validatePath(path, 'path'); b.chmod(_toPath(path), mode); }
+function chmodSync(path, mode) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); b.chmod(_toPath(path), mode); }
+function lchmodSync(path, mode) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); b.lchmod ? b.lchmod(_toPath(path), mode) : b.chmod(_toPath(path), mode); }
+function lchmod(path, mode, cb) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); _validateCb(cb); _async(lchmodSync, [path, mode], (err) => cb(err)); }
 function symlinkSync(target, path) { _validatePath(target, 'target'); _validatePath(path, 'path'); b.symlink(_toPath(target), _toPath(path)); }
 function lstatSync(path) {
   _validatePath(path, 'path');
@@ -497,6 +497,9 @@ function exists(path, cb) {
   if (typeof cb !== 'function') throw _ERR_INVALID_ARG_TYPE('cb', 'function', cb);
   process.nextTick(() => { try { cb(existsSync(path)); } catch { cb(false); } });
 }
+exists[Symbol.for('nodejs.util.promisify.custom')] = function(path) {
+  return new Promise((resolve) => exists(path, resolve));
+};
 
 function linkSync(existingPath, newPath) {
   _validatePath(existingPath, 'existingPath');
@@ -547,6 +550,13 @@ function read(fd, buffer, offset, length, position, cb) {
     process.nextTick(() => cb(null, n, buffer));
   } catch (e) { process.nextTick(() => cb(e)); }
 }
+read[Symbol.for('nodejs.util.promisify.custom')] = function(fd, buffer, offset, length, position) {
+  return new Promise((resolve, reject) => {
+    read(fd, buffer, offset, length, position, (err, bytesRead, buf) => {
+      if (err) reject(err); else resolve({ bytesRead, buffer: buf });
+    });
+  });
+};
 
 function fstat(fd, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
@@ -578,6 +588,13 @@ function write(fd, buffer, offset, length, position, cb) {
     process.nextTick(() => cb(null, n, buffer));
   } catch (e) { process.nextTick(() => cb(e)); }
 }
+write[Symbol.for('nodejs.util.promisify.custom')] = function(fd, buffer, offset, length, position) {
+  return new Promise((resolve, reject) => {
+    write(fd, buffer, offset, length, position, (err, bytesWritten, buf) => {
+      if (err) reject(err); else resolve({ bytesWritten, buffer: buf });
+    });
+  });
+};
 
 // --- fs.watch / watchFile / unwatchFile via kqueue EVFILT_VNODE ---
 const EventEmitter = require('events');
@@ -797,13 +814,13 @@ function assertEncoding(encoding) {
 
 module.exports = {
   readFile, writeFile, appendFile, stat, lstat, mkdir, readdir,
-  unlink, rmdir, rename, chmod, access, rm, copyFile, realpath, exists,
+  unlink, rmdir, rename, chmod, lchmod, access, rm, copyFile, realpath, exists,
   open, close, read, write, fstat, fsync, fdatasync, ftruncate, fchmod, fchown, link, readlink, symlink,
   chown, lchown, utimes, lutimes, truncate, mkdtemp,
   readFileSync, writeFileSync, appendFileSync, statSync, existsSync,
   mkdirSync, unlinkSync, rmdirSync, renameSync,
   readdirSync, realpathSync, chmodSync,
-  rmSync, mkdtempSync, accessSync, copyFileSync,
+  lchmodSync, rmSync, mkdtempSync, accessSync, copyFileSync,
   symlinkSync, lstatSync, readlinkSync, linkSync,
   chownSync, lchownSync, utimesSync, truncateSync,
   openSync, closeSync, fstatSync, writeSync, readSync,

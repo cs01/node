@@ -66,8 +66,19 @@ class TracingChannel {
     } catch (e) { ctx.error = e; this.error.publish(ctx); this.end.publish(ctx); throw e; }
   }
   traceCallback(fn, position, ctx, thisArg, ...args) {
+    const origCb = args[position];
+    const self = this;
+    args[position] = function(...cbArgs) {
+      if (cbArgs[0]) {
+        ctx.error = cbArgs[0];
+        self.error.publish(ctx);
+      }
+      self.asyncStart.publish(ctx);
+      try { if (origCb) return origCb.apply(this, cbArgs); }
+      finally { self.asyncEnd.publish(ctx); self.end.publish(ctx); }
+    };
     this.start.publish(ctx);
-    try { return fn.apply(thisArg, args); } catch(e) { ctx.error = e; this.error.publish(ctx); throw e; } finally { this.end.publish(ctx); }
+    try { return fn.apply(thisArg, args); } catch(e) { ctx.error = e; this.error.publish(ctx); this.end.publish(ctx); throw e; }
   }
 }
 

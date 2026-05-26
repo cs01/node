@@ -62,13 +62,16 @@ function userInfo(options) {
   const uid = b.getUid();
   const gid = b.getGid();
   const raw = b.getUserInfo();
+  let username, homedir, shell;
   if (raw) {
     const parts = raw.split('|');
-    if (parts.length >= 3) {
-      return { uid, gid, username: parts[0], homedir: parts[1], shell: parts[2] };
-    }
+    if (parts.length >= 3) { username = parts[0]; homedir = parts[1]; shell = parts[2]; }
   }
-  return { uid, gid, username: process.env.USER || '', homedir: process.env.HOME || '/', shell: process.env.SHELL || '/bin/zsh' };
+  if (!username) { username = process.env.USER || ''; homedir = process.env.HOME || '/'; shell = process.env.SHELL || '/bin/zsh'; }
+  if (options && options.encoding === 'buffer') {
+    return { uid, gid, username: Buffer.from(username), homedir: Buffer.from(homedir), shell: Buffer.from(shell) };
+  }
+  return { uid, gid, username, homedir, shell };
 }
 
 module.exports = {
@@ -89,7 +92,11 @@ module.exports = {
   userInfo,
   networkInterfaces,
   homedir: () => process.env.HOME || '/',
-  tmpdir: () => process.env.TMPDIR || '/tmp',
+  tmpdir: () => {
+    let d = process.env.TMPDIR || process.env.TMP || process.env.TEMP || '/tmp';
+    if (d.length > 1 && d.endsWith('/')) d = d.slice(0, -1);
+    return d;
+  },
   setPriority: (pid, priority) => { if (priority === undefined) { priority = pid; pid = 0; } return b.setPriority(pid, priority); },
   getPriority: (pid) => b.getPriority(pid || 0),
   constants,

@@ -7,7 +7,17 @@ function EventEmitter() {
   this._maxListeners = EventEmitter.defaultMaxListeners;
 }
 
-EventEmitter.prototype.setMaxListeners = function(n) { this._maxListeners = n; return this; };
+EventEmitter.prototype.setMaxListeners = function(n) {
+  if (typeof n !== 'number') {
+    const e = new TypeError('The "n" argument must be of type number. Received type ' + typeof n + ' (' + String(n) + ')');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (n < 0 || Number.isNaN(n)) {
+    const e = new RangeError('The value of "n" is out of range. It must be a non-negative number. Received ' + n);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
+  this._maxListeners = n; return this;
+};
 EventEmitter.prototype.getMaxListeners = function() { return this._maxListeners; };
 
 EventEmitter.prototype.emit = function(type) {
@@ -113,7 +123,22 @@ EventEmitter.prototype.eventNames = function() {
   return Object.keys(this._events).concat(Object.getOwnPropertySymbols(this._events));
 };
 
-EventEmitter.defaultMaxListeners = 10;
+let _defaultMaxListeners = 10;
+Object.defineProperty(EventEmitter, 'defaultMaxListeners', {
+  get() { return _defaultMaxListeners; },
+  set(n) {
+    if (typeof n !== 'number') {
+      const e = new TypeError('The "defaultMaxListeners" argument must be of type number. Received type ' + typeof n + ' (' + String(n) + ')');
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (n < 0 || Number.isNaN(n)) {
+      const e = new RangeError('The value of "defaultMaxListeners" is out of range. It must be a non-negative number. Received ' + n);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+    _defaultMaxListeners = n;
+  },
+  enumerable: true, configurable: true
+});
 EventEmitter.EventEmitter = EventEmitter;
 EventEmitter.listenerCount = function(emitter, type) { return emitter.listenerCount(type); };
 EventEmitter.getEventListeners = function(emitter, type) { return emitter.listeners(type); };
@@ -122,10 +147,23 @@ EventEmitter.getMaxListeners = function(emitter) {
   return emitter._maxListeners !== undefined ? emitter._maxListeners : EventEmitter.defaultMaxListeners;
 };
 EventEmitter.setMaxListeners = function(n) {
+  if (typeof n !== 'number') {
+    const e = new TypeError('The "n" argument must be of type number. Received type ' + typeof n + ' (' + String(n) + ')');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (n < 0 || Number.isNaN(n)) {
+    const e = new RangeError('The value of "n" is out of range. It must be a non-negative number. Received ' + n);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
   if (arguments.length <= 1) { EventEmitter.defaultMaxListeners = n; return; }
   for (let i = 1; i < arguments.length; i++) {
-    if (typeof arguments[i].setMaxListeners === 'function') arguments[i].setMaxListeners(n);
-    else arguments[i]._maxListeners = n;
+    const emitter = arguments[i];
+    if (typeof emitter !== 'object' || emitter === null || (typeof emitter.setMaxListeners !== 'function' && typeof emitter.on !== 'function')) {
+      const e = new TypeError('The "eventTargets" argument must be an instance of EventTarget or EventEmitter. Received ' + typeof emitter + ' (' + String(emitter) + ')');
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (typeof emitter.setMaxListeners === 'function') emitter.setMaxListeners(n);
+    else emitter._maxListeners = n;
   }
 };
 

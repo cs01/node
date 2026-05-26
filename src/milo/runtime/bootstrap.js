@@ -500,6 +500,7 @@
     else if (actual === undefined) actualStr = 'undefined';
     else if (typeof actual === 'function') actualStr = 'function ' + (actual.name || '');
     else if (typeof actual === 'object') actualStr = 'an instance of ' + (actual.constructor?.name || 'Object');
+    else if (typeof actual === 'symbol') actualStr = 'type symbol (' + String(actual) + ')';
     else actualStr = 'type ' + typeof actual + ' (' + actual + ')';
     return _makeNodeError(TypeError, 'ERR_INVALID_ARG_TYPE', `The "${name}" argument must be of type ${expected}. Received ${actualStr}`);
   };

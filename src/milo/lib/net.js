@@ -56,10 +56,19 @@ class Socket extends EventEmitter {
     if (typeof port === 'object') {
       const opts = port;
       cb = typeof host === 'function' ? host : cb;
+      if (opts.path) { const e = new Error('Pipe/Unix sockets not yet implemented'); e.code = 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM'; throw e; }
       port = opts.port; host = opts.host || opts.hostname;
+    }
+    if (typeof port === 'string' && !Number.isFinite(+port)) {
+      const e = new Error('Pipe/Unix sockets not yet implemented'); e.code = 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM'; throw e;
     }
     if (typeof host === 'function') { cb = host; host = '127.0.0.1'; }
     if (!host) host = '127.0.0.1';
+    port = +port;
+    if (Number.isNaN(port) || port !== (port >>> 0) || port > 65535) {
+      const e = new RangeError(`options.port should be >= 0 and < 65536. Received ${port}.`);
+      e.code = 'ERR_SOCKET_BAD_PORT'; throw e;
+    }
     if (cb) this.once('connect', cb);
     this._connecting = true;
 
@@ -231,9 +240,25 @@ class Server extends EventEmitter {
     } else if (typeof port === 'object' && port !== null) {
       cb = typeof host === 'function' ? host : cb;
       const opts = port;
+      if (opts.path) {
+        // Unix socket / pipe path
+        if (cb) this.once('listening', cb);
+        const e = new Error('Pipe/Unix sockets not yet implemented');
+        e.code = 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM';
+        process.nextTick(() => this.emit('error', e));
+        return this;
+      }
       port = opts.port;
       host = opts.host || '0.0.0.0';
       backlog = opts.backlog || 128;
+    } else if (typeof port === 'string' && !Number.isFinite(+port)) {
+      // Pipe path as first arg: listen('/tmp/sock')
+      if (typeof host === 'function') cb = host;
+      if (cb) this.once('listening', cb);
+      const e = new Error('Pipe/Unix sockets not yet implemented');
+      e.code = 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM';
+      process.nextTick(() => this.emit('error', e));
+      return this;
     } else {
       if (typeof host === 'function') { cb = host; host = '0.0.0.0'; backlog = 128; }
       if (typeof backlog === 'function') { cb = backlog; backlog = 128; }

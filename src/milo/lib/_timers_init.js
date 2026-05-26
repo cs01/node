@@ -13,6 +13,7 @@ class Timeout {
     this._args = args;
     this._repeat = repeat;
     this._refed = true;
+    this._destroyed = false;
   }
   refresh() {
     _tb.clear(this._id);
@@ -51,13 +52,14 @@ globalThis.setTimeout = function(fn, delay, ...args) {
     process.emitWarning(w);
   }
   const t = new Timeout(0, fn, delay, args, false);
-  const wrapped = () => { _timerCallbacks.delete(t._id); _safeCall(fn, args); };
+  const wrapped = () => { _timerCallbacks.delete(t._id); t._destroyed = true; _safeCall(fn, args); };
   t._id = _tb.schedule(wrapped, Math.max(0, delay || 0), 0);
   _timerCallbacks.set(t._id, wrapped);
   return t;
 };
 
 globalThis.clearTimeout = function(t) {
+  if (t && typeof t === 'object') t._destroyed = true;
   const id = t && typeof t === 'object' ? t._id : t;
   _timerCallbacks.delete(id);
   _unrefTimers.delete(id);
@@ -74,6 +76,7 @@ globalThis.setInterval = function(fn, delay, ...args) {
 };
 
 globalThis.clearInterval = function(t) {
+  if (t && typeof t === 'object') t._destroyed = true;
   const id = t && typeof t === 'object' ? t._id : t;
   _timerCallbacks.delete(id);
   _unrefTimers.delete(id);

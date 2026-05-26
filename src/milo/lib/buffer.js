@@ -127,6 +127,15 @@ function _base64Encode(buf, start, end) {
 }
 
 class Buffer extends Uint8Array {
+  constructor(arg, byteOffsetOrEncoding, length) {
+    if (typeof arg === 'number' && typeof byteOffsetOrEncoding === 'string') {
+      const e = new TypeError('The "string" argument must be of type string. Received type number (' + arg + ')');
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (arguments.length === 3) super(arg, byteOffsetOrEncoding, length);
+    else if (arguments.length === 2) super(arg, byteOffsetOrEncoding);
+    else super(arg);
+  }
   static alloc(size, fill, encoding) {
     if (typeof size !== 'number') throw _ERR_INVALID_ARG_TYPE('size', 'number', size);
     if (size < 0 || Number.isNaN(size) || size > Buffer.kMaxLength) {
