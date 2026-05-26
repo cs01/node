@@ -111,12 +111,19 @@ class Readable extends Stream {
     const state = this._readableState;
     if (state._destroyed) return null;
     if (state.buffer.length === 0) {
-      if (state.ended) { state.reading = false; return null; }
+      if (state.ended) {
+        state.reading = false;
+        if (!state.endEmitted) { state.endEmitted = true; process.nextTick(() => this.emit('end')); }
+        return null;
+      }
       state.reading = true;
       state.needReadable = true;
       this._read(state.highWaterMark);
       state.reading = false;
-      if (state.buffer.length === 0) return state.ended ? null : null;
+      if (state.buffer.length === 0) {
+        if (state.ended && !state.endEmitted) { state.endEmitted = true; process.nextTick(() => this.emit('end')); }
+        return null;
+      }
     }
     state.needReadable = false;
     state.emittedReadable = false;
@@ -137,10 +144,12 @@ class Readable extends Stream {
     if (chunk === undefined) return state.length < state.highWaterMark;
     if (chunk === null) {
       state.ended = true;
-      if (state.flowing) process.nextTick(() => {
-        if (!state.endEmitted && !state._destroyed) { state.endEmitted = true; this.emit('end'); }
-        if (this.allowHalfOpen === false && this._writableState && !this._writableState.ended) this.end();
-      });
+      if (state.flowing || state.buffer.length === 0) {
+        process.nextTick(() => {
+          if (!state.endEmitted && !state._destroyed) { state.endEmitted = true; this.emit('end'); }
+          if (this.allowHalfOpen === false && this._writableState && !this._writableState.ended) this.end();
+        });
+      }
       return false;
     }
     if (state.ended) {
