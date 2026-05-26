@@ -113,6 +113,15 @@ class OutgoingMessage extends EventEmitter {
   hasHeader(k) { return k.toLowerCase() in this._headers; }
   getHeaderNames() { return Object.keys(this._headers); }
   getHeaders() { return { ...this._headers }; }
+  _renderHeaders() {
+    if (this._headersSent) { const e = new Error('Cannot render headers after they are sent to the client'); e.code = 'ERR_HTTP_HEADERS_SENT'; throw e; }
+    const headers = {};
+    for (const [lower, val] of Object.entries(this._headers)) {
+      const raw = this._rawHeaderNames[lower] || lower;
+      headers[raw] = val;
+    }
+    return headers;
+  }
   getRawHeaderNames() { return Object.values(this._rawHeaderNames); }
   appendHeader(name, value) {
     const lower = name.toLowerCase();

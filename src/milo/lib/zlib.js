@@ -116,6 +116,10 @@ for (let i = 0; i < 256; i++) {
   _crc32Table[i] = c;
 }
 function crc32(data, value) {
+  if (typeof data !== 'string' && !Buffer.isBuffer(data) && !(data instanceof Uint8Array) && !(data instanceof DataView)) {
+    throw _ERR_INVALID_ARG_TYPE('data', ['Buffer', 'TypedArray', 'DataView', 'string'], data);
+  }
+  if (value !== undefined && typeof value !== 'number') throw _ERR_INVALID_ARG_TYPE('value', 'number', value);
   if (typeof data === 'string') data = Buffer.from(data);
   let crc = (value || 0) ^ -1;
   for (let i = 0; i < data.length; i++) crc = _crc32Table[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);

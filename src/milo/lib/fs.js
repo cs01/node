@@ -47,7 +47,15 @@ function _validateCallback(cb, name) {
 }
 
 function _validateFd(fd) {
-  if (typeof fd !== 'number' || fd !== (fd | 0) || fd < 0) throw _ERR_INVALID_ARG_TYPE('fd', 'number', fd);
+  if (typeof fd !== 'number') throw _ERR_INVALID_ARG_TYPE('fd', 'number', fd);
+  if (!Number.isInteger(fd)) {
+    const e = new RangeError(`The value of "fd" is out of range. It must be an integer. Received ${fd}`);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
+  if (fd < 0 || fd > 2147483647) {
+    const e = new RangeError(`The value of "fd" is out of range. It must be >= 0 && <= 2147483647. Received ${fd}`);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
 }
 function _validateMode(mode, name) {
   if (typeof mode === 'string') {
@@ -55,6 +63,14 @@ function _validateMode(mode, name) {
     return parseInt(mode, 8);
   }
   if (typeof mode !== 'number') throw _ERR_INVALID_ARG_TYPE(name || 'mode', 'number', mode);
+  if (!Number.isInteger(mode)) {
+    const e = new RangeError(`The value of "${name || 'mode'}" is out of range. It must be an integer. Received ${mode}`);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
+  if (mode < 0 || mode > 0xFFFFFFFF) {
+    const e = new RangeError(`The value of "${name || 'mode'}" is out of range. It must be >= 0 && <= 4294967295. Received ${mode}`);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
   return mode;
 }
 

@@ -145,11 +145,16 @@ function spawn(file, args, options) {
     child.stdin = null;
     child.stdout = null;
     child.stderr = null;
-    process.nextTick(() => child.emit('error', new Error('spawn ' + file + ' ENOENT')));
+    const err = new Error('spawn ' + file + ' ENOENT');
+    err.code = 'ENOENT'; err.syscall = 'spawn ' + file; err.path = file; err.spawnargs = a;
+    process.nextTick(() => child.emit('error', err));
     return child;
   }
 
   child.pid = result.pid;
+  child.spawnfile = file;
+  child.spawnargs = [file, ...a];
+  process.nextTick(() => child.emit('spawn'));
   let pipesOpen = 0;
 
   // Writable stdin pipe
@@ -184,6 +189,7 @@ function spawn(file, args, options) {
           const data = b.readPipe(fd);
           if (data === undefined) {
             stream.push(null);
+            process.nextTick(() => stream.emit('close'));
             net.Socket._sockets.delete(fd);
             b.closeFd(fd);
             this.destroyed = true;
