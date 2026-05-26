@@ -56,6 +56,16 @@ class Socket extends EventEmitter {
     if (typeof port === 'object') {
       const opts = port;
       cb = typeof host === 'function' ? host : cb;
+      for (const key of ['objectMode', 'readableObjectMode', 'writableObjectMode']) {
+        if (opts[key] !== undefined) {
+          const e = new TypeError(`The property 'options.${key}' is not supported. Received ${String(opts[key])}`);
+          e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+        }
+      }
+      if (opts.host !== undefined && typeof opts.host !== 'string') {
+        const e = new TypeError('The "options.host" property must be of type string. Received type ' + typeof opts.host);
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
       if (opts.path) { const e = new Error('Pipe/Unix sockets not yet implemented'); e.code = 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM'; throw e; }
       port = opts.port; host = opts.host || opts.hostname;
     }

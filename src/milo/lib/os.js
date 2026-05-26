@@ -74,31 +74,39 @@ function userInfo(options) {
   return { uid, gid, username, homedir, shell };
 }
 
+// Wrap os functions so ${os.hostname} === os.hostname() (Node v22+ behavior)
+function _wrap(fn) {
+  const wrapped = function(...args) { return fn(...args); };
+  wrapped[Symbol.toPrimitive] = () => fn();
+  return wrapped;
+}
+
 module.exports = {
-  hostname: () => b.getHostname(),
+  hostname: _wrap(() => b.getHostname()),
   cpus,
-  availableParallelism: () => b.getAvailableParallelism(),
-  freemem: () => b.getFreeMem(),
-  totalmem: () => b.getTotalMem(),
-  uptime: () => b.getUptime(),
+  availableParallelism: _wrap(() => b.getAvailableParallelism()),
+  freemem: _wrap(() => b.getFreeMem()),
+  totalmem: _wrap(() => b.getTotalMem()),
+  uptime: _wrap(() => b.getUptime()),
   loadavg: () => [b.getLoadAvg1(), b.getLoadAvg5(), b.getLoadAvg15()],
-  release: () => b.getOsRelease(),
-  type: () => b.getSysname ? b.getSysname() : 'Darwin',
-  platform: () => process.platform || 'darwin',
-  arch: () => process.arch || 'arm64',
-  machine: () => b.getMachine ? b.getMachine() : 'arm64',
-  version: () => b.getOsRelease ? b.getOsRelease() : '',
-  endianness: () => 'LE',
+  release: _wrap(() => b.getOsRelease()),
+  type: _wrap(() => b.getSysname ? b.getSysname() : 'Darwin'),
+  platform: _wrap(() => process.platform || 'darwin'),
+  arch: _wrap(() => process.arch || 'arm64'),
+  machine: _wrap(() => b.getMachine ? b.getMachine() : 'arm64'),
+  version: _wrap(() => b.getOsRelease ? b.getOsRelease() : ''),
+  endianness: _wrap(() => 'LE'),
   userInfo,
   networkInterfaces,
-  homedir: () => process.env.HOME || '/',
-  tmpdir: () => {
+  homedir: _wrap(() => process.env.HOME || '/'),
+  tmpdir: _wrap(() => {
     let d = process.env.TMPDIR || process.env.TMP || process.env.TEMP || '/tmp';
     if (d.length > 1 && d.endsWith('/')) d = d.slice(0, -1);
     return d;
-  },
+  }),
   setPriority: (pid, priority) => { if (priority === undefined) { priority = pid; pid = 0; } return b.setPriority(pid, priority); },
   getPriority: (pid) => b.getPriority(pid || 0),
+  devNull: '/dev/null',
   constants,
 };
 Object.defineProperty(module.exports, 'EOL', { value: '\n', writable: false, enumerable: true, configurable: true });

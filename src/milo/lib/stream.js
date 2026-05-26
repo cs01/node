@@ -563,10 +563,14 @@ class Writable extends Stream {
     if (typeof encoding === 'function') { cb = encoding; encoding = null; }
     if (this._writableState.ending || this._writableState._destroyed) {
       if (cb) {
-        const e = this._writableState.finished
-          ? Object.assign(new Error('write after end'), { code: 'ERR_STREAM_ALREADY_FINISHED' })
-          : Object.assign(new Error('Cannot call write after a stream was destroyed'), { code: 'ERR_STREAM_DESTROYED' });
+        const e = new Error('write after end');
+        e.code = 'ERR_STREAM_WRITE_AFTER_END';
         process.nextTick(cb, e);
+      }
+      if (chunk != null && !this._writableState._destroyed) {
+        const e = new Error('write after end');
+        e.code = 'ERR_STREAM_WRITE_AFTER_END';
+        this.destroy(e);
       }
       return this;
     }

@@ -50,8 +50,31 @@ function inflateRaw(buf, opts, cb) { _asyncOp(5, buf, opts, cb); }
 function unzip(buf, opts, cb) { _asyncOp(1, buf, opts, cb); }
 
 // Streaming transforms
+function _validateFlushFlag(val, name) {
+  if (val !== undefined) {
+    if (typeof val !== 'number') {
+      const e = new TypeError(`The "${name}" property must be of type number. Received type ${typeof val} (${typeof val === 'string' ? "'" + val + "'" : val})`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (val < 0 || val > 5) {
+      const e = new RangeError(`The value of "${name}" is out of range. It must be >= 0 and <= 5. Received ${val}`);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+  }
+}
+
 class ZlibTransform extends Transform {
   constructor(mode, opts) {
+    if (opts) {
+      _validateFlushFlag(opts.flush, 'options.flush');
+      _validateFlushFlag(opts.finishFlush, 'options.finishFlush');
+      if (opts.windowBits !== undefined) {
+        if (typeof opts.windowBits !== 'number') {
+          const e = new TypeError(`The "options.windowBits" property must be of type number. Received type ${typeof opts.windowBits}`);
+          e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+        }
+      }
+    }
     super(opts);
     this._mode = mode;
     this._chunks = [];
