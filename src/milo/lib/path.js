@@ -207,10 +207,92 @@ const win32 = {
   isAbsolute(p) { validateString(p, 'path'); return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\'); },
   join(...args) { if (args.length === 0) return '.'; for (const a of args) validateString(a, 'path'); const joined = args.filter(a => a !== '').map(a => a.replace(/\\/g, '/')).join('/'); if (!joined) return '.'; return normalize(joined).replace(/\//g, '\\'); },
   dirname(p) { validateString(p, 'path'); const n = p.replace(/\\/g, '/'); const d = dirname(n); return d.replace(/\//g, '\\'); },
-  basename(p, ext) { validateString(p, 'path'); if (ext !== undefined) validateString(ext, 'ext'); const parts = p.replace(/\\+$/, '').split(/[\\/]/); const b = parts[parts.length - 1] || ''; if (ext && b.endsWith(ext)) return b.slice(0, -ext.length); return b; },
+  basename(p, ext) {
+    validateString(p, 'path');
+    if (ext !== undefined) validateString(ext, 'ext');
+    const BSLASH = 92, FSLASH = 47, COLON = 58;
+    const isSep = c => c === BSLASH || c === FSLASH;
+    let start = 0, end = -1, matchedSlash = true;
+    // skip drive letter (e.g. C:)
+    if (p.length >= 2 && p.charCodeAt(1) === COLON) {
+      const d = p.charCodeAt(0);
+      if ((d >= 65 && d <= 90) || (d >= 97 && d <= 122)) start = 2;
+    }
+    if (ext !== undefined && ext.length > 0 && ext.length <= p.length) {
+      if (ext === p) return '';
+      let extIdx = ext.length - 1, firstNonSlash = -1;
+      for (let i = p.length - 1; i >= start; i--) {
+        const code = p.charCodeAt(i);
+        if (isSep(code)) { if (!matchedSlash) { start = i + 1; break; } }
+        else {
+          if (firstNonSlash < 0) { matchedSlash = false; firstNonSlash = i + 1; }
+          if (extIdx >= 0) {
+            if (code === ext.charCodeAt(extIdx)) { if (--extIdx < 0) end = i; }
+            else { extIdx = -1; end = firstNonSlash; }
+          }
+        }
+      }
+      if (start === end) end = firstNonSlash; else if (end < 0) end = p.length;
+      return p.slice(start, end);
+    }
+    for (let i = p.length - 1; i >= start; i--) {
+      if (isSep(p.charCodeAt(i))) { if (!matchedSlash) { start = i + 1; break; } }
+      else if (end < 0) { matchedSlash = false; end = i + 1; }
+    }
+    if (end < 0) return '';
+    return p.slice(start, end);
+  },
   extname(p) { validateString(p, 'path'); return extname(p.replace(/\\/g, '/')); },
-  parse(p) { validateString(p, 'path'); return parse(p.replace(/\\/g, '/')); },
-  format(o) { return format(o); },
+  parse(p) {
+    validateString(p, 'path');
+    const ret = { root: '', dir: '', base: '', ext: '', name: '' };
+    if (p.length === 0) return ret;
+    const isSep = c => c === 47 || c === 92;
+    let start = 0;
+    // drive letter
+    if (p.length >= 2 && p.charCodeAt(1) === 58) {
+      const d = p.charCodeAt(0);
+      if ((d >= 65 && d <= 90) || (d >= 97 && d <= 122)) {
+        start = 2;
+        if (p.length > 2 && isSep(p.charCodeAt(2))) {
+          ret.root = p.slice(0, 3);
+          start = 3;
+        } else {
+          ret.root = p.slice(0, 2);
+        }
+      }
+    } else if (isSep(p.charCodeAt(0))) {
+      ret.root = '\\';
+      start = 1;
+      if (p.length > 1 && isSep(p.charCodeAt(1))) { start = 2; ret.root = '\\\\'; }
+    }
+    let startDot = -1, startPart = start, end = -1, matchedSlash = true, preDotState = 0;
+    for (let i = p.length - 1; i >= start; i--) {
+      const code = p.charCodeAt(i);
+      if (isSep(code)) { if (!matchedSlash) { startPart = i + 1; break; } continue; }
+      if (end < 0) { matchedSlash = false; end = i + 1; }
+      if (code === 46) { if (startDot < 0) startDot = i; else if (preDotState !== 1) preDotState = 1; }
+      else if (startDot >= 0) preDotState = -1;
+    }
+    if (end >= 0) {
+      if (startDot < 0 || preDotState === 0 || (preDotState === 1 && startDot === end - 1 && startDot === startPart + 1)) {
+        ret.base = ret.name = p.slice(startPart, end);
+      } else {
+        ret.name = p.slice(startPart, startDot);
+        ret.base = p.slice(startPart, end);
+        ret.ext = p.slice(startDot, end);
+      }
+    }
+    if (startPart > start) ret.dir = p.slice(0, startPart - 1);
+    else if (ret.root) ret.dir = ret.root;
+    return ret;
+  },
+  format(o) {
+    const dir = o.dir || o.root || '';
+    const base = o.base || (o.name || '') + (o.ext || '');
+    if (!dir) return base;
+    return dir === o.root ? dir + base : dir + '\\' + base;
+  },
   toNamespacedPath(p) { return p; },
   relative(from, to) { validateString(from, 'from'); validateString(to, 'to'); return relative(from.replace(/\\/g, '/'), to.replace(/\\/g, '/')).replace(/\//g, '\\'); },
 };

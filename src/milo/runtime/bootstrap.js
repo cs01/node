@@ -1042,7 +1042,9 @@
       }
 
       try { const b = _nativeBinding(id); moduleCache[id] = b; return b; } catch {}
-      throw new Error("Cannot find module '" + id + "'");
+      const _mnfErr = new Error("Cannot find module '" + id + "'");
+      _mnfErr.code = 'MODULE_NOT_FOUND';
+      throw _mnfErr;
     }
 
     require.resolve = function(id) {
@@ -1054,7 +1056,9 @@
       const searchDir = parentDir || (process.cwd ? process.cwd() : '');
       const nmResolved = _resolveNodeModules(id, searchDir);
       if (nmResolved) return nmResolved;
-      throw new Error("Cannot find module '" + id + "'");
+      const _rnfErr = new Error("Cannot find module '" + id + "'");
+      _rnfErr.code = 'MODULE_NOT_FOUND';
+      throw _rnfErr;
     };
     require.cache = moduleCache;
     Object.defineProperty(require, 'main', {

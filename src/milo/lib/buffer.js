@@ -91,8 +91,27 @@ function _hexEncode(buf, start, end) {
 function _hexDecode(str) {
   if (_nativeHexDecode) return _nativeHexDecode(str);
   const a = [];
-  for (let i = 0; i < str.length; i += 2) a.push(parseInt(str.slice(i, i + 2), 16));
+  for (let i = 0; i + 1 < str.length; i += 2) {
+    const hi = _hexVal(str.charCodeAt(i)), lo = _hexVal(str.charCodeAt(i + 1));
+    if (hi === -1 || lo === -1) break;
+    a.push((hi << 4) | lo);
+  }
   return a;
+}
+
+function _hexVal(c) {
+  if (c >= 48 && c <= 57) return c - 48;
+  if (c >= 65 && c <= 70) return c - 55;
+  if (c >= 97 && c <= 102) return c - 87;
+  return -1;
+}
+
+function _checkOffset(offset, byteLength, bufLength) {
+  if (offset === undefined) offset = 0;
+  if (typeof offset !== 'number' || Number.isNaN(offset) || offset % 1 !== 0) throw _ERR_OUT_OF_RANGE('offset', 'an integer', offset);
+  if (offset < 0) throw _ERR_OUT_OF_RANGE('offset', '>= 0', offset);
+  if (offset + byteLength > bufLength) throw _ERR_BUFFER_OUT_OF_BOUNDS();
+  return offset;
 }
 
 function _base64Decode(str) {
@@ -109,7 +128,7 @@ function _base64Encode(buf, start, end) {
 
 class Buffer extends Uint8Array {
   static alloc(size, fill, encoding) {
-    if (typeof size !== 'number') { const e = new TypeError('The "size" argument must be of type number. Received type ' + typeof size); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (typeof size !== 'number') throw _ERR_INVALID_ARG_TYPE('size', 'number', size);
     if (size < 0 || size > Buffer.kMaxLength) {
       const err = new RangeError(`The value "${size}" is invalid for option "size"`);
       err.code = 'ERR_OUT_OF_RANGE';
@@ -143,7 +162,7 @@ class Buffer extends Uint8Array {
   }
 
   static allocUnsafe(size) {
-    if (typeof size !== 'number') { const e = new TypeError('The "size" argument must be of type number. Received type ' + typeof size); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (typeof size !== 'number') throw _ERR_INVALID_ARG_TYPE('size', 'number', size);
     if (size < 0 || size > Buffer.kMaxLength) {
       const err = new RangeError(`The value "${size}" is invalid for option "size"`);
       err.code = 'ERR_OUT_OF_RANGE';
@@ -153,7 +172,7 @@ class Buffer extends Uint8Array {
   }
 
   static allocUnsafeSlow(size) {
-    if (typeof size !== 'number') { const e = new TypeError('The "size" argument must be of type number. Received type ' + typeof size); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (typeof size !== 'number') throw _ERR_INVALID_ARG_TYPE('size', 'number', size);
     if (size < 0 || size > Buffer.kMaxLength) {
       const err = new RangeError(`The value "${size}" is invalid for option "size"`);
       err.code = 'ERR_OUT_OF_RANGE';
@@ -217,7 +236,14 @@ class Buffer extends Uint8Array {
     if (Array.isArray(value) || value instanceof Uint8Array) return new Buffer(value);
     if (Buffer.isBuffer(value)) { const c = new Buffer(value.length); c.set(value); return c; }
     if (value && typeof value === 'object' && value.type === 'Buffer' && Array.isArray(value.data)) return new Buffer(value.data);
-    if (value && typeof value === 'object' && typeof value.length === 'number') return new Buffer(Array.from(value));
+    // String objects and objects with Symbol.toPrimitive/valueOf that return a string
+    if (value && typeof value === 'object') {
+      let primitive;
+      if (typeof value[Symbol.toPrimitive] === 'function') primitive = value[Symbol.toPrimitive]('string');
+      else if (typeof value.valueOf === 'function') primitive = value.valueOf();
+      if (typeof primitive === 'string') return Buffer.from(primitive, encodingOrOffset);
+      if (typeof value.length === 'number') return new Buffer(Array.from(value));
+    }
     throw _ERR_INVALID_ARG_TYPE('value', 'string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object', value);
   }
 
@@ -228,8 +254,7 @@ class Buffer extends Uint8Array {
     if (typeof str !== 'string') {
       if (ArrayBuffer.isView(str) || str instanceof ArrayBuffer || str instanceof SharedArrayBuffer) return str.byteLength;
       if (typeof str !== 'string') {
-        const e = new TypeError('The "string" argument must be of type string or an instance of Buffer or ArrayBuffer. Received type ' + typeof str);
-        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+        throw _ERR_INVALID_ARG_TYPE('string', 'string or an instance of Buffer or ArrayBuffer', str);
       }
     }
     const enc = (encoding || 'utf8').toLowerCase();
@@ -284,6 +309,27 @@ class Buffer extends Uint8Array {
       if (offset >= totalLength) break;
     }
     return result;
+  }
+
+  static copyBytesFrom(source, sourceOffset, length) {
+    if (!ArrayBuffer.isView(source)) throw _ERR_INVALID_ARG_TYPE('source', 'TypedArray', source);
+    if (sourceOffset !== undefined) {
+      if (typeof sourceOffset !== 'number') throw _ERR_INVALID_ARG_TYPE('sourceOffset', 'number', sourceOffset);
+      if (sourceOffset < 0 || sourceOffset !== (sourceOffset | 0) || !Number.isFinite(sourceOffset)) throw _ERR_OUT_OF_RANGE('sourceOffset', '>= 0', sourceOffset);
+    }
+    if (length !== undefined) {
+      if (typeof length !== 'number') throw _ERR_INVALID_ARG_TYPE('length', 'number', length);
+      if (length < 0 || length !== (length | 0) || !Number.isFinite(length)) throw _ERR_OUT_OF_RANGE('length', '>= 0', length);
+    }
+    const bytesPerElement = source.BYTES_PER_ELEMENT || 1;
+    const srcOffset = (sourceOffset || 0) * bytesPerElement;
+    const srcLen = length !== undefined ? length * bytesPerElement : source.byteLength - srcOffset;
+    const actualLen = Math.max(0, Math.min(srcLen, source.byteLength - srcOffset));
+    if (actualLen === 0) return Buffer.alloc(0);
+    const u8 = new Uint8Array(source.buffer, source.byteOffset + srcOffset, actualLen);
+    const buf = Buffer.alloc(actualLen);
+    buf.set(u8);
+    return buf;
   }
 
   static compare(a, b) {
@@ -481,20 +527,20 @@ class Buffer extends Uint8Array {
 
   includes(value, byteOffset, encoding) { return this.indexOf(value, byteOffset, encoding) !== -1; }
 
-  readUInt8(offset) { return this[offset]; }
-  readUInt16BE(offset) { return (this[offset] << 8) | this[offset + 1]; }
-  readUInt16LE(offset) { return this[offset] | (this[offset + 1] << 8); }
-  readUInt32BE(offset) { return ((this[offset] << 24) | (this[offset+1] << 16) | (this[offset+2] << 8) | this[offset+3]) >>> 0; }
-  readUInt32LE(offset) { return ((this[offset+3] << 24) | (this[offset+2] << 16) | (this[offset+1] << 8) | this[offset]) >>> 0; }
-  readInt8(offset) { const v = this[offset]; return v > 127 ? v - 256 : v; }
-  readInt16BE(offset) { const v = this.readUInt16BE(offset); return v > 0x7fff ? v - 0x10000 : v; }
-  readInt16LE(offset) { const v = this.readUInt16LE(offset); return v > 0x7fff ? v - 0x10000 : v; }
-  readInt32BE(offset) { return (this[offset] << 24) | (this[offset+1] << 16) | (this[offset+2] << 8) | this[offset+3]; }
-  readInt32LE(offset) { return (this[offset+3] << 24) | (this[offset+2] << 16) | (this[offset+1] << 8) | this[offset]; }
-  readFloatBE(offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getFloat32(offset, false); }
-  readFloatLE(offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getFloat32(offset, true); }
-  readDoubleBE(offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getFloat64(offset, false); }
-  readDoubleLE(offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getFloat64(offset, true); }
+  readUInt8(offset) { offset = _checkOffset(offset, 1, this.length); return this[offset]; }
+  readUInt16BE(offset) { offset = _checkOffset(offset, 2, this.length); return (this[offset] << 8) | this[offset + 1]; }
+  readUInt16LE(offset) { offset = _checkOffset(offset, 2, this.length); return this[offset] | (this[offset + 1] << 8); }
+  readUInt32BE(offset) { offset = _checkOffset(offset, 4, this.length); return ((this[offset] << 24) | (this[offset+1] << 16) | (this[offset+2] << 8) | this[offset+3]) >>> 0; }
+  readUInt32LE(offset) { offset = _checkOffset(offset, 4, this.length); return ((this[offset+3] << 24) | (this[offset+2] << 16) | (this[offset+1] << 8) | this[offset]) >>> 0; }
+  readInt8(offset) { offset = _checkOffset(offset, 1, this.length); const v = this[offset]; return v > 127 ? v - 256 : v; }
+  readInt16BE(offset) { offset = _checkOffset(offset, 2, this.length); const v = (this[offset] << 8) | this[offset + 1]; return v > 0x7fff ? v - 0x10000 : v; }
+  readInt16LE(offset) { offset = _checkOffset(offset, 2, this.length); const v = this[offset] | (this[offset + 1] << 8); return v > 0x7fff ? v - 0x10000 : v; }
+  readInt32BE(offset) { offset = _checkOffset(offset, 4, this.length); return (this[offset] << 24) | (this[offset+1] << 16) | (this[offset+2] << 8) | this[offset+3]; }
+  readInt32LE(offset) { offset = _checkOffset(offset, 4, this.length); return (this[offset+3] << 24) | (this[offset+2] << 16) | (this[offset+1] << 8) | this[offset]; }
+  readFloatBE(offset) { offset = _checkOffset(offset, 4, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getFloat32(offset, false); }
+  readFloatLE(offset) { offset = _checkOffset(offset, 4, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getFloat32(offset, true); }
+  readDoubleBE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getFloat64(offset, false); }
+  readDoubleLE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getFloat64(offset, true); }
 
   writeUInt8(value, offset) { offset = offset >>> 0; if (offset >= this.length) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and < ${this.length}`, offset); this[offset] = value & 0xff; return offset + 1; }
   writeUInt16BE(value, offset) { offset = offset >>> 0; if (offset + 1 >= this.length) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${this.length - 2}`, offset); this[offset] = (value >> 8) & 0xff; this[offset+1] = value & 0xff; return offset + 2; }
@@ -548,18 +594,18 @@ class Buffer extends Uint8Array {
     return this.writeUIntLE(value, offset, byteLength);
   }
 
-  readBigInt64BE(offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigInt64(offset || 0, false); }
-  readBigInt64LE(offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigInt64(offset || 0, true); }
-  readBigUInt64BE(offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigUint64(offset || 0, false); }
-  readBigUInt64LE(offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigUint64(offset || 0, true); }
+  readBigInt64BE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigInt64(offset, false); }
+  readBigInt64LE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigInt64(offset, true); }
+  readBigUInt64BE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigUint64(offset, false); }
+  readBigUInt64LE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigUint64(offset, true); }
   writeBigInt64BE(value, offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigInt64(offset || 0, value, false); }
   writeBigInt64LE(value, offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigInt64(offset || 0, value, true); }
   writeBigUInt64BE(value, offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigUint64(offset || 0, value, false); }
   writeBigUInt64LE(value, offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigUint64(offset || 0, value, true); }
 
-  swap16() { for (let i = 0; i < this.length; i += 2) { const t = this[i]; this[i] = this[i+1]; this[i+1] = t; } return this; }
-  swap32() { for (let i = 0; i < this.length; i += 4) { let t = this[i]; this[i] = this[i+3]; this[i+3] = t; t = this[i+1]; this[i+1] = this[i+2]; this[i+2] = t; } return this; }
-  swap64() { for (let i = 0; i < this.length; i += 8) { for (let j = 0; j < 4; j++) { const t = this[i+j]; this[i+j] = this[i+7-j]; this[i+7-j] = t; } } return this; }
+  swap16() { if (this.length % 2 !== 0) { const e = new RangeError('Buffer size must be a multiple of 16-bits'); e.code = 'ERR_INVALID_BUFFER_SIZE'; throw e; } for (let i = 0; i < this.length; i += 2) { const t = this[i]; this[i] = this[i+1]; this[i+1] = t; } return this; }
+  swap32() { if (this.length % 4 !== 0) { const e = new RangeError('Buffer size must be a multiple of 32-bits'); e.code = 'ERR_INVALID_BUFFER_SIZE'; throw e; } for (let i = 0; i < this.length; i += 4) { let t = this[i]; this[i] = this[i+3]; this[i+3] = t; t = this[i+1]; this[i+1] = this[i+2]; this[i+2] = t; } return this; }
+  swap64() { if (this.length % 8 !== 0) { const e = new RangeError('Buffer size must be a multiple of 64-bits'); e.code = 'ERR_INVALID_BUFFER_SIZE'; throw e; } for (let i = 0; i < this.length; i += 8) { for (let j = 0; j < 4; j++) { const t = this[i+j]; this[i+j] = this[i+7-j]; this[i+7-j] = t; } } return this; }
 
   lastIndexOf(value, byteOffset, encoding) {
     // 4-arg form: lastIndexOf(value, byteOffset, end, encoding)

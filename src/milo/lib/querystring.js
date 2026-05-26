@@ -18,7 +18,8 @@ function stringify(obj, sep, eq) {
 function parse(str, sep, eq, opts) {
   sep = sep || '&';
   eq = eq || '=';
-  const maxKeys = (opts && opts.maxKeys) || 1000;
+  let maxKeys = opts && typeof opts.maxKeys === 'number' ? opts.maxKeys : 1000;
+  if (!Number.isFinite(maxKeys)) maxKeys = 0;
   const obj = Object.create(null);
   if (typeof str !== 'string' || str.length === 0) return obj;
   const pairs = str.split(sep);

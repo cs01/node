@@ -88,6 +88,16 @@ class OutgoingMessage extends EventEmitter {
     return this;
   }
   setHeader(k, v) {
+    if (typeof k !== 'string' || !/^[\t\x20-\x7e]+$/.test(k) || /[^!#$%&'*+\-.0-9A-Z^_`a-z|~]/.test(k)) {
+      const e = new TypeError(`Header name must be a valid HTTP token ["${k}"]`);
+      e.code = 'ERR_INVALID_HTTP_TOKEN';
+      throw e;
+    }
+    if (v === undefined) {
+      const e = new TypeError(`Invalid value "${v}" for header "${k}"`);
+      e.code = 'ERR_HTTP_INVALID_HEADER_VALUE';
+      throw e;
+    }
     const lower = k.toLowerCase();
     this._headers[lower] = v;
     this._rawHeaderNames[lower] = k;
@@ -341,9 +351,16 @@ class ClientRequest extends EventEmitter {
     }
   }
 
+  _implicitHeader() { this._flushHeaders(); }
+  _flushHeaders() { this.headersSent = true; }
+  flushHeaders() { this._flushHeaders(); }
   setHeader(k, v) { this._headers[k.toLowerCase()] = v; return this; }
   getHeader(k) { return this._headers[k.toLowerCase()]; }
   removeHeader(k) { delete this._headers[k.toLowerCase()]; }
+  hasHeader(k) { return k.toLowerCase() in this._headers; }
+  getHeaderNames() { return Object.keys(this._headers); }
+  getRawHeaderNames() { return Object.keys(this._headers); }
+  getHeaders() { return { ...this._headers }; }
 
   write(chunk, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }

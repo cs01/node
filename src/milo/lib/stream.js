@@ -86,6 +86,11 @@ class Readable extends Stream {
       encoding: null,
       pipes: [],
       errorEmitted: false, errored: null,
+      reading: false, readingMore: false,
+      needReadable: false, emittedReadable: false,
+      resumeScheduled: false, readableListening: false,
+      awaitDrainWriters: null,
+      _destroyed: false,
     };
     if (opts && opts.encoding) this.setEncoding(opts.encoding);
     if (opts && opts.defaultEncoding !== undefined) {
@@ -106,10 +111,15 @@ class Readable extends Stream {
     const state = this._readableState;
     if (state._destroyed) return null;
     if (state.buffer.length === 0) {
-      if (state.ended) return null;
+      if (state.ended) { state.reading = false; return null; }
+      state.reading = true;
+      state.needReadable = true;
       this._read(state.highWaterMark);
+      state.reading = false;
       if (state.buffer.length === 0) return state.ended ? null : null;
     }
+    state.needReadable = false;
+    state.emittedReadable = false;
     if (state.objectMode) return state.buffer.shift();
     if (!size || size >= state.length) {
       const buf = state.objectMode ? state.buffer.shift() : (state.buffer.length === 1 ? state.buffer.shift() : Buffer.concat(state.buffer));
@@ -148,7 +158,8 @@ class Readable extends Stream {
       state.length += chunk.length || 1;
       if (!state._readableEmitScheduled && this.listenerCount('readable') > 0) {
         state._readableEmitScheduled = true;
-        process.nextTick(() => { state._readableEmitScheduled = false; this.emit('readable'); });
+        state.needReadable = false;
+        process.nextTick(() => { state._readableEmitScheduled = false; state.emittedReadable = true; this.emit('readable'); });
       }
     }
     return state.length < state.highWaterMark;
@@ -157,8 +168,10 @@ class Readable extends Stream {
   on(ev, fn) {
     super.on(ev, fn);
     if (ev === 'data') {
+      this._readableState.readingMore = true;
       if (this._readableState.flowing !== false) this.resume();
     } else if (ev === 'readable') {
+      this._readableState.readableListening = true;
       this._readableState.flowing = false;
     }
     return this;
@@ -166,13 +179,13 @@ class Readable extends Stream {
 
   addListener(ev, fn) { return this.on(ev, fn); }
 
-  setEncoding(enc) { this._readableState.encoding = enc; return this; }
+  setEncoding(enc) { this._readableState.encoding = enc || 'utf8'; return this; }
   resume() {
     const state = this._readableState;
     if (!state.flowing) {
       state.flowing = true;
-      // Defer read to next tick so all listeners can be attached first
-      process.nextTick(() => this._flow());
+      state.resumeScheduled = true;
+      process.nextTick(() => { state.resumeScheduled = false; this._flow(); });
     }
     return this;
   }
@@ -424,7 +437,7 @@ class Writable extends Stream {
     const _wOM2 = !!(opts && opts.objectMode);
     const _wDefaultHWM2 = _wOM2 ? 16 : 65536;
     const _wHWM2 = (opts && opts.writableHighWaterMark != null) ? opts.writableHighWaterMark : (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM2;
-    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2, errorEmitted: false, errored: null, autoDestroy: !!(opts && opts.autoDestroy) };
+    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], bufferedRequestCount: 0, objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2, errorEmitted: false, errored: null, autoDestroy: !!(opts && opts.autoDestroy), _destroyed: false, writable: true };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;
     if (opts && opts.destroy) this._destroy = opts.destroy;
@@ -467,6 +480,7 @@ class Writable extends Stream {
     if (!ret) this._writableState.needDrain = true;
     if (this._writableState.corked > 0) {
       this._writableState.buffered.push({ chunk, encoding: encoding || 'buffer', cb });
+      this._writableState.bufferedRequestCount++;
       return ret;
     }
     this._writableState.writing = true;
@@ -494,6 +508,7 @@ class Writable extends Stream {
   _flushBuffered() {
     while (this._writableState.buffered.length > 0 && this._writableState.corked === 0 && !this._writableState.writing) {
       const entry = this._writableState.buffered.shift();
+      this._writableState.bufferedRequestCount--;
       this._writableState.writing = true;
       this._doWrite(entry.chunk, entry.encoding, entry.cb);
       break;
