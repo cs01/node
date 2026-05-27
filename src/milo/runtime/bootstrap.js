@@ -404,6 +404,20 @@
   };
   if (typeof atob === 'undefined') globalThis.atob = function atob(s) { if (typeof s !== 'string') s = String(s); const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='; const stripped = s.replace(/[\s]/g, ''); for (let j = 0; j < stripped.length; j++) if (chars.indexOf(stripped[j]) === -1) throw new DOMException('The string to be decoded is not correctly encoded.', 'InvalidCharacterError'); const clean = stripped.replace(/=/g, ''); let r = '', i = 0; while (i < clean.length) { const a = chars.indexOf(clean[i++]), b = chars.indexOf(clean[i++]||'A'), c = chars.indexOf(clean[i++]||'A'), d = chars.indexOf(clean[i++]||'A'); r += String.fromCharCode((a<<2)|(b>>4)); if(clean[i-2]!==undefined) r+=String.fromCharCode(((b&15)<<4)|(c>>2)); if(clean[i-1]!==undefined) r+=String.fromCharCode(((c&3)<<6)|d); } return r; };
   if (typeof btoa === 'undefined') globalThis.btoa = function btoa(s) { if (typeof s !== 'string') s = String(s); for (let j = 0; j < s.length; j++) if (s.charCodeAt(j) > 255) throw new DOMException('The string to be encoded contains characters outside of the Latin1 range.', 'InvalidCharacterError'); const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'; let r = ''; for (let i = 0; i < s.length; i += 3) { const a = s.charCodeAt(i), b = s.charCodeAt(i+1), c = s.charCodeAt(i+2); r += chars[a>>2] + chars[((a&3)<<4)|(b>>4)] + (isNaN(b)?'=':chars[((b&15)<<2)|(c>>6)]) + (isNaN(c)?'=':chars[c&63]); } return r; };
+  {
+    const _origAtob = globalThis.atob;
+    globalThis.atob = function atob(s) {
+      if (arguments.length === 0) throw new TypeError("Failed to execute 'atob': 1 argument required, but only 0 present.");
+      if (typeof s === 'symbol') throw new TypeError("Cannot convert a Symbol value to a string");
+      return _origAtob(s);
+    };
+    const _origBtoa = globalThis.btoa;
+    globalThis.btoa = function btoa(s) {
+      if (arguments.length === 0) throw new TypeError("Failed to execute 'btoa': 1 argument required, but only 0 present.");
+      if (typeof s === 'symbol') throw new TypeError("Cannot convert a Symbol value to a string");
+      return _origBtoa(s);
+    };
+  }
   if (typeof performance === 'undefined') { const _perfOrigin = Date.now(); globalThis.performance = { now() { return Date.now() - _perfOrigin; }, timeOrigin: _perfOrigin }; }
   if (!performance.mark) {
     const _entries = [];

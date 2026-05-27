@@ -55,6 +55,11 @@ class Channel {
 }
 
 function channel(name) {
+  if (typeof name !== 'string' && typeof name !== 'symbol') {
+    const received = name === null ? 'null' : name === undefined ? 'undefined' : 'type ' + typeof name;
+    const e = new TypeError('[ERR_INVALID_ARG_TYPE]: The "name" argument must be of type string or an instance of Symbol. Received ' + received);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
   if (!channels.has(name)) channels.set(name, new Channel(name));
   return channels.get(name);
 }

@@ -249,7 +249,15 @@ function renameSync(old, n) { _validatePath(old, 'oldPath'); _validatePath(n, 'n
 function readdirSync(path, opts) {
   _validatePath(path, 'path');
   const sp = _toPath(path);
-  const entries = (b.readdir(sp) || []).sort();
+  const result = b.readdir(sp);
+  if (!result || !Array.isArray(result)) {
+    const s = b.stat(sp);
+    if (s && s !== -1 && !s.isDirectory) {
+      throw _fsError('ENOTDIR', 'scandir', sp, 'not a directory');
+    }
+    throw _fsError('ENOENT', 'scandir', sp, 'no such file or directory');
+  }
+  const entries = result.sort();
   if (opts && opts.withFileTypes) {
     return entries.map(name => new Dirent(name, sp));
   }
