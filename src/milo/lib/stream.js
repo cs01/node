@@ -145,16 +145,30 @@ class Readable extends Stream {
         return null;
       }
     }
-    state.needReadable = false;
     state.emittedReadable = false;
-    if (state.objectMode) return state.buffer.shift();
-    if (!size || size >= state.length) {
-      const buf = state.objectMode ? state.buffer.shift() : (state.buffer.length === 1 ? state.buffer.shift() : Buffer.concat(state.buffer));
+    let ret;
+    if (state.objectMode) {
+      ret = state.buffer.shift();
+      state.length = state.buffer.length;
+    } else if (!size || size >= state.length) {
+      ret = state.buffer.length === 1 ? state.buffer.shift() : Buffer.concat(state.buffer);
       state.buffer = [];
       state.length = 0;
-      return buf;
+    } else {
+      ret = state.buffer.shift();
+      state.length -= ret.length || 1;
     }
-    return state.buffer.shift();
+    state.needReadable = state.length === 0 && !state.ended;
+    if (state.needReadable && !state.reading) {
+      state.reading = true;
+      process.nextTick(() => {
+        state.reading = false;
+        if (state.length < state.highWaterMark && !state.ended) {
+          this._read(state.highWaterMark);
+        }
+      });
+    }
+    return ret;
   }
 
   push(chunk, encoding) {
@@ -212,9 +226,24 @@ class Readable extends Stream {
       const state = this._readableState;
       state.readableListening = true;
       state.flowing = false;
-      // emit 'readable' if data already buffered or stream ended
       if (state.length > 0 || state.ended) {
         process.nextTick(() => this.emit('readable'));
+      } else {
+        state.needReadable = true;
+        process.nextTick(() => {
+          if (!state.reading && !state.ended && state.length < state.highWaterMark) {
+            state.reading = true;
+            this._read(state.highWaterMark);
+            state.reading = false;
+            if (state.length > 0) {
+              state.needReadable = false;
+              if (!state._readableEmitScheduled) {
+                state._readableEmitScheduled = true;
+                process.nextTick(() => { state._readableEmitScheduled = false; this.emit('readable'); });
+              }
+            }
+          }
+        });
       }
     }
     return this;
@@ -269,9 +298,16 @@ class Readable extends Stream {
     const state = this._readableState;
     if (state._destroyed) return;
     if (!state.objectMode && typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
+    if (state.encoding && Buffer.isBuffer(chunk)) chunk = chunk.toString(state.encoding);
     if (chunk !== null && chunk !== undefined) {
+      const len = state.objectMode ? 1 : (chunk.length || 0);
+      if (len === 0) return;
       state.buffer.unshift(chunk);
-      state.length += state.objectMode ? 1 : chunk.length;
+      state.length += len;
+      if (state.needReadable && !state._readableEmitScheduled) {
+        state._readableEmitScheduled = true;
+        process.nextTick(() => { state._readableEmitScheduled = false; this.emit('readable'); });
+      }
     }
   }
   destroy(err, cb) {
