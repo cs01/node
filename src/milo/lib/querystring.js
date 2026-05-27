@@ -2,7 +2,10 @@
 'use strict';
 
 function escape(str) { return encodeURIComponent(str); }
-function unescape(str) { return decodeURIComponent(str.replace(/\+/g, ' ')); }
+function unescape(str) {
+  try { return decodeURIComponent(str.replace(/\+/g, ' ')); }
+  catch { return str.replace(/\+/g, ' '); }
+}
 
 function stringify(obj, sep, eq) {
   sep = sep || '&';

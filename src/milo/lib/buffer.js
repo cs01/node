@@ -276,7 +276,7 @@ class Buffer extends Uint8Array {
   }
 
   static isBuffer(obj) { return obj instanceof Buffer; }
-  static isEncoding(enc) { return encodings.includes((enc || '').toLowerCase()); }
+  static isEncoding(enc) { return typeof enc === 'string' && encodings.includes(enc.toLowerCase()); }
 
   static byteLength(str, encoding) {
     if (typeof str !== 'string') {
@@ -454,7 +454,8 @@ class Buffer extends Uint8Array {
   }
 
   [Symbol.for('nodejs.util.inspect.custom')](recurseTimes, ctx) {
-    return this.inspect(recurseTimes, ctx);
+    if (typeof this.inspect === 'function') return this.inspect(recurseTimes, ctx);
+    return Buffer.prototype.inspect.call(this, recurseTimes, ctx);
   }
 
   toJSON() { return { type: 'Buffer', data: Array.from(this) }; }

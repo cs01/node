@@ -6,21 +6,35 @@ process.emitWarning = (warning, typeOrOptions, code, ctor) => {
     const e = new TypeError('The "warning" argument must be of type string or an instance of Error');
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
+  let type, detail;
+  if (typeof typeOrOptions === 'function') {
+    ctor = typeOrOptions;
+    typeOrOptions = undefined;
+  }
   if (typeof typeOrOptions === 'object' && typeOrOptions !== null && !Array.isArray(typeOrOptions)) {
     code = typeOrOptions.code; ctor = typeOrOptions.ctor;
-    typeOrOptions = typeOrOptions.type || 'Warning';
-  }
-  if (typeOrOptions !== undefined && typeof typeOrOptions !== 'string') {
+    detail = typeof typeOrOptions.detail === 'string' ? typeOrOptions.detail : undefined;
+    type = typeOrOptions.type || 'Warning';
+  } else if (typeof typeOrOptions === 'string') {
+    type = typeOrOptions;
+  } else if (typeOrOptions !== undefined) {
     const e = new TypeError('The "type" argument must be of type string');
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
-  const type = typeOrOptions || 'Warning';
+  if (typeof code === 'function') { ctor = code; code = undefined; }
+  if (code !== undefined && typeof code !== 'string') {
+    const e = new TypeError('The "code" argument must be of type string');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (!type) type = 'Warning';
   let msg;
   if (warning instanceof Error) { msg = warning; }
   else { msg = new Error(warning); msg.name = type; if (code) msg.code = code; }
+  if (detail) msg.detail = detail;
   process.nextTick(() => {
-    console.error(`(${msg.name}) ${msg.message}`);
-    process.emit('warning', msg);
+    if (!process.emit('warning', msg)) {
+      console.error(`(${msg.name}) ${msg.message}`);
+    }
   });
 };
 
@@ -44,8 +58,8 @@ process.env = new Proxy({}, {
   getOwnPropertyDescriptor(_, key) { const v = this.get(null, key); if (v !== undefined) return { value: v, writable: true, enumerable: true, configurable: true }; return undefined; },
 });
 
-process.config = { variables: { asan: 0, v8_enable_i18n_support: 0, node_module_version: 135, node_builtin_shareable_builtins: [] }, target_defaults: { default_configuration: 'Release' } };
-process.features = { inspector: false, debug: false, uv: true, ipv6: true, tls: false };
+process.config = Object.freeze({ variables: Object.freeze({ asan: 0, v8_enable_i18n_support: 0, node_module_version: 135, node_builtin_shareable_builtins: Object.freeze([]) }), target_defaults: Object.freeze({ default_configuration: 'Release' }) });
+process.features = { inspector: false, debug: false, uv: true, ipv6: true, openssl_is_boringssl: false, quic: false, tls_alpn: true, tls_sni: true, tls_ocsp: true, tls: true, cached_builtins: true, require_module: true, typescript: false };
 if (!process.versions) process.versions = {};
 Object.assign(process.versions, {
   node: '24.0.0', v8: '13.6.233.5', modules: '135', napi: '10',
@@ -61,7 +75,13 @@ if (!process.chdir) {
   const _pmb3 = internalBinding('process_methods');
   process.chdir = (dir) => {
     if (typeof dir !== 'string') throw _ERR_INVALID_ARG_TYPE('directory', 'string', dir);
-    _pmb3.chdir(dir);
+    const prev = process.cwd();
+    const r = _pmb3.chdir(dir);
+    if (r !== 0) {
+      const e = new Error(`ENOENT: no such file or directory, chdir '${prev}' -> '${dir}'`);
+      e.code = 'ENOENT'; e.syscall = 'chdir'; e.path = prev; e.dest = dir;
+      throw e;
+    }
   };
 }
 if (!process.umask) {
@@ -188,40 +208,25 @@ process._emitExit = function() {
 };
 Object.defineProperty(globalThis, '__runExitHandlers', { value: function() { process._emitExit(); }, enumerable: false });
 if (!process.abort) process.abort = () => { process.exit(134); };
-if (!process.binding) process.binding = (name) => {
-  if (name === 'util') {
-    return {
-      isArrayBuffer: (v) => v instanceof ArrayBuffer,
-      isArrayBufferView: (v) => ArrayBuffer.isView(v),
-      isAnyArrayBuffer: (v) => v instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer),
-      isDataView: (v) => v instanceof DataView,
-      isDate: (v) => v instanceof Date,
-      isMap: (v) => v instanceof Map,
-      isMapIterator: () => false,
-      isSet: (v) => v instanceof Set,
-      isSetIterator: () => false,
-      isRegExp: (v) => v instanceof RegExp,
-      isPromise: (v) => v instanceof Promise,
-      isNativeError: (v) => v instanceof Error,
-      isTypedArray: (v) => ArrayBuffer.isView(v) && !(v instanceof DataView),
-      isUint8Array: (v) => v instanceof Uint8Array,
-      isExternal: () => false,
-      isAsyncFunction: (v) => typeof v === 'function' && v.constructor && v.constructor.name === 'AsyncFunction',
-      isGeneratorFunction: (v) => typeof v === 'function' && v.constructor && v.constructor.name === 'GeneratorFunction',
-      isGeneratorObject: (v) => v != null && typeof v.next === 'function' && typeof v.throw === 'function',
-      isWeakMap: (v) => v instanceof WeakMap,
-      isWeakSet: (v) => v instanceof WeakSet,
-      isNumberObject: (v) => typeof v === 'object' && v !== null && v instanceof Number,
-      isStringObject: (v) => typeof v === 'object' && v !== null && v instanceof String,
-      isBooleanObject: (v) => typeof v === 'object' && v !== null && v instanceof Boolean,
-      isSymbolObject: (v) => typeof v === 'object' && v !== null && typeof Object.valueOf.call(v) === 'symbol',
-      isBigIntObject: (v) => typeof v === 'object' && v !== null && typeof Object.valueOf.call(v) === 'bigint',
-      isProxy: () => false,
-      isModuleNamespaceObject: () => false,
-    };
-  }
-  throw new Error('process.binding is not supported');
-};
+if (!process.binding) {
+  let _utilBindingCache = null;
+  const _utilBindingKeys = [
+    'isAnyArrayBuffer', 'isArrayBuffer', 'isArrayBufferView', 'isAsyncFunction',
+    'isDataView', 'isDate', 'isExternal', 'isMap', 'isMapIterator', 'isNativeError',
+    'isPromise', 'isRegExp', 'isSet', 'isSetIterator', 'isTypedArray', 'isUint8Array',
+  ];
+  process.binding = (name) => {
+    if (name === 'util') {
+      if (!_utilBindingCache) {
+        const t = require('util').types;
+        _utilBindingCache = {};
+        for (const k of _utilBindingKeys) _utilBindingCache[k] = t[k];
+      }
+      return _utilBindingCache;
+    }
+    throw new Error('process.binding is not supported');
+  };
+}
 
 const _osB = internalBinding('os');
 if (!process.getuid) process.getuid = () => _osB.getUid();

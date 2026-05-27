@@ -157,7 +157,8 @@ fn processChdir(info: *u8, _ud: *u8): void {
     unsafe {
         let pathLen = ci.arg(0).writeUtf8(iso, pathBuf as *u8, 4096)
         if pathLen <= 0 { return }
-        chdir(pathBuf as *u8)
+        let r = chdir(pathBuf as *u8)
+        ci.retI32(r)
     }
 }
 

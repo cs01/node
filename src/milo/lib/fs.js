@@ -378,11 +378,7 @@ function mkdtemp(prefix, opts, cb) {
 function accessSync(path, mode) {
   _validatePath(path, 'path');
   const sp = _toPath(path);
-  if (!existsSync(sp)) {
-    const err = new Error('ENOENT: no such file or directory: ' + sp);
-    err.code = 'ENOENT';
-    throw err;
-  }
+  if (!existsSync(sp)) throw _fsError('ENOENT', 'access', sp, 'no such file or directory');
 }
 
 function copyFileSync(src, dest) {
@@ -964,6 +960,33 @@ class Utf8Stream extends require('stream').Writable {
   }
 }
 
+function _toUnixTimestamp(time) {
+  if (typeof time === 'string' && +time == time) return +time;
+  if (typeof time === 'number') {
+    if (!Number.isFinite(time) || time < 0) return Date.now() / 1000;
+    return time;
+  }
+  if (time instanceof Date) return time.getTime() / 1000;
+  throw _ERR_INVALID_ARG_TYPE('time', 'Date or number', time);
+}
+
+function opendirSync(path, options) {
+  _validatePath(path, 'path');
+  const entries = readdirSync(path, { withFileTypes: true });
+  let idx = 0;
+  return {
+    path: typeof path === 'string' ? path : path.toString(),
+    readSync() { return idx < entries.length ? entries[idx++] : null; },
+    read() { return Promise.resolve(this.readSync()); },
+    closeSync() {},
+    close() { return Promise.resolve(); },
+    [Symbol.asyncIterator]() {
+      const self = this;
+      return { next() { const v = self.readSync(); return Promise.resolve(v ? { value: v, done: false } : { done: true }); } };
+    },
+  };
+}
+
 module.exports = {
   readFile, writeFile, appendFile, stat, lstat, mkdir, readdir,
   unlink, rmdir, rename, chmod, lchmod, access, rm, copyFile, realpath, exists,
@@ -980,6 +1003,7 @@ module.exports = {
   createReadStream, createWriteStream,
   ReadStream: createReadStream, WriteStream: createWriteStream,
   watch, watchFile, unwatchFile, FSWatcher, Dirent, Dir,
+  opendirSync, _toUnixTimestamp,
   promises, assertEncoding, stringToFlags, Utf8Stream,
   constants: internalBinding('constants').fs,
 };
