@@ -134,18 +134,25 @@ function spawn(file, args, options) {
   child.killed = false;
   child.connected = false;
 
+  function _deadChild() {
+    child.stdin = new Writable({ write(c, e, cb) { cb(); }, final(cb) { cb(); } });
+    child.stdout = new Readable({ read() { this.push(null); } });
+    child.stderr = new Readable({ read() { this.push(null); } });
+    child.kill = () => false;
+    child.ref = () => child;
+    child.unref = () => child;
+  }
+
   if (_SPAWN_DEPTH >= _MAX_SPAWN_DEPTH) {
-    child.pid = 0; child.stdin = null; child.stdout = null; child.stderr = null;
+    child.pid = 0; _deadChild();
     process.nextTick(() => child.emit('error', new Error('spawn depth limit exceeded')));
     return child;
   }
 
   const result = b.spawnAsync(file, a, stdinMode, stdoutMode, stderrMode);
   if (!result || result === -1) {
-    child.pid = 0;
-    child.stdin = null;
-    child.stdout = null;
-    child.stderr = null;
+    _deadChild();
+    child.spawnfile = file; child.spawnargs = [file, ...a];
     const err = new Error('spawn ' + file + ' ENOENT');
     err.code = 'ENOENT'; err.syscall = 'spawn ' + file; err.path = file; err.spawnargs = a;
     process.nextTick(() => child.emit('error', err));
@@ -253,13 +260,14 @@ function exec(command, options, cb) {
   let stderr = '';
   if (enc && child.stdout) child.stdout.setEncoding(enc);
   if (enc && child.stderr) child.stderr.setEncoding(enc);
-  child.stdout.on('data', (d) => { stdout += typeof d === 'string' ? d : d.toString(); });
-  child.stderr.on('data', (d) => { stderr += typeof d === 'string' ? d : d.toString(); });
+  if (child.stdout) child.stdout.on('data', (d) => { stdout += typeof d === 'string' ? d : d.toString(); });
+  if (child.stderr) child.stderr.on('data', (d) => { stderr += typeof d === 'string' ? d : d.toString(); });
   child.on('close', (code) => {
     if (cb) {
       if (code !== 0) {
         const err = new Error('Command failed: ' + command);
         err.code = code;
+        err.cmd = command;
         cb(err, stdout, stderr);
       } else {
         cb(null, stdout, stderr);
@@ -280,8 +288,8 @@ function execFile(file, args, options, cb) {
   let stderr = '';
   if (enc && child.stdout) child.stdout.setEncoding(enc);
   if (enc && child.stderr) child.stderr.setEncoding(enc);
-  child.stdout.on('data', (d) => { stdout += typeof d === 'string' ? d : d.toString(); });
-  child.stderr.on('data', (d) => { stderr += typeof d === 'string' ? d : d.toString(); });
+  if (child.stdout) child.stdout.on('data', (d) => { stdout += typeof d === 'string' ? d : d.toString(); });
+  if (child.stderr) child.stderr.on('data', (d) => { stderr += typeof d === 'string' ? d : d.toString(); });
   child.on('close', (code) => {
     if (cb) {
       if (code !== 0) {
@@ -293,7 +301,7 @@ function execFile(file, args, options, cb) {
       }
     }
   });
-  child.on('error', (err) => { if (cb) cb(err, stdout, stderr); });
+  child.on('error', (err) => { err.cmd = file + (args && args.length ? ' ' + args.join(' ') : ''); if (cb) cb(err, stdout, stderr); });
   return child;
 }
 

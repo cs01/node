@@ -172,6 +172,10 @@ if (!process.execPath) {
   }
 }
 if (!process.argv0) process.argv0 = process.argv[0] || '';
+// Resolve argv[0] to absolute path for child_process spawning compat
+if (process.argv[0] && !process.argv[0].startsWith('/')) {
+  process.argv[0] = process.execPath;
+}
 if (!process.execArgv) process.execArgv = [];
 if (!process.allowedNodeEnvironmentFlags) process.allowedNodeEnvironmentFlags = new Set();
 if (!process.kill) {

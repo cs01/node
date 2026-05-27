@@ -423,7 +423,7 @@ class Server extends EventEmitter {
       this._handle = this._server._handle;
       if (cb) this.removeListener('error', cb);
       this.emit('listening');
-      if (cb) cb();
+      if (cb) cb.call(this);
     });
     return this;
   }
@@ -483,6 +483,8 @@ class ClientRequest extends EventEmitter {
     this.protocol = options.protocol || 'http:';
     this.socket = null;
     this.finished = false;
+    this.writableEnded = false;
+    this.writableFinished = false;
     this.headersSent = false;
 
     if (options.headers) {
@@ -597,6 +599,8 @@ class ClientRequest extends EventEmitter {
           const match = statusLine.match(/^HTTP\/(\d\.\d) (\d+) ?(.*)$/);
 
           res = new IncomingMessage();
+          res.socket = socket;
+          res.connection = socket;
           if (match) {
             res.httpVersion = match[1];
             res.statusCode = parseInt(match[2]);

@@ -129,6 +129,8 @@ class Readable extends Stream {
       resumeScheduled: false, readableListening: false,
       awaitDrainWriters: null,
       _destroyed: false,
+      autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true,
+      endEmitted: false,
     };
     if (opts && opts.encoding) this.setEncoding(opts.encoding);
     if (opts && opts.defaultEncoding !== undefined) {
@@ -144,7 +146,11 @@ class Readable extends Stream {
     }
   }
 
-  _read(_size) {}
+  _read(_size) {
+    const err = new Error('The _read() method is not implemented');
+    err.code = 'ERR_METHOD_NOT_IMPLEMENTED';
+    this.destroy(err);
+  }
 
   read(size) {
     const state = this._readableState;
@@ -152,7 +158,7 @@ class Readable extends Stream {
     if (state.buffer.length === 0) {
       if (state.ended) {
         state.reading = false;
-        if (!state.endEmitted) { state.endEmitted = true; process.nextTick(() => { this.readable = false; this.emit('end'); }); }
+        if (!state.endEmitted) { state.endEmitted = true; process.nextTick(() => { this.readable = false; this.emit('end'); if (state.autoDestroy && (!this._writableState || this._writableState.finished)) this.destroy(); }); }
         return null;
       }
       state.reading = true;
@@ -160,7 +166,7 @@ class Readable extends Stream {
       this._read(state.highWaterMark);
       state.reading = false;
       if (state.buffer.length === 0) {
-        if (state.ended && !state.endEmitted) { state.endEmitted = true; process.nextTick(() => { this.readable = false; this.emit('end'); }); }
+        if (state.ended && !state.endEmitted) { state.endEmitted = true; process.nextTick(() => { this.readable = false; this.emit('end'); if (state.autoDestroy && (!this._writableState || this._writableState.finished)) this.destroy(); }); }
         return null;
       }
     }
@@ -209,7 +215,7 @@ class Readable extends Stream {
       state.ended = true;
       if (state.flowing || state.buffer.length === 0) {
         process.nextTick(() => {
-          if (!state.endEmitted && !state._destroyed) { state.endEmitted = true; this.readable = false; this.emit('end'); }
+          if (!state.endEmitted && !state._destroyed) { state.endEmitted = true; this.readable = false; this.emit('end'); if (state.autoDestroy && (!this._writableState || this._writableState.finished)) this.destroy(); }
           if (this.allowHalfOpen === false && this._writableState && !this._writableState.ended) this.end();
           if (this._writableState && this._writableState.autoDestroy && this._writableState.finished) process.nextTick(() => { if (!this.destroyed) this.destroy(); });
         });
@@ -223,7 +229,16 @@ class Readable extends Stream {
       process.nextTick(() => this.emit('error', err));
       return false;
     }
-    if (!state.objectMode && typeof chunk === 'string') chunk = Buffer.from(chunk, encoding || state.defaultEncoding);
+    if (!state.objectMode) {
+      if (typeof chunk === 'string') { chunk = Buffer.from(chunk, encoding || state.defaultEncoding); }
+      else if (!(chunk instanceof Buffer || chunk instanceof Uint8Array)) {
+        const err = new TypeError(`The "chunk" argument must be of type string or an instance of Buffer or Uint8Array. Received ${typeof chunk === 'object' ? 'an instance of ' + (chunk.constructor ? chunk.constructor.name : 'Object') : typeof chunk + ' (' + chunk + ')'}`);
+        err.code = 'ERR_INVALID_ARG_TYPE';
+        state.errored = err;
+        process.nextTick(() => this.emit('error', err));
+        return false;
+      }
+    }
     if (state.encoding && Buffer.isBuffer(chunk)) chunk = chunk.toString(state.encoding);
     if (state.flowing) {
       this.emit('data', chunk);
@@ -328,14 +343,23 @@ class Readable extends Stream {
         this.emit('data', chunk);
       }
     }
-    if (state.ended && state.buffer.length === 0 && !state.endEmitted && !state._destroyed) { state.endEmitted = true; this.readable = false; this.emit('end'); }
+    if (state.ended && state.buffer.length === 0 && !state.endEmitted && !state._destroyed) { state.endEmitted = true; this.readable = false; this.emit('end'); if (state.autoDestroy && (!this._writableState || this._writableState.finished)) this.destroy(); }
   }
   pause() { if (this._readableState.flowing !== false) { this._readableState.flowing = false; this.emit('pause'); } return this; }
   isPaused() { return this._readableState.flowing === false; }
   unshift(chunk, encoding) {
     const state = this._readableState;
     if (state._destroyed) return;
-    if (!state.objectMode && typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
+    if (!state.objectMode) {
+      if (typeof chunk === 'string') { chunk = Buffer.from(chunk, encoding); }
+      else if (chunk !== null && chunk !== undefined && !(chunk instanceof Buffer || chunk instanceof Uint8Array)) {
+        const err = new TypeError(`The "chunk" argument must be of type string or an instance of Buffer or Uint8Array. Received ${typeof chunk === 'object' ? 'an instance of ' + (chunk.constructor ? chunk.constructor.name : 'Object') : typeof chunk + ' (' + chunk + ')'}`);
+        err.code = 'ERR_INVALID_ARG_TYPE';
+        state.errored = err;
+        process.nextTick(() => this.emit('error', err));
+        return;
+      }
+    }
     if (state.encoding && Buffer.isBuffer(chunk)) chunk = chunk.toString(state.encoding);
     if (chunk !== null && chunk !== undefined) {
       const len = state.objectMode ? 1 : (chunk.length || 0);
@@ -543,8 +567,18 @@ Readable.from = function(iterable, opts) {
   const r = new Readable({ objectMode: true, highWaterMark: 16, ...opts });
   r._read = () => {};
   (async () => {
-    for await (const chunk of iterable) r.push(chunk);
-    r.push(null);
+    try {
+      for await (const chunk of iterable) {
+        if (chunk === null) {
+          const err = new TypeError('May not write null values to stream');
+          err.code = 'ERR_STREAM_NULL_VALUES';
+          r.destroy(err);
+          return;
+        }
+        r.push(chunk);
+      }
+      r.push(null);
+    } catch (e) { r.destroy(e); }
   })();
   return r;
 };
@@ -857,6 +891,7 @@ class Duplex extends Readable {
   get writableObjectMode() { return !!(this._writableState && this._writableState.objectMode); }
   get writableCorked() { return (this._writableState && this._writableState.corked) || 0; }
   get writableNeedDrain() { return !!(this._writableState && this._writableState.needDrain); }
+  _read() {}
 
   destroy(err, cb) {
     if (this._readableState._destroyed && this._writableState._destroyed) { if (cb) cb(); return this; }
@@ -904,6 +939,8 @@ class Transform extends Duplex {
     if (opts && typeof opts.flush === 'function') this._flush = opts.flush;
     if (userFinal) this._userFinal = userFinal;
   }
+
+  _read() {}
 
   _transform(chunk, encoding, cb) { cb(null, chunk); }
 

@@ -242,7 +242,15 @@ const win32 = {
     if (end < 0) return '';
     return p.slice(start, end);
   },
-  extname(p) { validateString(p, 'path'); return extname(p.replace(/\\/g, '/')); },
+  extname(p) {
+    validateString(p, 'path');
+    let s = p.replace(/\\/g, '/');
+    if (s.length >= 2 && s.charCodeAt(1) === 58) {
+      const d = s.charCodeAt(0);
+      if ((d >= 65 && d <= 90) || (d >= 97 && d <= 122)) s = s.slice(2);
+    }
+    return extname(s);
+  },
   parse(p) {
     validateString(p, 'path');
     const ret = { root: '', dir: '', base: '', ext: '', name: '' };

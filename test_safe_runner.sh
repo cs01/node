@@ -28,9 +28,11 @@ done
 SAMPLE_SIZE="${1:-384}"
 MAX_SECS="${2:-8}"
 MAX_PROCS="${3:-30}"
+MAX_MEM_MB="${MAX_MEM_MB:-512}"
+MAX_MEM_KB=$((MAX_MEM_MB * 1024))
 RESULTS_FILE="/tmp/milo_safe_results_$$.csv"
 
-echo "SAFE TEST RUNNER v6"
+echo "SAFE TEST RUNNER v7 (mem limit: ${MAX_MEM_MB}MB)"
 
 SAMPLE_LIST="/tmp/milo_sample_$$.txt"
 
@@ -84,7 +86,7 @@ else
 fi
 echo ""
 
-pass=0; fail=0; timeout_count=0; forkbomb=0; total_run=0
+pass=0; fail=0; timeout_count=0; forkbomb=0; oom=0; total_run=0
 
 echo "test,result,note" > "$RESULTS_FILE"
 
@@ -94,16 +96,29 @@ while IFS= read -r test_file; do
   test_name=$(basename "$test_file")
   outfile="/tmp/milo_tout_$$_${total_run}"
 
-  # Run in subshell with ulimit to cap processes, in its own process group
-  # The ulimit -u caps total user processes so fork bombs hit EAGAIN fast
+  # Run in subshell with ulimit to cap processes and memory
   (
     ulimit -u "$MAX_PROCS" 2>/dev/null
+    ulimit -v "$MAX_MEM_KB" 2>/dev/null
     exec "$MILO_NODE" "$test_file" < /dev/null
   ) > "$outfile" 2>&1 &
   pid=$!
 
-  # Watchdog kills after MAX_SECS
-  ( sleep "$MAX_SECS"; kill -9 "$pid" 2>/dev/null ) &
+  # Watchdog: kills after MAX_SECS or if RSS exceeds limit
+  (
+    elapsed=0
+    while [ $elapsed -lt "$MAX_SECS" ]; do
+      sleep 1
+      elapsed=$((elapsed + 1))
+      rss=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ')
+      if [ -n "$rss" ] && [ "$rss" -gt "$MAX_MEM_KB" ] 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null
+        echo "OOM" > "/tmp/milo_oom_$$_${total_run}"
+        exit 0
+      fi
+    done
+    kill -9 "$pid" 2>/dev/null
+  ) &
   wdog=$!
 
   wait "$pid" 2>/dev/null
@@ -115,6 +130,19 @@ while IFS= read -r test_file; do
 
   # Kill any orphaned milo-node processes from this test
   pkill -9 -P "$pid" 2>/dev/null
+
+  oom_marker="/tmp/milo_oom_$$_${total_run}"
+
+  # Check OOM marker from RSS watchdog
+  if [ -f "$oom_marker" ]; then
+    oom=$((oom + 1))
+    result="OOM"
+    note="${MAX_MEM_MB}MB limit exceeded"
+    rm -f "$oom_marker"
+    echo "$test_name,$result,\"$note\"" >> "$RESULTS_FILE"
+    rm -f "$outfile"
+    continue
+  fi
 
   # Aggressive fork bomb check — if >20 milo-node procs exist, kill all
   n_milo=$(pgrep -c milo-node 2>/dev/null || echo 0)
@@ -145,7 +173,7 @@ while IFS= read -r test_file; do
 
   if [ $((total_run % 50)) -eq 0 ]; then
     pct=$((total_run * 100 / ACTUAL))
-    echo "[$pct%] $total_run/$ACTUAL | P=$pass F=$fail T=$timeout_count FB=$forkbomb"
+    echo "[$pct%] $total_run/$ACTUAL | P=$pass F=$fail T=$timeout_count FB=$forkbomb OOM=$oom"
   fi
 done < "$SAMPLE_LIST"
 
@@ -155,7 +183,7 @@ rm -f "$SAMPLE_LIST"
 
 echo ""
 echo "============ RESULTS ============"
-echo "Total: $total_run | Pass: $pass | Fail: $fail | Timeout: $timeout_count | Forkbomb: $forkbomb"
+echo "Total: $total_run | Pass: $pass | Fail: $fail | Timeout: $timeout_count | Forkbomb: $forkbomb | OOM: $oom"
 
 if [ $total_run -gt 0 ]; then
   pass_pct=$(echo "scale=1; $pass * 100 / $total_run" | bc)
@@ -194,6 +222,10 @@ grep ",FAIL," "$RESULTS_FILE" | sed 's/.*,"//;s/"$//' | sort | uniq -c | sort -r
 echo ""
 echo "TIMEOUTS:"
 grep ",TIMEOUT," "$RESULTS_FILE" | awk -F, '{print $1}'
+
+echo ""
+echo "OOM (>${MAX_MEM_MB}MB):"
+grep ",OOM," "$RESULTS_FILE" | awk -F, '{print $1}'
 
 echo ""
 echo "FORKBOMBS:"

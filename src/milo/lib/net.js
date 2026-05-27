@@ -369,10 +369,10 @@ class Server extends EventEmitter {
 Server._servers = new Map();
 
 function _emitSocketError(sock, e) {
-  if (sock.listenerCount('error') > 0) { sock.emit('error', e); return; }
+  if (typeof sock.listenerCount === 'function' && sock.listenerCount('error') > 0) { sock.emit('error', e); return; }
   const handlers = process.listeners && process.listeners('uncaughtException');
   if (handlers && handlers.length > 0) process.emit('uncaughtException', e);
-  else { console.error(e); sock.destroy(); }
+  else { console.error(e); if (typeof sock.destroy === 'function') sock.destroy(); }
 }
 
 // --- I/O pump called from event loop ---
@@ -419,8 +419,7 @@ function _pollOnce(timeout) {
       try { sock._onReadable(); } catch (e) { _emitSocketError(sock, e); }
     }
 
-    if ((flags & EV_EOF) && !sock.destroyed && !sock._readableState.ended) {
-      // Drain any remaining data before signaling EOF
+    if ((flags & EV_EOF) && !sock.destroyed && sock._readableState && !sock._readableState.ended) {
       while (!sock.destroyed && !sock._readableState.ended) {
         const data = tcp.recvBinary(sock._fd);
         if (data === undefined || data.length === 0) break;

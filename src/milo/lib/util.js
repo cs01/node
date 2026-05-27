@@ -226,7 +226,7 @@ function callbackify(fn) {
     if (typeof cb !== 'function') throw new TypeError('The last argument must be of type function');
     fn(...args).then(
       (r) => process.nextTick(cb, null, r),
-      (e) => { if (!e) { const wrapped = new Error('Promise was rejected with falsy value'); wrapped.reason = e; e = wrapped; } process.nextTick(cb, e); }
+      (e) => { if (!e) { const wrapped = new Error('Promise was rejected with falsy value'); wrapped.reason = e; wrapped.code = 'ERR_FALSY_VALUE_REJECTION'; e = wrapped; } process.nextTick(cb, e); }
     );
   };
   Object.defineProperty(callbackified, 'length', { value: fn.length + 1 });
