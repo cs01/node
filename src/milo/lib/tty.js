@@ -70,6 +70,12 @@ class WriteStream extends Writable {
     return true;
   }
 
+  clearScreenDown(cb) {
+    this.write('\x1b[0J');
+    if (cb) cb();
+    return true;
+  }
+
   getWindowSize() { return [this.columns, this.rows]; }
   getColorDepth() { return 8; }
   hasColors(count) { return (count || 16) <= 256; }

@@ -433,6 +433,11 @@ class Buffer extends Uint8Array {
       for (let i = start; i < end; i++) s += String.fromCharCode(this[i]);
       return s;
     }
+    if (encoding === 'ucs2' || encoding === 'ucs-2' || encoding === 'utf16le' || encoding === 'utf-16le') {
+      let s = '';
+      for (let i = start; i + 1 < end; i += 2) s += String.fromCharCode(this[i] | (this[i + 1] << 8));
+      return s;
+    }
     return _utf8Decode(this, start, end);
   }
 

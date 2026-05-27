@@ -278,6 +278,7 @@ int nm_uname_sysname(char* out, int out_len) {
 
 // userinfo helper — getpwuid
 #include <pwd.h>
+#include <grp.h>
 
 // Fills "username|homedir|shell" into out buffer
 int nm_userinfo(int uid, char* out, int out_len) {
@@ -285,6 +286,18 @@ int nm_userinfo(int uid, char* out, int out_len) {
     if (!pw) return -1;
     int n = snprintf(out, out_len, "%s|%s|%s", pw->pw_name, pw->pw_dir, pw->pw_shell);
     return (n >= 0 && n < out_len) ? 0 : -1;
+}
+
+// Resolve username to uid. Returns uid or -1 if not found.
+int nm_resolve_user(const char* name) {
+    struct passwd* pw = getpwnam(name);
+    return pw ? (int)pw->pw_uid : -1;
+}
+
+// Resolve group name to gid. Returns gid or -1 if not found.
+int nm_resolve_group(const char* name) {
+    struct group* gr = getgrnam(name);
+    return gr ? (int)gr->gr_gid : -1;
 }
 
 // OpenSSL

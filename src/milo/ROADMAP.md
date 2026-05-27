@@ -4,6 +4,60 @@ Goal: 100% Node.js runtime compatibility.
 Test only the module you're fixing: `./out/Release/milo-node -e "..."`.
 Full build: `bash src/milo/build.sh`
 
+## bun compat scoreboard
+
+Bun targets 2,185 of Node's 3,979 `test/parallel/` tests (55%). They skip entire subsystems:
+repl, inspector, debugger, diagnostics_channel, domain, permission, trace, snapshot, test runner.
+We use their curated subset as our primary compat benchmark.
+
+Run: `zsh src/milo/test-compat.sh [N|all] [timeout] [module]`
+List: `src/milo/bun-curated-tests.txt` (2,143 tests present in our repo)
+
+### current pass rates (2026-05-27)
+
+On bun's curated subset: **bun 99%, milo 35%** (200-sample)
+Full runs on process (57 tests) and module (26 tests) below; others from 200-sample.
+
+| module     | pass/total | rate | priority | top blockers |
+|------------|-----------|------|----------|--------------|
+| dgram      | ~6/9      | 67%  | —        | mostly passing |
+| fs         | ~8/14     | 57%  | high     | error codes, write-stream edge cases |
+| crypto     | ~4/8      | 50%  | med      | DH/ECDH, sign/verify gaps |
+| net        | ~3/7      | 43%  | high     | Socket not extending Duplex |
+| child      | ~3/7      | 43%  | med      | child.send, spawn edge cases |
+| http       | ~11/26    | 42%  | high     | timeout/abort handling, error codes |
+| process    | 22/57     | 38%  | high     | error codes, execve, seteuid, ref/unref, umask |
+| vm         | ~4/11     | 36%  | low      | sandbox isolation, SourceTextModule |
+| buffer     | ~2/6      | 33%  | high     | error codes, missing methods |
+| tls        | ~3/9      | 33%  | med      | connection lifecycle, error codes |
+| stream     | ~4/13     | 31%  | high     | Writable.toWeb, pipeline edge cases |
+| module     | 7/26      | 26%  | high     | _stat, _nodeModulePaths, _resolveLookupPaths, _extensions |
+| zlib       | ~2/9      | 22%  | high     | ZstdDecompress, flush/params |
+
+## quick wins (biggest compat % gain per effort)
+
+### error codes (cross-module) — unlocks ~11 process, ~dozens elsewhere
+- [ ] already tracked below — "Missing expected exception" is #1 failure pattern across all modules
+- [ ] just adding `.code` to thrown errors would flip many tests
+
+### process 38% → ~60% (57 tests in curated set, 22 passing)
+- [ ] `process.seteuid()`, `process.setegid()`, `process.getegid()` — trivial syscall bindings (3 tests)
+- [ ] `process.umask(mask)` — return old mask, not current (2 tests)
+- [ ] `process.ref()` / `process.unref()` — missing on process object (1 test)
+- [ ] `process.kill(pid)` validation + return value (2 tests)
+- [ ] error code validation on cpuUsage, hrtime, nextTick, chdir (4 tests)
+
+### module 26% → ~50% (26 tests in curated set, 7 passing)
+- [ ] `Module._stat` — fs.statSync wrapper, used by require resolution (1 test)
+- [ ] `Module._nodeModulePaths` / `Module._resolveLookupPaths` — expose internals (2 tests)
+- [ ] `Module._extensions` — setter for custom extensions like `.bar` (1 test)
+- [ ] circular dependency detection + warning (1 test)
+
+### zlib 22% → ~50% (56 tests in curated set)
+- [ ] `zlib.zstdCompress` / `zlib.ZstdDecompress` — Zstandard support
+- [ ] `zlib.params()` — dynamic compression level change
+- [ ] flush mode edge cases
+
 ## critical
 
 ### error code validation (~435 tests)

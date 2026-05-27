@@ -11,6 +11,10 @@ extern fn getegid(): u32
 extern fn getpid(): i32
 extern fn getppid(): i32
 extern fn umask(mask: u32): u32
+extern fn setuid(uid: u32): i32
+extern fn setgid(gid: u32): i32
+extern fn seteuid(uid: u32): i32
+extern fn setegid(gid: u32): i32
 extern fn getpriority(which: i32, who: i32): i32
 extern fn setpriority(which: i32, who: i32, prio: i32): i32
 extern fn sysconf(name: i32): i64
@@ -35,6 +39,8 @@ extern fn nm_cpu_times(outTimes: *u32, maxCpus: i32): i32
 extern fn nm_net_interfaces(out: *u8, outLen: i32): i32
 extern fn nm_userinfo(uid: i32, out: *u8, outLen: i32): i32
 extern fn nm_uname_machine(out: *u8, outLen: i32): i32
+extern fn nm_resolve_user(name: *u8): i32
+extern fn nm_resolve_group(name: *u8): i32
 extern fn nm_uname_sysname(out: *u8, outLen: i32): i32
 
 fn osGetHostname(info: *u8, _ud: *u8): void {
@@ -261,6 +267,12 @@ fn nm_init_os(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "getGid" as *u8, osGetGid as *u8)
         c.setMethod(exp, "getEuid" as *u8, osGetEuid as *u8)
         c.setMethod(exp, "getEgid" as *u8, osGetEgid as *u8)
+        c.setMethod(exp, "setUid" as *u8, osSetUid as *u8)
+        c.setMethod(exp, "setGid" as *u8, osSetGid as *u8)
+        c.setMethod(exp, "setEuid" as *u8, osSetEuid as *u8)
+        c.setMethod(exp, "setEgid" as *u8, osSetEgid as *u8)
+        c.setMethod(exp, "resolveUser" as *u8, osResolveUser as *u8)
+        c.setMethod(exp, "resolveGroup" as *u8, osResolveGroup as *u8)
         c.setMethod(exp, "getUserInfo" as *u8, osGetUserInfo as *u8)
         c.setMethod(exp, "getMachine" as *u8, osGetMachine as *u8)
         c.setMethod(exp, "getSysname" as *u8, osGetSysname as *u8)
@@ -322,4 +334,64 @@ fn osGetUserInfo(info: *u8, _ud: *u8): void {
 fn osGetEgid(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     unsafe { ci.retU32(getegid()) }
+}
+
+fn osSetUid(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let id = ci.i32Arg(0, -1)
+    if id < 0 {
+        ci.retI32(-1)
+        return
+    }
+    unsafe { ci.retI32(setuid(id as u32)) }
+}
+
+fn osSetGid(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let id = ci.i32Arg(0, -1)
+    if id < 0 {
+        ci.retI32(-1)
+        return
+    }
+    unsafe { ci.retI32(setgid(id as u32)) }
+}
+
+fn osSetEuid(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let id = ci.i32Arg(0, -1)
+    if id < 0 {
+        ci.retI32(-1)
+        return
+    }
+    unsafe { ci.retI32(seteuid(id as u32)) }
+}
+
+fn osSetEgid(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let id = ci.i32Arg(0, -1)
+    if id < 0 {
+        ci.retI32(-1)
+        return
+    }
+    unsafe { ci.retI32(setegid(id as u32)) }
+}
+
+fn osResolveUser(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    unsafe {
+        var buf: [u8; 256] = [0; 256]
+        ci.arg(0).writeUtf8(iso, buf as *u8, 256)
+        ci.retI32(nm_resolve_user(buf as *u8))
+    }
+}
+
+fn osResolveGroup(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    unsafe {
+        var buf: [u8; 256] = [0; 256]
+        ci.arg(0).writeUtf8(iso, buf as *u8, 256)
+        ci.retI32(nm_resolve_group(buf as *u8))
+    }
 }

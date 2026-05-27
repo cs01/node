@@ -641,7 +641,15 @@ class ClientRequest extends EventEmitter {
   setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
   setNoDelay(noDelay) { if (this.socket) this.socket.setNoDelay(noDelay); }
   setSocketKeepAlive(enable, delay) { if (this.socket) this.socket.setKeepAlive(enable, delay); }
-  abort() { if (this.socket) this.socket.destroy(); }
+  abort() {
+    if (this.aborted) return;
+    this.aborted = true;
+    if (this.socket) this.socket.destroy();
+    const err = new Error('socket hang up');
+    err.code = 'ECONNRESET';
+    this.emit('error', err);
+    this.emit('close');
+  }
 }
 
 function request(url, options, cb) {

@@ -1,26 +1,64 @@
 #!/bin/bash
-# Safe test runner v5 — ulimit + process group isolation
+# Safe test runner v6 — ulimit + process group isolation + bun compat scoreboard
+# Usage:
+#   bash test_safe_runner.sh [sample_size] [timeout] [max_procs]
+#   bash test_safe_runner.sh --file list.txt [timeout] [max_procs]
+#   bash test_safe_runner.sh --compat [sample_size|all] [timeout] [max_procs]
+#   bash test_safe_runner.sh --compat --module http [timeout] [max_procs]
 set -o pipefail
 MILO_NODE="./out/Release/milo-node"
 TEST_DIR="test/parallel"
+CURATED_LIST="src/milo/bun-curated-tests.txt"
 export NODE_SKIP_FLAG_CHECK=1
 FIXED_LIST=""
-if [ "$1" = "--file" ]; then
-  FIXED_LIST="$2"
-  shift 2
-fi
+COMPAT_MODE=1
+MODULE_FILTER=""
+
+# Parse flags (compat mode is default, use --full for original behavior)
+while [[ "$1" == --* ]]; do
+  case "$1" in
+    --file) FIXED_LIST="$2"; COMPAT_MODE=""; shift 2 ;;
+    --full) COMPAT_MODE=""; shift ;;
+    --compat) COMPAT_MODE=1; shift ;;
+    --module) MODULE_FILTER="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
 SAMPLE_SIZE="${1:-384}"
 MAX_SECS="${2:-8}"
 MAX_PROCS="${3:-30}"
 RESULTS_FILE="/tmp/milo_safe_results_$$.csv"
 
-echo "SAFE TEST RUNNER v5"
+echo "SAFE TEST RUNNER v6"
 
 SAMPLE_LIST="/tmp/milo_sample_$$.txt"
 
 if [ -n "$FIXED_LIST" ] && [ -f "$FIXED_LIST" ]; then
   cp "$FIXED_LIST" "$SAMPLE_LIST"
   echo "Fixed list: $FIXED_LIST | Timeout: ${MAX_SECS}s | Max procs: $MAX_PROCS"
+elif [ -n "$COMPAT_MODE" ]; then
+  # Bun compat scoreboard mode — run against bun's curated subset
+  if [ ! -f "$CURATED_LIST" ]; then
+    echo "error: $CURATED_LIST not found"
+    exit 1
+  fi
+  if [ -n "$MODULE_FILTER" ]; then
+    grep "^test-${MODULE_FILTER}-" "$CURATED_LIST" | sed "s|^|$TEST_DIR/|" | while read f; do
+      [ -f "$f" ] && echo "$f"
+    done > "$SAMPLE_LIST"
+    echo "Compat mode: module=$MODULE_FILTER | Timeout: ${MAX_SECS}s | Max procs: $MAX_PROCS"
+  elif [ "$SAMPLE_SIZE" = "all" ]; then
+    sed "s|^|$TEST_DIR/|" "$CURATED_LIST" | while read f; do
+      [ -f "$f" ] && echo "$f"
+    done > "$SAMPLE_LIST"
+    echo "Compat mode: ALL | Timeout: ${MAX_SECS}s | Max procs: $MAX_PROCS"
+  else
+    sed "s|^|$TEST_DIR/|" "$CURATED_LIST" | while read f; do
+      [ -f "$f" ] && echo "$f"
+    done | sort -R | head -n "$SAMPLE_SIZE" > "$SAMPLE_LIST"
+    echo "Compat mode: sample $SAMPLE_SIZE | Timeout: ${MAX_SECS}s | Max procs: $MAX_PROCS"
+  fi
 else
   echo "Sample: $SAMPLE_SIZE | Timeout: ${MAX_SECS}s | Max procs: $MAX_PROCS"
   DANGEROUS=$(grep -rl "child_process\|\.fork(\|cluster\|\.spawn(" "$TEST_DIR"/test-*.js 2>/dev/null)
@@ -39,7 +77,11 @@ else
 fi
 
 ACTUAL=$(wc -l < "$SAMPLE_LIST" | tr -d ' ')
-echo "Pop: $N_D dangerous + $N_S safe = $TOTAL | Sampling: $SAMP_D + $SAMP_S = $ACTUAL"
+if [ -z "$COMPAT_MODE" ] && [ -z "$FIXED_LIST" ]; then
+  echo "Pop: $N_D dangerous + $N_S safe = $TOTAL | Sampling: $SAMP_D + $SAMP_S = $ACTUAL"
+else
+  echo "Tests: $ACTUAL"
+fi
 echo ""
 
 pass=0; fail=0; timeout_count=0; forkbomb=0; total_run=0
@@ -124,6 +166,26 @@ if [ $total_run -gt 0 ]; then
   echo "Pass rate: ${pass_pct}%"
   echo "95% CI: [${lo}%, ${hi}%]"
 fi
+
+echo ""
+echo "PER-MODULE BREAKDOWN:"
+printf "%-20s %5s %5s %5s\n" "module" "pass" "fail" "rate"
+# Extract module from test name, tally pass/fail per module
+# Extract module from test name, tally per module, sort by name
+tail -n +2 "$RESULTS_FILE" | while IFS=, read -r name result note; do
+  mod=$(echo "$name" | sed 's/^test-\([a-z_]*[a-z0-9]*\)-.*/\1/')
+  echo "$mod $result"
+done | awk '
+  { mod=$1; res=$2; total[mod]++; if (res=="PASS") pass[mod]++ }
+  END {
+    for (mod in total) {
+      p = (mod in pass) ? pass[mod] : 0
+      f = total[mod] - p
+      rate = int(p * 100 / total[mod])
+      printf "%-20s %5d %5d %4d%%\n", mod, p, f, rate
+    }
+  }
+' | sort
 
 echo ""
 echo "FAILURE CATEGORIES:"

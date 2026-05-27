@@ -718,6 +718,7 @@ class Writable extends Stream {
   destroy(err, cb) {
     if (this._writableState._destroyed) { if (cb) cb(); return this; }
     this._writableState._destroyed = true;
+    this.writable = false;
     if (err) this._writableState.errored = err;
     const s = this._writableState;
     while (s.buffered.length > 0) {
@@ -800,6 +801,8 @@ class Duplex extends Readable {
     if (this._readableState._destroyed && this._writableState._destroyed) { if (cb) cb(); return this; }
     this._readableState._destroyed = true;
     this._writableState._destroyed = true;
+    this.readable = false;
+    this.writable = false;
     if (err) { this._readableState.errored = err; this._writableState.errored = err; }
     const ws = this._writableState;
     while (ws.buffered.length > 0) {

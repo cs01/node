@@ -274,15 +274,50 @@ const ANSI_CODES = {
   bgBlue: [44, 49], bgMagenta: [45, 49], bgCyan: [46, 49], bgWhite: [47, 49],
 };
 
-function styleText(format, text) {
+function _parseHexColor(format) {
+  if (typeof format !== 'string' || format[0] !== '#') return null;
+  const hex = format.slice(1);
+  if (hex.length === 6 && /^[0-9a-fA-F]{6}$/.test(hex)) {
+    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+  }
+  if (hex.length === 3 && /^[0-9a-fA-F]{3}$/.test(hex)) {
+    return [parseInt(hex[0] + hex[0], 16), parseInt(hex[1] + hex[1], 16), parseInt(hex[2] + hex[2], 16)];
+  }
+  return false; // starts with # but invalid
+}
+
+function styleText(format, text, options) {
   if (Array.isArray(format)) {
-    let result = text;
-    for (const f of format) result = styleText(f, result);
+    let result = String(text);
+    for (let i = format.length - 1; i >= 0; i--) result = styleText(format[i], result, options);
     return result;
   }
+  if (format === 'none') return String(text);
+  const validateStream = !options || options.validateStream !== false;
+  if (validateStream && options && options.stream) {
+    const stream = options.stream;
+    if (!stream.isTTY && !process.env.FORCE_COLOR) return String(text);
+    if (process.env.NO_COLOR && !process.env.FORCE_COLOR) return String(text);
+    if (process.env.NODE_DISABLE_COLORS && !process.env.FORCE_COLOR) return String(text);
+    if (process.env.FORCE_COLOR === '0') return String(text);
+  }
   const codes = ANSI_CODES[format];
-  if (!codes) return text;
-  return `\x1b[${codes[0]}m${text}\x1b[${codes[1]}m`;
+  if (codes) return `\x1b[${codes[0]}m${text}\x1b[${codes[1]}m`;
+  const rgb = _parseHexColor(format);
+  if (rgb) {
+    const open = `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m`;
+    const s = String(text);
+    // restore this color after any inner foreground reset that has content after it
+    const inner = s.replace(/\x1b\[39m(?=[\s\S]+)/g, open);
+    return `${open}${inner}\x1b[39m`;
+  }
+  if (rgb === false) {
+    const e = new TypeError(`The argument 'format' must be a valid hex color. Received '${format}'`);
+    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+  }
+  // Unknown format name
+  const e = new TypeError(`The argument 'format' is invalid. Received '${format}'`);
+  e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
 }
 
 class MIMEType {

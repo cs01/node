@@ -83,9 +83,31 @@ globalThis.clearInterval = function(t) {
   _tb.clear(id);
 };
 
-if (typeof setImmediate === 'undefined') {
-  globalThis.setImmediate = function(fn, ...args) { return setTimeout(fn, 0, ...args); };
-  globalThis.clearImmediate = function(id) { clearTimeout(id); };
+// setImmediate runs after I/O poll, not as setTimeout(0)
+const _immediateQueue = [];
+let _immediateId = 0;
+const _activeImmediates = new Set();
+
+globalThis.setImmediate = function(fn, ...args) {
+  if (typeof fn !== 'function') fn = Function(fn);
+  const id = ++_immediateId;
+  _activeImmediates.add(id);
+  _immediateQueue.push({ id, fn, args });
+  return new Timeout(id, fn, 0, args, false);
+};
+globalThis.clearImmediate = function(t) {
+  const id = t && typeof t === 'object' ? t._id : t;
+  _activeImmediates.delete(id);
+};
+
+function _drainImmediates() {
+  const batch = _immediateQueue.splice(0, _immediateQueue.length);
+  for (const item of batch) {
+    if (_activeImmediates.has(item.id)) {
+      _activeImmediates.delete(item.id);
+      _safeCall(item.fn, item.args);
+    }
+  }
 }
 
 // Event loop — called from main.milo after script execution
@@ -118,7 +140,8 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     }
     const hasIO = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
     const hasTicks = process._nextTickQueue && process._nextTickQueue.length > 0;
-    if (!hasTimers && !hasIO && !hasTicks) {
+    const hasImmediates = _immediateQueue.length > 0;
+    if (!hasTimers && !hasIO && !hasTicks && !hasImmediates) {
       // Emit beforeExit — handlers may schedule new work
       if (process._emitBeforeExit) process._emitBeforeExit();
       if (process._tickCallback) process._tickCallback();
@@ -126,7 +149,8 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
       const hasTimers2 = _tb.hasPending() && (() => { for (const id of _timerCallbacks.keys()) { if (!_unrefTimers.has(id)) return true; } return false; })();
       const hasIO2 = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
       const hasTicks2 = process._nextTickQueue && process._nextTickQueue.length > 0;
-      if (!hasTimers2 && !hasIO2 && !hasTicks2) break;
+      const hasImmediates2 = _immediateQueue.length > 0;
+      if (!hasTimers2 && !hasIO2 && !hasTicks2 && !hasImmediates2) break;
     }
 
     let waitMs = 100;
@@ -144,6 +168,11 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
       _tb.sleepMs(waitMs);
     }
     _eluIdleMs += _now() - pollStart;
+    if (process._tickCallback) process._tickCallback();
+    // Quick non-blocking poll to catch events triggered during callbacks
+    if (poll && _immediateQueue.length > 0) { poll(0); if (process._tickCallback) process._tickCallback(); }
+    // setImmediate: run after I/O poll (Node.js "check" phase)
+    _drainImmediates();
     if (process._tickCallback) process._tickCallback();
   }
 }, enumerable: false });

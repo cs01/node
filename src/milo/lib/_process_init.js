@@ -64,7 +64,18 @@ if (!process.chdir) {
     _pmb3.chdir(dir);
   };
 }
-if (!process.umask) process.umask = (mask) => { if (mask !== undefined) return 0o22; return 0o22; };
+if (!process.umask) {
+  const _osb = internalBinding('os');
+  process.umask = (mask) => {
+    if (mask === undefined) return _osb.umask();
+    if (typeof mask === 'string') {
+      if (!/^[0-7]+$/.test(mask)) { const e = new TypeError(`The "mask" argument must be a 32-bit unsigned integer or an octal string. Received "${mask}"`); e.code = 'ERR_INVALID_ARG_VALUE'; throw e; }
+      mask = parseInt(mask, 8);
+    }
+    if (typeof mask !== 'number') throw _ERR_INVALID_ARG_TYPE('mask', 'number', mask);
+    return _osb.umask(mask);
+  };
+}
 
 process.getActiveResourcesInfo = () => [];
 process.constrainedMemory = () => 0;
@@ -218,8 +229,41 @@ if (!process.getgid) process.getgid = () => _osB.getGid();
 if (!process.geteuid) process.geteuid = () => _osB.getEuid();
 if (!process.getegid) process.getegid = () => _osB.getEgid();
 if (!process.getgroups) process.getgroups = () => [];
-if (!process.setuid) process.setuid = () => {};
-if (!process.setgid) process.setgid = () => {};
+function _makeSetId(syscall, resolve, label) {
+  return function(id) {
+    if (typeof id !== 'number' && typeof id !== 'string') {
+      const e = new TypeError('The "id" argument must be one of type number or string. Received an instance of ' + (id === null ? 'null' : id === undefined ? 'undefined' : (id.constructor && id.constructor.name) || 'Object'));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    let numId;
+    if (typeof id === 'string') {
+      numId = resolve(id);
+      if (numId === -1) {
+        const e = new Error(label + ' does not exist: ' + id);
+        e.code = 'ERR_UNKNOWN_CREDENTIAL'; throw e;
+      }
+    } else {
+      numId = id >>> 0;
+    }
+    const r = syscall(numId);
+    if (r !== 0) {
+      const e = new Error('EPERM, ' + label.toLowerCase());
+      e.code = 'EPERM'; e.errno = -1; throw e;
+    }
+  };
+}
+if (!process.setuid || process.setuid.toString().includes('() => {}')) {
+  process.setuid = _makeSetId(_osB.setUid.bind(_osB), _osB.resolveUser.bind(_osB), 'User identifier');
+}
+if (!process.setgid || process.setgid.toString().includes('() => {}')) {
+  process.setgid = _makeSetId(_osB.setGid.bind(_osB), _osB.resolveGroup.bind(_osB), 'Group identifier');
+}
+if (!process.seteuid) {
+  process.seteuid = _makeSetId(_osB.setEuid.bind(_osB), _osB.resolveUser.bind(_osB), 'User identifier');
+}
+if (!process.setegid) {
+  process.setegid = _makeSetId(_osB.setEgid.bind(_osB), _osB.resolveGroup.bind(_osB), 'Group identifier');
+}
 
 let _uncaughtExceptionCallback = null;
 process.setUncaughtExceptionCaptureCallback = (fn) => {

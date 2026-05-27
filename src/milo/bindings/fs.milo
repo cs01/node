@@ -459,14 +459,14 @@ fn fsFdWrite(info: *u8, _ud: *u8): void {
 fn fsFdSeek(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let fd = ci.i32Arg(0, -1)
-    let offset = ci.i32Arg(1, 0)
+    let offset = ci.i64Arg(1, 0)
     let whence = ci.i32Arg(2, 0)
     if fd < 0 {
         ci.retI32(-1)
         return
     }
     unsafe {
-        let r = lseek(fd, offset as i64, whence)
+        let r = lseek(fd, offset, whence)
         ci.retI32(r as i32)
     }
 }
