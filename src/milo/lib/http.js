@@ -194,6 +194,7 @@ class ServerResponse extends OutgoingMessage {
     this.connection = socket;
     this.statusCode = 200;
     this.writable = true;
+    socket.on('close', () => { this.emit('close'); });
   }
   _implicitHeader() { this.writeHead(this.statusCode); }
   writeHead(code, reason, headers) {
@@ -278,9 +279,10 @@ class Server extends EventEmitter {
     const host = args[1] || '0.0.0.0';
     this._sockets = new Set();
     this._closing = false;
-    this._server = net.createServer((socket) => {
+    this._server = net.createServer({ allowHalfOpen: true }, (socket) => {
       this._sockets.add(socket);
       socket._httpActive = false;
+      socket.on('error', (err) => this.emit('clientError', err, socket));
       socket.on('close', () => {
         this._sockets.delete(socket);
         if (this._closing && this._sockets.size === 0) {
@@ -351,7 +353,7 @@ class Server extends EventEmitter {
             const res = new ServerResponse(socket);
             res.on('finish', () => {
               socket._httpActive = false;
-              if (this._closing) socket.destroy();
+              if (this._closing || req.headers['connection'] === 'close') socket.destroy();
             });
             try {
               this.emit('request', req, res);
@@ -377,6 +379,19 @@ class Server extends EventEmitter {
         if (currentReq && !currentReq.complete) {
           currentReq.push(null);
           currentReq.complete = true;
+        }
+        if (socket._httpActive) {
+          socket._peerDisconnected = true;
+          // Remove from kqueue so event loop doesn't spin on stale EOF
+          try { net.Socket._sockets.delete(socket._fd); } catch {}
+          const e = new Error('read ECONNRESET'); e.code = 'ECONNRESET';
+          // Emit error via nextTick to trigger on-finished (ee-first) callbacks.
+          // Socket stays alive so sendFile can attach its own ee-first listener
+          // and detect the abort via the write-error path.
+          process.nextTick(() => socket.emit('error', e));
+        } else {
+          // Idle keep-alive socket: client closed, no active request — clean up
+          socket.destroy();
         }
       });
     });
@@ -644,11 +659,15 @@ class ClientRequest extends EventEmitter {
   abort() {
     if (this.aborted) return;
     this.aborted = true;
-    if (this.socket) this.socket.destroy();
+    // nextTick so client socket teardown happens after poll but before setImmediate,
+    // giving the server socket time to detect EOF in re-poll.
     const err = new Error('socket hang up');
     err.code = 'ECONNRESET';
-    this.emit('error', err);
-    this.emit('close');
+    process.nextTick(() => {
+      if (this.socket) this.socket.destroy();
+      this.emit('error', err);
+      this.emit('close');
+    });
   }
 }
 

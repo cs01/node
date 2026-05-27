@@ -140,7 +140,14 @@ process._tickCallback = function() {
     }
   }
 };
-process.nextTick = (fn, ...args) => { process._nextTickQueue.push([fn, args]); };
+process.nextTick = (fn, ...args) => {
+  if (typeof fn !== 'function') {
+    const e = new TypeError('The "callback" argument must be of type function. Received ' +
+      (fn === null ? 'null' : typeof fn === 'object' ? 'an instance of ' + (fn.constructor?.name || 'Object') : 'type ' + typeof fn + ' (' + String(fn) + ')'));
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  process._nextTickQueue.push([fn, args]);
+};
 
 if (!process.on) {
   const EventEmitter = require('events');

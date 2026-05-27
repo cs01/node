@@ -21,6 +21,14 @@ function ensurePoll() {
 // --- Socket ---
 class Socket extends Duplex {
   constructor(options) {
+    if (options) {
+      for (const key of ['objectMode', 'readableObjectMode', 'writableObjectMode']) {
+        if (options[key] !== undefined) {
+          const e = new TypeError(`The property 'options.${key}' is not supported. Received ${String(options[key])}`);
+          e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+        }
+      }
+    }
     super({ allowHalfOpen: (options && options.allowHalfOpen) || false });
     if (options && options.fd !== undefined) {
       if (typeof options.fd !== 'number') {
@@ -48,9 +56,17 @@ class Socket extends Duplex {
   }
 
   connect(port, host, cb) {
+    if (port === undefined && host === undefined && cb === undefined) {
+      const e = new TypeError('The "options" or "port" or "path" argument must be specified');
+      e.code = 'ERR_MISSING_ARGS'; throw e;
+    }
     let isPipe = false;
     if (typeof port === 'object') {
       const opts = port;
+      if (opts !== null && opts.port === undefined && opts.path === undefined) {
+        const e = new TypeError('The "options" or "port" or "path" argument must be specified');
+        e.code = 'ERR_MISSING_ARGS'; throw e;
+      }
       cb = typeof host === 'function' ? host : cb;
       for (const key of ['objectMode', 'readableObjectMode', 'writableObjectMode']) {
         if (opts[key] !== undefined) {
@@ -118,6 +134,7 @@ class Socket extends Duplex {
   }
 
   _write(data, encoding, cb) {
+    if (this._peerDisconnected) { const e = new Error('write ECONNRESET'); e.code = 'ECONNRESET'; cb(e); return; }
     if (this._fd < 0) { cb(new Error('Socket is closed')); return; }
     let buf;
     if (Buffer.isBuffer(data)) buf = data;
@@ -231,6 +248,7 @@ class Server extends EventEmitter {
     this._fd = -1;
     this._listening = false;
     this._connections = 0;
+    this.allowHalfOpen = options && options.allowHalfOpen || false;
     if (connectionListener) this.on('connection', connectionListener);
   }
 
@@ -314,7 +332,7 @@ class Server extends EventEmitter {
   _onAcceptable() {
     const clientFd = tcp.accept(this._fd);
     if (clientFd < 0) return;
-    const sock = new Socket({ _fd: clientFd });
+    const sock = new Socket({ _fd: clientFd, allowHalfOpen: this.allowHalfOpen });
     sock._server = this;
     const peer = tcp.getPeerName(clientFd);
     if (peer) { sock.remoteAddress = peer.address; sock.remotePort = peer.port; sock.remoteFamily = peer.family; }
@@ -337,12 +355,6 @@ class Server extends EventEmitter {
       try { tcp.pollRemove(this._fd, EVFILT_READ); } catch {}
       tcp.close(this._fd);
       this._fd = -1;
-    }
-    // Destroy all accepted connections so event loop can drain
-    if (this._connections > 0) {
-      for (const sock of Socket._sockets.values()) {
-        if (sock._server === this && !sock.destroyed) sock.destroy();
-      }
     }
     process.nextTick(() => this.emit('close'));
     return this;
@@ -528,8 +540,10 @@ function _ipToNum(ip) {
 }
 
 const _Server = new Proxy(Server, { apply(target, _, args) { return new target(...args); } });
+const _Socket = new Proxy(Socket, { apply(target, _, args) { return new target(...args); } });
 module.exports = {
-  Socket,
+  Socket: _Socket,
+  Stream: _Socket,
   Server: _Server,
   createServer,
   connect,
@@ -540,8 +554,8 @@ module.exports = {
   SocketAddress,
   BlockList,
   isLoopback: (addr) => addr === '127.0.0.1' || addr === '::1' || addr === 'localhost' || (addr && addr.startsWith('127.')),
-  setDefaultAutoSelectFamilyAttemptTimeout: () => {},
-  getDefaultAutoSelectFamilyAttemptTimeout: () => 5000,
+  setDefaultAutoSelectFamilyAttemptTimeout: (v) => { module.exports._autoSelectTimeout = v; },
+  getDefaultAutoSelectFamilyAttemptTimeout: () => module.exports._autoSelectTimeout || 2500,
   setDefaultAutoSelectFamily: () => {},
   getDefaultAutoSelectFamily: () => false,
   _fileWatchers,

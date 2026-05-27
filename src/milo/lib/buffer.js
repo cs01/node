@@ -820,14 +820,37 @@ Buffer = Buffer_callable;
 function SlowBuffer(size) { return _BufferClass.allocUnsafeSlow(size); }
 SlowBuffer.prototype = _BufferClass.prototype;
 
+function _validateBufferLikeInput(input) {
+  if (input != null && (ArrayBuffer.isView(input) || input instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && input instanceof SharedArrayBuffer))) {
+    const underlying = ArrayBuffer.isView(input) ? input.buffer : input;
+    if (underlying instanceof ArrayBuffer && underlying.detached) {
+      const e = new TypeError('Cannot perform Construct on a detached ArrayBuffer');
+      e.code = 'ERR_INVALID_STATE'; throw e;
+    }
+    return;
+  }
+  let received;
+  if (input === null) received = 'null';
+  else if (input === undefined) received = 'undefined';
+  else if (typeof input === 'object') received = 'an instance of ' + (input.constructor?.name || 'Object');
+  else {
+    const v = typeof input === 'bigint' ? String(input) + 'n' : typeof input === 'string' ? "'" + input + "'" : String(input);
+    received = 'type ' + typeof input + ' (' + v + ')';
+  }
+  const e = new TypeError(`The "source" argument must be an instance of Buffer, TypedArray, DataView, or ArrayBuffer. Received ${received}`);
+  e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+}
+
 function isAscii(input) {
-  const buf = input instanceof Uint8Array ? input : Buffer.from(input);
+  _validateBufferLikeInput(input);
+  const buf = input instanceof Uint8Array ? input : new Uint8Array(input.buffer || input, input.byteOffset || 0, input.byteLength || input.length);
   for (let i = 0; i < buf.length; i++) { if (buf[i] > 127) return false; }
   return true;
 }
 
 function isUtf8(input) {
-  const buf = input instanceof Uint8Array ? input : Buffer.from(input);
+  _validateBufferLikeInput(input);
+  const buf = input instanceof Uint8Array ? input : new Uint8Array(input.buffer || input, input.byteOffset || 0, input.byteLength || input.length);
   let i = 0;
   while (i < buf.length) {
     const b = buf[i];

@@ -71,19 +71,75 @@ const _COMPRESS_MODES = new Set([0, 2, 4]); // gzip, deflate, deflateRaw
 class ZlibTransform extends Transform {
   constructor(mode, opts) {
     if (opts) {
+      if (opts.chunkSize !== undefined) {
+        if (typeof opts.chunkSize !== 'number') {
+          const e = new TypeError(`The "options.chunkSize" property must be of type number. Received type ${typeof opts.chunkSize} (${typeof opts.chunkSize === 'string' ? "'" + opts.chunkSize + "'" : opts.chunkSize})`);
+          e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+        }
+        if (!Number.isFinite(opts.chunkSize)) {
+          const e = new RangeError(`The value of "options.chunkSize" is out of range. It must be a finite number. Received ${opts.chunkSize}`);
+          e.code = 'ERR_OUT_OF_RANGE'; throw e;
+        }
+        if (opts.chunkSize < 64) {
+          const e = new RangeError(`The value of "options.chunkSize" is out of range. It must be >= 64. Received ${opts.chunkSize}`);
+          e.code = 'ERR_OUT_OF_RANGE'; throw e;
+        }
+      }
+      if (opts.level !== undefined) {
+        if (typeof opts.level !== 'number') {
+          const e = new TypeError(`The "options.level" property must be of type number. Received type ${typeof opts.level} (${typeof opts.level === 'string' ? "'" + opts.level + "'" : opts.level})`);
+          e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+        }
+        if (!Number.isFinite(opts.level)) {
+          const e = new RangeError(`The value of "options.level" is out of range. It must be a finite number. Received ${opts.level}`);
+          e.code = 'ERR_OUT_OF_RANGE'; throw e;
+        }
+        if (opts.level < -1 || opts.level > 9) {
+          const e = new RangeError(`The value of "options.level" is out of range. It must be >= -1 and <= 9. Received ${opts.level}`);
+          e.code = 'ERR_OUT_OF_RANGE'; throw e;
+        }
+      }
+      if (opts.memLevel !== undefined) {
+        if (typeof opts.memLevel !== 'number') {
+          const e = new TypeError(`The "options.memLevel" property must be of type number. Received type ${typeof opts.memLevel} (${typeof opts.memLevel === 'string' ? "'" + opts.memLevel + "'" : opts.memLevel})`);
+          e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+        }
+        if (!Number.isFinite(opts.memLevel) || opts.memLevel < 1 || opts.memLevel > 9) {
+          const msg = !Number.isFinite(opts.memLevel) ? 'It must be a finite number' : 'It must be >= 1 and <= 9';
+          const e = new RangeError(`The value of "options.memLevel" is out of range. ${msg}. Received ${opts.memLevel}`);
+          e.code = 'ERR_OUT_OF_RANGE'; throw e;
+        }
+      }
+      if (opts.strategy !== undefined) {
+        if (typeof opts.strategy !== 'number') {
+          const e = new TypeError(`The "options.strategy" property must be of type number. Received type ${typeof opts.strategy} (${typeof opts.strategy === 'string' ? "'" + opts.strategy + "'" : opts.strategy})`);
+          e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+        }
+        if (!Number.isFinite(opts.strategy) || opts.strategy < 0 || opts.strategy > 4) {
+          const msg = !Number.isFinite(opts.strategy) ? 'It must be a finite number' : 'It must be >= 0 and <= 4';
+          const e = new RangeError(`The value of "options.strategy" is out of range. ${msg}. Received ${opts.strategy}`);
+          e.code = 'ERR_OUT_OF_RANGE'; throw e;
+        }
+      }
+      if (opts.dictionary !== undefined) {
+        if (!Buffer.isBuffer(opts.dictionary) && !ArrayBuffer.isView(opts.dictionary) && !(opts.dictionary instanceof ArrayBuffer)) {
+          const v = typeof opts.dictionary === 'string' ? "'" + opts.dictionary + "'" : String(opts.dictionary);
+          const e = new TypeError(`The "options.dictionary" property must be an instance of Buffer, TypedArray, DataView, or ArrayBuffer. Received type ${typeof opts.dictionary} (${v})`);
+          e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+        }
+      }
       _validateFlushFlag(opts.flush, 'options.flush');
       _validateFlushFlag(opts.finishFlush, 'options.finishFlush');
       if (opts.windowBits !== undefined) {
         if (typeof opts.windowBits !== 'number') {
-          const e = new TypeError(`The "options.windowBits" property must be of type number. Received type ${typeof opts.windowBits}`);
+          const e = new TypeError(`The "options.windowBits" property must be of type number. Received type ${typeof opts.windowBits} (${typeof opts.windowBits === 'string' ? "'" + opts.windowBits + "'" : opts.windowBits})`);
           e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
         }
-        if (_COMPRESS_MODES.has(mode)) {
-          if (opts.windowBits < 9 || opts.windowBits > 15) {
-            const e = new RangeError(`The value of "options.windowBits" is out of range. It must be >= 9 and <= 15. Received ${opts.windowBits}`);
-            e.code = 'ERR_OUT_OF_RANGE'; throw e;
-          }
-        } else if (opts.windowBits !== 0 && (opts.windowBits < 8 || opts.windowBits > 15)) {
+        if (!Number.isFinite(opts.windowBits)) {
+          const e = new RangeError(`The value of "options.windowBits" is out of range. It must be a finite number. Received ${opts.windowBits}`);
+          e.code = 'ERR_OUT_OF_RANGE'; throw e;
+        }
+        if (opts.windowBits < 8 || opts.windowBits > 15) {
           const e = new RangeError(`The value of "options.windowBits" is out of range. It must be >= 8 and <= 15. Received ${opts.windowBits}`);
           e.code = 'ERR_OUT_OF_RANGE'; throw e;
         }
@@ -136,7 +192,30 @@ class ZlibTransform extends Transform {
     if (cb) process.nextTick(cb);
   }
   close(cb) { if (cb) process.nextTick(cb); this.destroy(); }
-  params(level, strategy, cb) { if (cb) process.nextTick(cb); }
+  params(level, strategy, cb) {
+    if (typeof level !== 'number') {
+      const e = new TypeError(`The "level" argument must be of type number. Received type ${typeof level} (${typeof level === 'string' ? "'" + level + "'" : level})`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (!Number.isFinite(level)) {
+      const e = new RangeError(`The value of "level" is out of range. It must be a finite number. Received ${level}`);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+    if (level < -1 || level > 9) {
+      const e = new RangeError(`The value of "level" is out of range. It must be >= -1 and <= 9. Received ${level}`);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+    if (typeof strategy !== 'number') {
+      const e = new TypeError(`The "strategy" argument must be of type number. Received type ${typeof strategy} (${typeof strategy === 'string' ? "'" + strategy + "'" : strategy})`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (!Number.isFinite(strategy) || strategy < 0 || strategy > 4) {
+      const msg = !Number.isFinite(strategy) ? 'It must be a finite number' : 'It must be >= 0 and <= 4';
+      const e = new RangeError(`The value of "strategy" is out of range. ${msg}. Received ${strategy}`);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+    if (cb) process.nextTick(cb);
+  }
 }
 
 class Gzip extends ZlibTransform { constructor(opts) { super(0, opts); } }
@@ -161,10 +240,16 @@ function createBrotliDecompress(opts) { return new BrotliDecompress(opts); }
 
 const constants = Object.freeze({
   Z_NO_FLUSH: 0, Z_PARTIAL_FLUSH: 1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3, Z_FINISH: 4,
+  Z_BLOCK: 5,
   Z_OK: 0, Z_STREAM_END: 1, Z_NEED_DICT: 2, Z_ERRNO: -1, Z_STREAM_ERROR: -2,
-  Z_DATA_ERROR: -3, Z_MEM_ERROR: -4, Z_BUF_ERROR: -5,
+  Z_DATA_ERROR: -3, Z_MEM_ERROR: -4, Z_BUF_ERROR: -5, Z_VERSION_ERROR: -6,
   Z_NO_COMPRESSION: 0, Z_BEST_SPEED: 1, Z_BEST_COMPRESSION: 9, Z_DEFAULT_COMPRESSION: -1,
   Z_DEFAULT_STRATEGY: 0, Z_FILTERED: 1, Z_HUFFMAN_ONLY: 2, Z_RLE: 3, Z_FIXED: 4,
+  Z_DEFAULT_WINDOWBITS: 15, Z_MIN_WINDOWBITS: 8, Z_MAX_WINDOWBITS: 15,
+  Z_MIN_CHUNK: 64, Z_MAX_CHUNK: Infinity,
+  Z_DEFAULT_CHUNK: 16384,
+  Z_MIN_MEMLEVEL: 1, Z_MAX_MEMLEVEL: 9, Z_DEFAULT_MEMLEVEL: 8,
+  Z_MIN_LEVEL: -1, Z_MAX_LEVEL: 9, Z_DEFAULT_LEVEL: -1,
   BROTLI_OPERATION_PROCESS: 0, BROTLI_OPERATION_FLUSH: 1, BROTLI_OPERATION_FINISH: 2,
 });
 
@@ -196,6 +281,8 @@ module.exports = {
   createGzip, createGunzip, createDeflate, createInflate,
   createDeflateRaw, createInflateRaw, createUnzip,
   createBrotliCompress, createBrotliDecompress,
+  createCompress: createDeflate,
+  createDecompress: createInflate,
   gzip, gunzip, deflate, inflate, deflateRaw, inflateRaw, unzip,
   gzipSync, gunzipSync, deflateSync, inflateSync,
   deflateRawSync, inflateRawSync, unzipSync,

@@ -11,6 +11,30 @@ class Channel {
 
   get hasSubscribers() { return this._subscribers.length > 0; }
 
+  bindStore(store, transform) {
+    if (!this._stores) this._stores = [];
+    this._stores.push({ store, transform: transform || ((data) => data) });
+  }
+
+  unbindStore(store) {
+    if (!this._stores) return false;
+    const idx = this._stores.findIndex(s => s.store === store);
+    if (idx >= 0) { this._stores.splice(idx, 1); return true; }
+    return false;
+  }
+
+  runStores(data, fn, thisArg, ...args) {
+    if (!this._stores || this._stores.length === 0) return fn.apply(thisArg, args);
+    let result;
+    const run = (i) => {
+      if (i >= this._stores.length) { result = fn.apply(thisArg, args); return; }
+      const { store, transform } = this._stores[i];
+      store.run(transform(data), () => run(i + 1));
+    };
+    run(0);
+    return result;
+  }
+
   subscribe(fn) {
     if (typeof fn !== 'function') {
       const err = new TypeError('The "onMessage" argument must be of type function. Received ' + typeof fn);

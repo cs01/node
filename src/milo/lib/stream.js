@@ -585,8 +585,11 @@ class Writable extends Stream {
       err.code = 'ERR_STREAM_NULL_VALUES';
       throw err;
     }
-    if (!this._writableState.objectMode && typeof chunk !== 'string' && !Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) {
-      const err = new TypeError('The "chunk" argument must be of type string or an instance of Buffer or Uint8Array. Received type ' + typeof chunk);
+    if (!this._writableState.objectMode && typeof chunk !== 'string' && !Buffer.isBuffer(chunk) && !ArrayBuffer.isView(chunk)) {
+      const v = chunk === null ? 'null' : chunk === undefined ? 'undefined'
+        : typeof chunk === 'object' ? 'an instance of ' + (chunk.constructor?.name || 'Object')
+        : 'type ' + typeof chunk + ' (' + String(chunk) + ')';
+      const err = new TypeError('The "chunk" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received ' + v);
       err.code = 'ERR_INVALID_ARG_TYPE';
       throw err;
     }
@@ -670,6 +673,12 @@ class Writable extends Stream {
     this.writable = false;
     if (!this._writableState._endCbs) this._writableState._endCbs = [];
     if (cb) this._writableState._endCbs.push(cb);
+    const prefinish = () => {
+      if (this._writableState._prefinished) return;
+      this._writableState._prefinished = true;
+      this._writableState.finished = true;
+      this.emit('prefinish');
+    };
     const finish = (err) => {
       const cbs = this._writableState._endCbs || [];
       this._writableState._endCbs = [];
@@ -678,7 +687,7 @@ class Writable extends Stream {
         this.destroy(err);
         return;
       }
-      this._writableState.finished = true;
+      prefinish();
       for (const c of cbs) c(null);
       this.emit('finish');
       if (this._writableState.autoDestroy) {
@@ -698,6 +707,7 @@ class Writable extends Stream {
       if (s.buffered.length > 0 || s.writing) {
         process.nextTick(waitDrain);
       } else if (this._final) {
+        prefinish();
         let called = false;
         this._final((err) => {
           if (called) { const e = new Error('Callback called multiple times'); e.code = 'ERR_MULTIPLE_CALLBACK'; this.emit('error', e); return; }
@@ -705,6 +715,7 @@ class Writable extends Stream {
           finish(err);
         });
       } else {
+        prefinish();
         process.nextTick(finish);
       }
     };

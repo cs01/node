@@ -107,8 +107,29 @@ const promises = {
   resolvePtr: _promisify((h, cb) => dns.resolvePtr(h, cb)),
 };
 
+class Resolver {
+  constructor(options) {
+    this._servers = null;
+    if (options && options.timeout) this._timeout = options.timeout;
+  }
+  cancel() {}
+  setLocalAddress(ipv4, ipv6) {}
+  getServers() { return dns.getServers(); }
+  setServers(servers) { dns.setServers(servers); this._servers = servers; }
+  resolve(hostname, rrtype, cb) { return resolve(hostname, rrtype, cb); }
+  resolve4(h, opts, cb) { if (typeof opts === 'function') { cb = opts; } resolve(h, 'A', cb); }
+  resolve6(h, opts, cb) { if (typeof opts === 'function') { cb = opts; } resolve(h, 'AAAA', cb); }
+  resolveMx(h, cb) { _queryRecords(h, 'MX', cb); }
+  resolveTxt(h, cb) { _queryRecords(h, 'TXT', cb); }
+  resolveSrv(h, cb) { _queryRecords(h, 'SRV', cb); }
+  resolveNs(h, cb) { _queryRecords(h, 'NS', cb); }
+  resolveCname(h, cb) { _queryRecords(h, 'CNAME', cb); }
+  resolvePtr(h, cb) { _queryRecords(h, 'PTR', cb); }
+  reverse(ip, cb) { dns.reverse(ip, cb); }
+}
+
 const dns = {
-  lookup, resolve,
+  lookup, resolve, Resolver,
   resolve4: (h, cb) => resolve(h, 'A', cb),
   resolve6: (h, cb) => resolve(h, 'AAAA', cb),
   resolveMx: (h, cb) => _queryRecords(h, 'MX', cb),

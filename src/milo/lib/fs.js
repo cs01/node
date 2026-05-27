@@ -111,18 +111,49 @@ function _fsError(code, syscall, path, msg) {
   return e;
 }
 
-function writeFileSync(path, data) {
-  _validatePath(path, 'path');
-  const p = _toPath(path);
-  const r = b.writeFile(p, typeof data === 'string' ? data : data.toString());
-  if (r === -1) throw _fsError('EIO', 'write', p, 'write failed');
+function _validateWriteData(data) {
+  if (typeof data !== 'string' && !Buffer.isBuffer(data) && !ArrayBuffer.isView(data) && !(data instanceof DataView)) {
+    throw _ERR_INVALID_ARG_TYPE('data', 'string, Buffer, TypedArray, or DataView', data);
+  }
 }
 
-function appendFileSync(path, data) {
+function writeFileSync(path, data, options) {
+  if (typeof options === 'string') options = { encoding: options };
+  const opts = options || {};
+  _validateWriteData(data);
+  if (typeof path === 'number') {
+    const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    if (buf.length > 0) b.fdWrite(path, buf, buf.length);
+    return;
+  }
   _validatePath(path, 'path');
-  let existing = '';
-  try { existing = readFileSync(path, 'utf8'); } catch {}
-  writeFileSync(path, existing + (typeof data === 'string' ? data : data.toString()));
+  const p = _toPath(path);
+  const flag = opts.flag || 'w';
+  const mode = opts.mode != null ? (typeof opts.mode === 'string' ? parseInt(opts.mode, 8) : opts.mode) : 0o666;
+  const fd = b.open(p, stringToFlags(flag), mode);
+  if (fd < 0) throw _fsError('ENOENT', 'open', p);
+  try {
+    const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    if (buf.length > 0) b.fdWrite(fd, buf, buf.length);
+  } finally {
+    b.close(fd);
+  }
+}
+
+function appendFileSync(path, data, options) {
+  if (typeof options === 'string') options = { encoding: options };
+  const opts = options || {};
+  _validatePath(path, 'path');
+  const p = _toPath(path);
+  const mode = opts.mode != null ? (typeof opts.mode === 'string' ? parseInt(opts.mode, 8) : opts.mode) : 0o666;
+  const fd = b.open(p, stringToFlags('a'), mode);
+  if (fd < 0) throw _fsError('ENOENT', 'open', p);
+  try {
+    const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.from(data);
+    if (buf.length > 0) b.fdWrite(fd, buf, buf.length);
+  } finally {
+    b.close(fd);
+  }
 }
 
 function _wrapStats(s) {
@@ -156,7 +187,12 @@ function existsSync(path) {
 function mkdirSync(path, opts) {
   _validatePath(path, 'path');
   const sp = _toPath(path);
-  const mode = (opts && opts.mode) || 0o777;
+  let mode;
+  if (typeof opts === 'number') mode = opts;
+  else if (typeof opts === 'string') mode = parseInt(opts, 8);
+  else mode = (opts && opts.mode != null) ? opts.mode : 0o777;
+  if (typeof mode === 'string') mode = parseInt(mode, 8);
+  mode = mode & 0o7777;
   if (opts && opts.recursive) {
     const parts = sp.split('/');
     let cur = parts[0] === '' ? '/' : '';
@@ -298,8 +334,10 @@ function readSync(fd, buffer, offset, length, position) {
       (buffer == null ? String(buffer) : 'an instance of ' + (buffer.constructor && buffer.constructor.name || 'Object')));
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
-  if (offset != null && typeof offset === 'object') {
+  if (offset != null && typeof offset === 'object' && !Array.isArray(offset) && !(offset instanceof String)) {
     ({ offset = 0, length = buffer.length, position = null } = offset);
+  } else if (offset != null && (typeof offset !== 'number' || !Number.isInteger(offset))) {
+    throw _ERR_INVALID_ARG_TYPE('options', 'Object', offset);
   }
   offset = offset || 0;
   length = length || buffer.length - offset;
@@ -318,6 +356,26 @@ function writeSync(fd, data, offset, length, position) {
   if (position != null) b.fdSeek(fd, position, 0);
   const slice = data.slice(offset, offset + length);
   return b.fdWrite(fd, slice, slice.length);
+}
+
+function writevSync(fd, buffers, position) {
+  _validateFd(fd);
+  if (!Array.isArray(buffers)) throw _ERR_INVALID_ARG_TYPE('buffers', 'ArrayBufferView[]', buffers);
+  for (let i = 0; i < buffers.length; i++) {
+    const buf = buffers[i];
+    if (!ArrayBuffer.isView(buf)) {
+      throw _ERR_INVALID_ARG_TYPE('buffers[' + i + ']', 'Buffer or TypedArray', buf);
+    }
+  }
+  if (position != null && position !== -1) b.fdSeek(fd, position, 0);
+  let total = 0;
+  for (const buf of buffers) {
+    const data = Buffer.isBuffer(buf) ? buf : Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
+    if (data.length === 0) continue;
+    const n = b.fdWrite(fd, data, data.length);
+    if (n > 0) total += n;
+  }
+  return total;
 }
 
 function rmSync(path, opts) {
@@ -1010,7 +1068,7 @@ module.exports = {
   symlinkSync, lstatSync, readlinkSync, linkSync,
   chownSync, lchownSync, utimesSync, truncateSync,
   openSync, closeSync, fstatSync, writeSync, readSync,
-  fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync, fchownSync,
+  fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync, fchownSync, writevSync,
   createReadStream, createWriteStream,
   ReadStream: createReadStream, WriteStream: createWriteStream,
   watch, watchFile, unwatchFile, FSWatcher, Dirent, Dir,
