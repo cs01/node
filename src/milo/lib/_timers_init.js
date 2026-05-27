@@ -43,8 +43,14 @@ function _safeCall(fn, args) {
 }
 
 let _negativeTimerWarned = false;
+function _validateTimerCb(fn) {
+  if (typeof fn !== 'function') {
+    const e = new TypeError('The "callback" argument must be of type function. Received ' + (fn === null ? 'null' : typeof fn === 'object' ? 'an instance of ' + ((fn.constructor && fn.constructor.name) || 'Object') : 'type ' + typeof fn + " ('" + fn + "')"));
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+}
 globalThis.setTimeout = function(fn, delay, ...args) {
-  if (typeof fn !== 'function') fn = Function(fn);
+  _validateTimerCb(fn);
   if (typeof delay === 'number' && delay < 0 && !_negativeTimerWarned) {
     _negativeTimerWarned = true;
     const w = new Error(`${delay} is a negative number.\nTimers in Node.js can not span more than 2147483647 ms (approximately 24.8 days).`);
@@ -67,7 +73,7 @@ globalThis.clearTimeout = function(t) {
 };
 
 globalThis.setInterval = function(fn, delay, ...args) {
-  if (typeof fn !== 'function') fn = Function(fn);
+  _validateTimerCb(fn);
   const t = new Timeout(0, fn, delay, args, true);
   const wrapped = () => _safeCall(fn, args);
   t._id = _tb.schedule(wrapped, Math.max(0, delay || 0), 1);
@@ -89,7 +95,7 @@ let _immediateId = 0;
 const _activeImmediates = new Set();
 
 globalThis.setImmediate = function(fn, ...args) {
-  if (typeof fn !== 'function') fn = Function(fn);
+  _validateTimerCb(fn);
   const id = ++_immediateId;
   _activeImmediates.add(id);
   _immediateQueue.push({ id, fn, args });
@@ -169,8 +175,8 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     }
     _eluIdleMs += _now() - pollStart;
     if (process._tickCallback) process._tickCallback();
-    // Quick non-blocking poll to catch events triggered during callbacks
-    if (poll && _immediateQueue.length > 0) { poll(0); if (process._tickCallback) process._tickCallback(); }
+    // Re-poll until no new events: callbacks may generate I/O (e.g., client abort → server EOF)
+    if (poll) { let _rpn = 0; while (_rpn < 10 && poll(0) > 0) { _rpn++; if (process._tickCallback) process._tickCallback(); } }
     // setImmediate: run after I/O poll (Node.js "check" phase)
     _drainImmediates();
     if (process._tickCallback) process._tickCallback();
