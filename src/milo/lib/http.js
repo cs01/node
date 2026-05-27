@@ -272,6 +272,22 @@ class Server extends EventEmitter {
     if (handler) this.on('request', handler);
     this._server = null;
     this._listening = false;
+    this.timeout = 0;
+    this.keepAliveTimeout = (opts && opts.keepAliveTimeout != null) ? opts.keepAliveTimeout : 5000;
+    this.maxHeadersCount = (opts && opts.maxHeadersCount != null) ? opts.maxHeadersCount : 2000;
+    this.maxRequestsPerSocket = (opts && opts.maxRequestsPerSocket != null) ? opts.maxRequestsPerSocket : 0;
+    this.maxConnections = (opts && opts.maxConnections != null) ? opts.maxConnections : 0;
+    this.requestTimeout = (opts && opts.requestTimeout != null) ? opts.requestTimeout : 300000;
+    const defaultHeadersTimeout = 60000;
+    this.headersTimeout = (opts && opts.headersTimeout != null) ? opts.headersTimeout : defaultHeadersTimeout;
+    if (opts && opts.headersTimeout != null && opts.requestTimeout != null &&
+        opts.headersTimeout > 0 && opts.requestTimeout > 0 && opts.headersTimeout > opts.requestTimeout) {
+      const e = new RangeError('The "headersTimeout" option must be less than or equal to the "requestTimeout" option');
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+    if (this.requestTimeout > 0 && this.headersTimeout > this.requestTimeout) {
+      this.headersTimeout = this.requestTimeout;
+    }
   }
   listen(...args) {
     const cb = typeof args[args.length - 1] === 'function' ? args.pop() : null;
@@ -431,6 +447,18 @@ class Server extends EventEmitter {
   get timeout() { return this._timeout || 0; }
   set timeout(ms) { this._timeout = ms; }
   get listening() { return this._listening; }
+  closeIdleConnections() {
+    if (this._sockets) {
+      for (const socket of this._sockets) {
+        if (!socket._httpActive) socket.destroy();
+      }
+    }
+  }
+  closeAllConnections() {
+    if (this._sockets) {
+      for (const socket of this._sockets) socket.destroy();
+    }
+  }
   ref() { return this; }
   unref() { return this; }
 }

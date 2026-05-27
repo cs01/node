@@ -59,14 +59,14 @@ EventEmitter.prototype.emit = function(type) {
 EventEmitter.prototype.on = function(type, fn) {
   if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   if (!this._events) this._events = Object.create(null);
-  if (type !== 'newListener') this.emit('newListener', type, fn.listener || fn);
+  if (type !== 'newListener' && typeof this.emit === 'function') this.emit('newListener', type, fn.listener || fn);
   (this._events[type] || (this._events[type] = [])).push(fn);
   const max = this._maxListeners !== undefined ? this._maxListeners : EventEmitter.defaultMaxListeners;
   if (max > 0 && this._events[type].length > max && !this._events[type]._warned) {
     this._events[type]._warned = true;
     const w = new Error(`Possible EventEmitter memory leak detected. ${this._events[type].length} ${String(type)} listeners added to [${this.constructor.name}]. MaxListeners is ${max}. Use emitter.setMaxListeners() to increase limit`);
     w.name = 'MaxListenersExceededWarning'; w.emitter = this; w.type = type; w.count = this._events[type].length;
-    process.emitWarning(w);
+    if (typeof process !== 'undefined' && process.emitWarning) process.emitWarning(w);
   }
   return this;
 };
@@ -76,7 +76,7 @@ EventEmitter.prototype.addListener = EventEmitter.prototype.on;
 EventEmitter.prototype.prependListener = function(type, fn) {
   if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   if (!this._events) this._events = Object.create(null);
-  if (type !== 'newListener') this.emit('newListener', type, fn.listener || fn);
+  if (type !== 'newListener' && typeof this.emit === 'function') this.emit('newListener', type, fn.listener || fn);
   (this._events[type] || (this._events[type] = [])).unshift(fn);
   return this;
 };

@@ -360,6 +360,8 @@ class Server extends EventEmitter {
     return this;
   }
 
+  get listening() { return this._listening; }
+
   ref() { this._unref = false; return this; }
   unref() { this._unref = true; return this; }
   getConnections(cb) { cb(null, this._connections); }
