@@ -312,7 +312,7 @@ class Server extends EventEmitter {
       let bodyReceived = 0;
       let contentLength = -1;
 
-      socket.on('data', (chunk) => {
+      const httpDataHandler = (chunk) => {
         const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         if (!headersParsed) {
           bufChunks.push(buf);
@@ -363,6 +363,8 @@ class Server extends EventEmitter {
           if (req.headers['upgrade'] && this.listenerCount('upgrade') > 0) {
             req.push(null);
             req.complete = true;
+            // Release socket from HTTP parsing so upgrade handler (e.g. ws) owns it
+            socket.removeListener('data', httpDataHandler);
             this.emit('upgrade', req, socket, bodyPart);
           } else {
             socket._httpActive = true;
@@ -389,7 +391,8 @@ class Server extends EventEmitter {
             currentReq.complete = true;
           }
         }
-      });
+      };
+      socket.on('data', httpDataHandler);
 
       socket.on('end', () => {
         if (currentReq && !currentReq.complete) {
@@ -526,127 +529,142 @@ class ClientRequest extends EventEmitter {
     const opts = this._options;
     const host = opts.hostname || opts.host || 'localhost';
     const port = parseInt(opts.port) || 80;
+
+    // Delegate to agent.addRequest if agent has a custom implementation
+    const agent = opts.agent;
+    if (agent && typeof agent.addRequest === 'function' && agent.addRequest !== Agent_class.prototype.addRequest) {
+      agent.addRequest(this, opts);
+      return;
+    }
+
     const dns = require('dns');
 
     // Resolve hostname to IP first (tcp.connect needs an IP address)
     const doConnect = (ip) => {
-      const socket = new net.Socket();
-      this.socket = socket;
-      socket.connect(port, ip, () => {
-      this.headersSent = true;
-      // Build HTTP request
-      const body = this._body.length > 0 ? Buffer.concat(this._body) : null;
-      if (!this._headers['host']) this._headers['host'] = port === 80 ? host : `${host}:${port}`;
-      if (body) {
-        if (!this._headers['content-length']) this._headers['content-length'] = String(body.length);
-      } else if (!this._headers['content-length'] && !this._headers['transfer-encoding']) {
-        const m = this.method.toUpperCase();
-        if (m === 'POST' || m === 'PUT' || m === 'PATCH') this._headers['content-length'] = '0';
-      }
-      if (!this._headers['connection']) this._headers['connection'] = 'close';
-
-      let reqStr = `${this.method} ${this.path} HTTP/1.1\r\n`;
-      for (const [k, v] of Object.entries(this._headers)) reqStr += `${k}: ${v}\r\n`;
-      reqStr += '\r\n';
-      socket.write(reqStr);
-      if (body) socket.write(body);
-      this.emit('finish');
-    });
-
-    let responseChunks = [];
-    let responseLen = 0;
-    let headersParsed = false;
-    let res = null;
-    let contentLength = -1;
-    let bodyReceived = 0;
-    let chunked = false;
-
-    socket.on('data', (chunk) => {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      if (!headersParsed) {
-        responseChunks.push(buf);
-        responseLen += buf.length;
-        const combined = Buffer.concat(responseChunks, responseLen);
-        // Binary-safe header delimiter search
-        let headerEnd = -1;
-        for (let i = 0; i <= combined.length - 4; i++) {
-          if (combined[i] === 0x0d && combined[i+1] === 0x0a && combined[i+2] === 0x0d && combined[i+3] === 0x0a) {
-            headerEnd = i; break;
-          }
-        }
-        if (headerEnd === -1) return;
-        const headerPart = combined.slice(0, headerEnd).toString();
-        const bodyPart = combined.slice(headerEnd + 4); // stays as Buffer — preserves binary
-        const lines = headerPart.split('\r\n');
-        const statusLine = lines[0];
-        const match = statusLine.match(/^HTTP\/(\d\.\d) (\d+) ?(.*)$/);
-
-        res = new IncomingMessage();
-        if (match) {
-          res.httpVersion = match[1];
-          res.statusCode = parseInt(match[2]);
-          res.statusMessage = match[3] || '';
-        }
-        for (let i = 1; i < lines.length; i++) {
-          const idx = lines[i].indexOf(':');
-          if (idx > 0) {
-            const rawKey = lines[i].substring(0, idx).trim();
-            const val = lines[i].substring(idx + 1).trim();
-            res._addHeaderLine(rawKey, val, res.headers);
-          }
-        }
-        headersParsed = true;
-        responseChunks = null;
-
-        if (res.statusCode === 101 && this.listenerCount('upgrade') > 0) {
-          this.emit('upgrade', res, socket, bodyPart);
-          return;
-        }
-
-        contentLength = parseInt(res.headers['content-length']) || -1;
-        chunked = (res.headers['transfer-encoding'] || '').includes('chunked');
-
-        this.emit('response', res);
-
-        if (bodyPart.length > 0) {
-          if (chunked) {
-            this._pushChunkedBuf(res, bodyPart);
-          } else {
-            res.push(bodyPart);
-            bodyReceived += bodyPart.length;
-          }
-        }
-        if (contentLength >= 0 && bodyReceived >= contentLength) {
-          res.complete = true;
-          res.push(null);
-          socket.destroy();
-        }
+      let socket;
+      if (typeof opts.createConnection === 'function') {
+        socket = opts.createConnection(Object.assign({}, opts, { host: ip }));
       } else {
-        if (chunked) {
-          this._pushChunkedBuf(res, buf);
-        } else {
-          res.push(buf);
-          bodyReceived += buf.length;
+        socket = new net.Socket();
+      }
+      this.socket = socket;
+
+      let responseChunks = [];
+      let responseLen = 0;
+      let headersParsed = false;
+      let res = null;
+      let contentLength = -1;
+      let bodyReceived = 0;
+      let chunked = false;
+
+      const onConnect = () => {
+        this.headersSent = true;
+        const body = this._body.length > 0 ? Buffer.concat(this._body) : null;
+        if (!this._headers['host']) this._headers['host'] = port === 80 ? host : `${host}:${port}`;
+        if (body) {
+          if (!this._headers['content-length']) this._headers['content-length'] = String(body.length);
+        } else if (!this._headers['content-length'] && !this._headers['transfer-encoding']) {
+          const m = this.method.toUpperCase();
+          if (m === 'POST' || m === 'PUT' || m === 'PATCH') this._headers['content-length'] = '0';
+        }
+        if (!this._headers['connection']) this._headers['connection'] = 'close';
+
+        let reqStr = `${this.method} ${this.path} HTTP/1.1\r\n`;
+        for (const [k, v] of Object.entries(this._headers)) reqStr += `${k}: ${v}\r\n`;
+        reqStr += '\r\n';
+        socket.write(reqStr);
+        if (body) socket.write(body);
+        this.emit('finish');
+      };
+
+      const clientDataHandler = (chunk) => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        if (!headersParsed) {
+          responseChunks.push(buf);
+          responseLen += buf.length;
+          const combined = Buffer.concat(responseChunks, responseLen);
+          let headerEnd = -1;
+          for (let i = 0; i <= combined.length - 4; i++) {
+            if (combined[i] === 0x0d && combined[i+1] === 0x0a && combined[i+2] === 0x0d && combined[i+3] === 0x0a) {
+              headerEnd = i; break;
+            }
+          }
+          if (headerEnd === -1) return;
+          const headerPart = combined.slice(0, headerEnd).toString();
+          const bodyPart = combined.slice(headerEnd + 4);
+          const lines = headerPart.split('\r\n');
+          const statusLine = lines[0];
+          const match = statusLine.match(/^HTTP\/(\d\.\d) (\d+) ?(.*)$/);
+
+          res = new IncomingMessage();
+          if (match) {
+            res.httpVersion = match[1];
+            res.statusCode = parseInt(match[2]);
+            res.statusMessage = match[3] || '';
+          }
+          for (let i = 1; i < lines.length; i++) {
+            const idx = lines[i].indexOf(':');
+            if (idx > 0) {
+              const rawKey = lines[i].substring(0, idx).trim();
+              const val = lines[i].substring(idx + 1).trim();
+              res._addHeaderLine(rawKey, val, res.headers);
+            }
+          }
+          headersParsed = true;
+          responseChunks = null;
+
+          if (res.statusCode === 101 && this.listenerCount('upgrade') > 0) {
+            socket.removeListener('data', clientDataHandler);
+            this.emit('upgrade', res, socket, bodyPart);
+            return;
+          }
+
+          contentLength = parseInt(res.headers['content-length']) || -1;
+          chunked = (res.headers['transfer-encoding'] || '').includes('chunked');
+
+          this.emit('response', res);
+
+          if (bodyPart.length > 0) {
+            if (chunked) {
+              this._pushChunkedBuf(res, bodyPart);
+            } else {
+              res.push(bodyPart);
+              bodyReceived += bodyPart.length;
+            }
+          }
           if (contentLength >= 0 && bodyReceived >= contentLength) {
             res.complete = true;
             res.push(null);
             socket.destroy();
           }
+        } else {
+          if (chunked) {
+            this._pushChunkedBuf(res, buf);
+          } else {
+            res.push(buf);
+            bodyReceived += buf.length;
+            if (contentLength >= 0 && bodyReceived >= contentLength) {
+              res.complete = true;
+              res.push(null);
+              socket.destroy();
+            }
+          }
         }
-      }
-    });
+      };
 
-    socket.on('end', () => {
-      if (res && !res.complete) {
-        res.complete = true;
-        res.push(null);
-      }
-      socket.destroy();
-    });
-
-      socket.on('error', (err) => {
-        this.emit('error', err);
+      socket.on('data', clientDataHandler);
+      socket.on('end', () => {
+        if (res && !res.complete) { res.complete = true; res.push(null); }
+        socket.destroy();
       });
+      socket.on('error', (err) => { this.emit('error', err); });
+
+      if (typeof opts.createConnection === 'function') {
+        if (socket.connecting === false) onConnect();
+        else socket.once('connect', onConnect);
+      } else {
+        socket.connect(port, ip, onConnect);
+      }
     };
 
     // If host looks like an IP, connect directly; otherwise DNS resolve first
