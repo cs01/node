@@ -10,7 +10,8 @@ const _MAX_SPAWN_DEPTH = 8;
 
 function normalizeArgs(cmd, args, opts) {
   if (typeof args === 'object' && !Array.isArray(args)) { opts = args; args = []; }
-  return { args: args || [], opts: opts || {} };
+  const a = (args || []).map(arg => typeof arg === 'string' ? arg : String(arg));
+  return { args: a, opts: opts || {} };
 }
 
 // 0=pipe, 1=inherit, 2=ignore

@@ -222,7 +222,10 @@ function openSync(path, flags, mode) {
   const sp = _toPath(path);
   const f = typeof flags === 'string' ? (FLAG_MAP[flags] ?? 0) : (flags || 0);
   const fd = b.open(sp, f, mode || 0o666);
-  if (fd < 0) throw _fsError('ENOENT', 'open', sp, 'no such file or directory');
+  if (fd < 0) {
+    if ((f & O_EXCL) && b.exists(sp)) throw _fsError('EEXIST', 'open', sp, 'file already exists');
+    throw _fsError('ENOENT', 'open', sp, 'no such file or directory');
+  }
   return fd;
 }
 
@@ -353,18 +356,27 @@ function createReadStream(path, opts) {
   const fd = openSync(path, (opts && opts.flags) || 'r');
   let pos = (opts && opts.start) || 0;
   const end = opts && opts.end;
+  if (globalThis.__ref) globalThis.__ref();
+  let closed = false;
+  function closeStream() {
+    if (closed) return;
+    closed = true;
+    closeSync(fd);
+    if (globalThis.__unref) globalThis.__unref();
+  }
   const rs = new Readable({
     highWaterMark,
     read(size) {
       const toRead = end != null ? Math.min(size, end - pos + 1) : size;
-      if (toRead <= 0) { this.push(null); closeSync(fd); return; }
+      if (toRead <= 0) { this.push(null); closeStream(); return; }
       const buf = Buffer.alloc(toRead);
       const n = readSync(fd, buf, 0, toRead, pos);
-      if (n <= 0) { this.push(null); closeSync(fd); return; }
+      if (n <= 0) { this.push(null); closeStream(); return; }
       pos += n;
       const chunk = n < toRead ? buf.slice(0, n) : buf;
       this.push(encoding ? chunk.toString(encoding) : chunk);
     },
+    destroy(_err, cb) { closeStream(); cb(_err); },
   });
   rs.path = path;
   rs.fd = fd;
@@ -381,11 +393,20 @@ function createWriteStream(path, opts) {
   const { Writable } = require('stream');
   const flags = (opts && opts.flags) || 'w';
   const fd = openSync(path, flags);
+  if (globalThis.__ref) globalThis.__ref();
+  let closed = false;
+  function closeStream() {
+    if (closed) return;
+    closed = true;
+    closeSync(fd);
+    if (globalThis.__unref) globalThis.__unref();
+  }
   const ws = new Writable({
     write(chunk, encoding, cb) {
       try { writeSync(fd, chunk); cb(); } catch (e) { cb(e); }
     },
-    final(cb) { closeSync(fd); cb(); },
+    final(cb) { closeStream(); cb(); },
+    destroy(_err, cb) { closeStream(); cb(_err); },
   });
   ws.path = path;
   ws.fd = fd;
@@ -756,6 +777,12 @@ const promises = {
   realpath: _promisify((p) => realpathSync(p)),
   symlink: _promisify((target, p) => symlinkSync(target, p)),
   appendFile: _promisify((p, data) => appendFileSync(p, data)),
+  statfs: _promisify((path) => {
+    _validatePath(path, 'path');
+    const s = statSync(_toPath(path));
+    return { type: 0, bsize: 4096, blocks: 0, bfree: 0, bavail: 0, files: 0, ffree: 0 };
+  }),
+  truncate: _promisify((p, len) => truncateSync(p, len)),
   chown: () => Promise.resolve(),
   lchown: () => Promise.resolve(),
   lchmod: () => Promise.resolve(),
@@ -812,6 +839,63 @@ function assertEncoding(encoding) {
   }
 }
 
+// Utf8Stream — fast writable stream for UTF-8 fd output
+class Utf8Stream extends require('stream').Writable {
+  constructor(opts) {
+    super({ decodeStrings: false });
+    this._sync = !!(opts && opts.sync);
+    this._minLength = (opts && opts.minLength != null) ? opts.minLength : 0;
+    this._buf = '';
+    this._fd = null;
+    this._fsOverride = (opts && opts.fs) || null;
+
+    if (opts && opts.fd != null) {
+      this._fd = opts.fd;
+      process.nextTick(() => this.emit('ready'));
+    } else if (opts && opts.dest) {
+      this._fd = openSync(opts.dest, 'w');
+      process.nextTick(() => this.emit('ready'));
+    }
+  }
+
+  _write(chunk, encoding, cb) {
+    const str = typeof chunk === 'string' ? chunk : chunk.toString();
+    this._buf += str;
+    if (this._buf.length < this._minLength) { cb(); return; }
+    this._flush(cb);
+  }
+
+  _flush(cb) {
+    if (this._buf.length === 0) { cb(); return; }
+    const data = this._buf;
+    this._buf = '';
+    const buf = Buffer.from(data, 'utf8');
+    if (this._sync) {
+      try {
+        const wsFn = this._fsOverride && this._fsOverride.writeSync;
+        if (wsFn) wsFn(this._fd, buf, 0, buf.length);
+        else writeSync(this._fd, buf, 0, buf.length);
+        this.emit('write', buf.length);
+        this.emit('drain');
+        cb();
+      } catch (e) { this.emit('error', e); cb(e); }
+    } else {
+      const wFn = this._fsOverride && this._fsOverride.write;
+      const doWrite = wFn || write;
+      doWrite(this._fd, buf, 0, buf.length, null, (err) => {
+        if (err) { this.emit('error', err); cb(err); return; }
+        this.emit('write', buf.length);
+        this.emit('drain');
+        cb();
+      });
+    }
+  }
+
+  _final(cb) {
+    this._flush(cb);
+  }
+}
+
 module.exports = {
   readFile, writeFile, appendFile, stat, lstat, mkdir, readdir,
   unlink, rmdir, rename, chmod, lchmod, access, rm, copyFile, realpath, exists,
@@ -828,6 +912,6 @@ module.exports = {
   createReadStream, createWriteStream,
   ReadStream: createReadStream, WriteStream: createWriteStream,
   watch, watchFile, unwatchFile, FSWatcher, Dirent,
-  promises, assertEncoding, stringToFlags,
+  promises, assertEncoding, stringToFlags, Utf8Stream,
   constants: internalBinding('constants').fs,
 };

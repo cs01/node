@@ -142,6 +142,18 @@ Object.defineProperty(EventEmitter, 'defaultMaxListeners', {
 EventEmitter.EventEmitter = EventEmitter;
 EventEmitter.listenerCount = function(emitter, type) { return emitter.listenerCount(type); };
 EventEmitter.getEventListeners = function(emitter, type) { return emitter.listeners(type); };
+// Polyfill getMaxListeners/setMaxListeners on EventTarget so static API works
+if (typeof EventTarget !== 'undefined' && !EventTarget.prototype.getMaxListeners) {
+  EventTarget.prototype.getMaxListeners = function() {
+    return this._maxListeners !== undefined ? this._maxListeners : EventEmitter.defaultMaxListeners;
+  };
+  EventTarget.prototype.setMaxListeners = function(n) { this._maxListeners = n; return this; };
+}
+// AbortSignal defaults to 0 (unlimited) in Node.js
+if (typeof AbortSignal !== 'undefined' && !AbortSignal.prototype.hasOwnProperty('_maxListeners')) {
+  Object.defineProperty(AbortSignal.prototype, '_maxListeners', { value: 0, writable: true, configurable: true });
+}
+
 EventEmitter.getMaxListeners = function(emitter) {
   if (typeof emitter.getMaxListeners === 'function') return emitter.getMaxListeners();
   return emitter._maxListeners !== undefined ? emitter._maxListeners : EventEmitter.defaultMaxListeners;

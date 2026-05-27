@@ -151,22 +151,32 @@ class Readable extends Stream {
       ret = state.buffer.shift();
       state.length = state.buffer.length;
     } else if (!size || size >= state.length) {
-      ret = state.buffer.length === 1 ? state.buffer.shift() : Buffer.concat(state.buffer);
+      if (state.buffer.length === 1) {
+        ret = state.buffer.shift();
+      } else if (state.encoding || (state.buffer.length > 0 && typeof state.buffer[0] === 'string')) {
+        ret = state.buffer.join('');
+      } else {
+        ret = Buffer.concat(state.buffer);
+      }
       state.buffer = [];
       state.length = 0;
     } else {
       ret = state.buffer.shift();
       state.length -= ret.length || 1;
     }
-    state.needReadable = state.length === 0 && !state.ended;
-    if (state.needReadable && !state.reading) {
-      state.reading = true;
-      process.nextTick(() => {
-        state.reading = false;
-        if (state.length < state.highWaterMark && !state.ended) {
-          this._read(state.highWaterMark);
-        }
-      });
+    if (state.length === 0 && !state.ended) {
+      state.needReadable = true;
+      if (!state.reading && !state._readScheduled) {
+        state._readScheduled = true;
+        process.nextTick(() => {
+          state._readScheduled = false;
+          if (!state.reading && state.length < state.highWaterMark && !state.ended) {
+            state.reading = true;
+            this._read(state.highWaterMark);
+            state.reading = false;
+          }
+        });
+      }
     }
     return ret;
   }
@@ -182,6 +192,7 @@ class Readable extends Stream {
         process.nextTick(() => {
           if (!state.endEmitted && !state._destroyed) { state.endEmitted = true; this.emit('end'); }
           if (this.allowHalfOpen === false && this._writableState && !this._writableState.ended) this.end();
+          if (this._writableState && this._writableState.autoDestroy && this._writableState.finished) process.nextTick(() => { if (!this.destroyed) this.destroy(); });
         });
       }
       return false;
@@ -228,9 +239,11 @@ class Readable extends Stream {
       state.flowing = false;
       if (state.length > 0 || state.ended) {
         process.nextTick(() => this.emit('readable'));
-      } else {
+      } else if (!state._readScheduled) {
         state.needReadable = true;
+        state._readScheduled = true;
         process.nextTick(() => {
+          state._readScheduled = false;
           if (!state.reading && !state.ended && state.length < state.highWaterMark) {
             state.reading = true;
             this._read(state.highWaterMark);
@@ -266,7 +279,13 @@ class Readable extends Stream {
     if (!state.flowing) {
       state.flowing = true;
       state.resumeScheduled = true;
-      process.nextTick(() => { state.resumeScheduled = false; this._flow(); });
+      process.nextTick(() => {
+        state.resumeScheduled = false;
+        if (state.flowing) {
+          this.emit('resume');
+          this._flow();
+        }
+      });
     }
     return this;
   }
@@ -292,7 +311,7 @@ class Readable extends Stream {
     }
     if (state.ended && state.buffer.length === 0 && !state.endEmitted && !state._destroyed) { state.endEmitted = true; this.emit('end'); }
   }
-  pause() { this._readableState.flowing = false; return this; }
+  pause() { if (this._readableState.flowing !== false) { this._readableState.flowing = false; this.emit('pause'); } return this; }
   isPaused() { return this._readableState.flowing === false; }
   unshift(chunk, encoding) {
     const state = this._readableState;
@@ -334,6 +353,7 @@ class Readable extends Stream {
   get errored() { return this._readableState.errored || null; }
   get readableEnded() { return this._readableState.ended; }
   get readableFlowing() { return this._readableState.flowing; }
+  get readableBuffer() { return this._readableState.buffer; }
   get readableHighWaterMark() { return this._readableState.highWaterMark; }
   get readableLength() { return this._readableState.length; }
   get readableObjectMode() { return this._readableState.objectMode; }
@@ -533,7 +553,7 @@ class Writable extends Stream {
     const _wOM2 = !!(opts && opts.objectMode);
     const _wDefaultHWM2 = _wOM2 ? 16 : 65536;
     const _wHWM2 = (opts && opts.writableHighWaterMark != null) ? opts.writableHighWaterMark : (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM2;
-    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], bufferedRequestCount: 0, objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2, errorEmitted: false, errored: null, autoDestroy: !!(opts && opts.autoDestroy), _destroyed: false, writable: true };
+    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], bufferedRequestCount: 0, objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2, errorEmitted: false, errored: null, autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true, _destroyed: false, writable: true };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;
     if (opts && opts.destroy) this._destroy = opts.destroy;
@@ -574,7 +594,7 @@ class Writable extends Stream {
     const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 65536;
     const ret = this._writableState.length < hwm;
     if (!ret) this._writableState.needDrain = true;
-    if (this._writableState.corked > 0) {
+    if (this._writableState.corked > 0 || this._writableState.writing) {
       this._writableState.buffered.push({ chunk, encoding: encoding || 'buffer', cb });
       this._writableState.bufferedRequestCount++;
       return ret;
@@ -660,7 +680,10 @@ class Writable extends Stream {
       this._writableState.finished = true;
       for (const c of cbs) c(null);
       this.emit('finish');
-      if (this._writableState.autoDestroy) this.destroy();
+      if (this._writableState.autoDestroy) {
+        const rState = this._readableState;
+        if (!rState || rState.ended) process.nextTick(() => { if (!this.destroyed) this.destroy(); });
+      }
     };
     const waitDrain = () => {
       const s = this._writableState;
@@ -753,7 +776,7 @@ class Duplex extends Readable {
     const _wOM = opts ? (opts.writableObjectMode != null ? opts.writableObjectMode : !!opts.objectMode) : false;
     const _wDefaultHWM = _wOM ? 16 : 65536;
     const _wHWM = (opts && opts.writableHighWaterMark != null) ? opts.writableHighWaterMark : (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM;
-    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM, errorEmitted: false, errored: null, autoDestroy: !!(opts && opts.autoDestroy) };
+    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM, errorEmitted: false, errored: null, autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;
     if (opts && opts.destroy) this._destroy = opts.destroy;
@@ -777,6 +800,14 @@ class Duplex extends Readable {
     this._readableState._destroyed = true;
     this._writableState._destroyed = true;
     if (err) { this._readableState.errored = err; this._writableState.errored = err; }
+    const ws = this._writableState;
+    while (ws.buffered.length > 0) {
+      const entry = ws.buffered.shift();
+      if (entry.cb) {
+        const e = new Error('Cannot call write after a stream was destroyed'); e.code = 'ERR_STREAM_DESTROYED';
+        process.nextTick(entry.cb, e);
+      }
+    }
     const onDestroy = (err2) => {
       const rs = this._readableState; const ws = this._writableState;
       const emitErr = err2 != null ? err2 : null;

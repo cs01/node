@@ -22,6 +22,12 @@ static constexpr int kActiveContextSlot = 2;
 static constexpr int kPrivateTableSlot = 3;
 static constexpr int kMaxSlots = 65536;
 
+// Forward declaration for dynamic import callback
+static v8::MaybeLocal<v8::Promise> DynamicImportCallback(
+    v8::Local<v8::Context>, v8::Local<v8::Data>,
+    v8::Local<v8::Value>, v8::Local<v8::String>,
+    v8::Local<v8::FixedArray>);
+
 struct HandleTable {
     v8::Isolate* isolate;
     std::vector<v8::Global<v8::Value>> slots;
@@ -183,6 +189,7 @@ extern "C" v8c_isolate* v8c_isolate_new(void) {
     iso->SetData(kHandleTableSlot, ht);
     iso->SetData(kHandleTableSlot + 1, tt);
     iso->SetData(kPrivateTableSlot, pt);
+    iso->SetHostImportModuleDynamicallyCallback(DynamicImportCallback);
 
     return reinterpret_cast<v8c_isolate*>(iso);
 }
@@ -200,6 +207,7 @@ extern "C" v8c_isolate* v8c_isolate_new_with_heap_limit(size_t max_heap_mb) {
     iso->SetData(kHandleTableSlot, ht);
     iso->SetData(kHandleTableSlot + 1, tt);
     iso->SetData(kPrivateTableSlot, pt);
+    iso->SetHostImportModuleDynamicallyCallback(DynamicImportCallback);
 
     return reinterpret_cast<v8c_isolate*>(iso);
 }
@@ -1265,6 +1273,52 @@ extern "C" size_t v8c_typedarray_length(v8c_isolate* iso, v8c_value ta) {
     auto local = unwrap(i, ta);
     if (local.IsEmpty() || !local->IsTypedArray()) return 0;
     return local.As<v8::TypedArray>()->Length();
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic import() — V8 callback that looks up globalThis.__dynamicImportHandler
+// ---------------------------------------------------------------------------
+
+static v8::MaybeLocal<v8::Promise> DynamicImportCallback(
+    v8::Local<v8::Context> context,
+    v8::Local<v8::Data> /* host_defined_options */,
+    v8::Local<v8::Value> /* resource_name */,
+    v8::Local<v8::String> specifier,
+    v8::Local<v8::FixedArray> /* import_attributes */) {
+
+    auto* iso = v8::Isolate::GetCurrent();
+    auto global = context->Global();
+
+    auto key = v8::String::NewFromUtf8Literal(iso, "__dynamicImportHandler");
+    auto maybe_handler = global->Get(context, key);
+    v8::Local<v8::Value> handler_val;
+    if (!maybe_handler.ToLocal(&handler_val) || !handler_val->IsFunction()) {
+        iso->ThrowError("dynamic import() handler not registered");
+        return v8::MaybeLocal<v8::Promise>();
+    }
+
+    auto resolver = v8::Promise::Resolver::New(context).ToLocalChecked();
+    auto promise = resolver->GetPromise();
+
+    v8::TryCatch tc(iso);
+    v8::Local<v8::Value> argv[1] = { specifier };
+    auto result = handler_val.As<v8::Function>()->Call(
+        context, global, 1, argv);
+
+    if (tc.HasCaught()) {
+        resolver->Reject(context, tc.Exception()).FromMaybe(false);
+    } else {
+        v8::Local<v8::Value> val;
+        if (result.ToLocal(&val)) {
+            resolver->Resolve(context, val).FromMaybe(false);
+        } else {
+            auto err = v8::Exception::Error(
+                v8::String::NewFromUtf8Literal(iso, "import() returned empty"));
+            resolver->Reject(context, err).FromMaybe(false);
+        }
+    }
+
+    return promise;
 }
 
 // ---------------------------------------------------------------------------

@@ -84,6 +84,10 @@ function suite(name, options, fn) {
 function it(name, options, fn) {
   return test(name, options, fn);
 }
+it.skip = function(name) { /* no-op: skip this test */ };
+it.todo = function(name) { /* no-op: mark as todo */ };
+describe.skip = function(name) { /* no-op: skip this suite */ };
+describe.todo = function(name) { /* no-op: mark as todo */ };
 
 function before(fn) {
   _queue.push({ name: 'before', fn, options: {} });

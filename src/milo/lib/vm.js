@@ -36,18 +36,20 @@ function runInThisContext(code, options) {
 
 function runInNewContext(code, sandbox, options) {
   sandbox = sandbox || Object.create(null);
-  const keys = Object.keys(sandbox);
-  const vals = keys.map(k => sandbox[k]);
-  const returnKeys = keys.map(k => `__sb__['${k}'] = ${k};`).join(' ');
-  // Use var declarations for sandbox keys so assignments stay local
-  const varDecls = keys.length ? keys.map((k, i) => `var ${k} = __vals__[${i}];`).join(' ') : '';
-  let fn;
-  try {
-    fn = new Function('__sb__', '__vals__', `${varDecls} var __r__ = eval(${JSON.stringify(code)}); ${returnKeys} return __r__;`);
-  } catch {
-    fn = new Function('__sb__', '__vals__', `${varDecls} ${code}\n${returnKeys}`);
-  }
-  return fn(sandbox, vals);
+  // Proxy traps bare name reads/writes to sandbox, providing context isolation
+  // Proxy intercepts all reads/writes — sandbox-first, then globalThis fallback
+  const proxy = new Proxy(sandbox, {
+    has() { return true; },
+    get(target, key) {
+      if (key === Symbol.unscopables) return undefined;
+      if (key in target) return target[key];
+      if (key in globalThis) return globalThis[key];
+      return undefined;
+    },
+    set(target, key, value) { target[key] = value; return true; },
+  });
+  const fn = new Function('__ctx__', `with (__ctx__) { return eval(${JSON.stringify(code)}); }`);
+  return fn(proxy);
 }
 
 function runInContext(code, context, options) {

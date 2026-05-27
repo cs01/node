@@ -275,11 +275,13 @@ class Buffer extends Uint8Array {
     if (enc === 'ucs2' || enc === 'ucs-2' || enc === 'utf16le' || enc === 'utf-16le') return str.length * 2;
     if (enc === 'hex') return str.length >>> 1;
     if (enc === 'base64' || enc === 'base64url') {
-      let len = str.length;
-      let pad = 0;
-      if (str[len - 1] === '=') pad++;
-      if (str[len - 2] === '=') pad++;
-      return (len * 3 >>> 2) - pad;
+      let validLen = 0;
+      for (let i = 0; i < str.length; i++) {
+        const c = str.charCodeAt(i);
+        // A-Z, a-z, 0-9, +, /, -, _
+        if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 43 || c === 47 || c === 45 || c === 95) validLen++;
+      }
+      return (validLen * 3) >>> 2;
     }
     // utf8 — use native if available
     if (_nativeUtf8ByteLength) return _nativeUtf8ByteLength(str);

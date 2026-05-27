@@ -2,6 +2,7 @@
 'use strict';
 
 const EventEmitter = require('events');
+const { Duplex } = require('stream');
 const tcp = internalBinding('tcp');
 
 const EVFILT_READ = tcp.EVFILT_READ;   // -1
@@ -18,9 +19,9 @@ function ensurePoll() {
 }
 
 // --- Socket ---
-class Socket extends EventEmitter {
+class Socket extends Duplex {
   constructor(options) {
-    super();
+    super({ allowHalfOpen: (options && options.allowHalfOpen) || false });
     if (options && options.fd !== undefined) {
       if (typeof options.fd !== 'number') {
         const e = new TypeError(`The "options.fd" property must be of type number. Received type ${typeof options.fd}`);
@@ -32,17 +33,11 @@ class Socket extends EventEmitter {
       }
     }
     this._fd = (options && (options._fd !== undefined ? options._fd : options.fd)) || -1;
-    this.readable = (options && options.readable !== undefined) ? options.readable : true;
-    this.writable = (options && options.writable !== undefined) ? options.writable : true;
-    this.destroyed = false;
     this._connecting = false;
-    this._readableState = { ended: false, endEmitted: false, length: 0, objectMode: false };
-    this._writableState = { ended: false, finished: false, length: 0, errorEmitted: false, needDrain: false };
     this.remoteAddress = undefined;
     this.remotePort = undefined;
     this.localAddress = undefined;
     this.localPort = undefined;
-    // register for polling if we already have an fd
     if (this._fd >= 0) this._startReading();
   }
 
@@ -53,6 +48,7 @@ class Socket extends EventEmitter {
   }
 
   connect(port, host, cb) {
+    let isPipe = false;
     if (typeof port === 'object') {
       const opts = port;
       cb = typeof host === 'function' ? host : cb;
@@ -66,19 +62,20 @@ class Socket extends EventEmitter {
         const e = new TypeError('The "options.host" property must be of type string. Received type ' + typeof opts.host);
         e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
       }
-      if (opts.path) { const e = new Error('Pipe/Unix sockets not yet implemented'); e.code = 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM'; throw e; }
+      if (opts.path) isPipe = true;
       port = opts.port; host = opts.host || opts.hostname;
+    } else if (typeof port === 'string' && !Number.isFinite(+port)) {
+      isPipe = true;
     }
-    if (typeof port === 'string' && !Number.isFinite(+port)) {
-      const e = new Error('Pipe/Unix sockets not yet implemented'); e.code = 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM'; throw e;
-    }
+    if (isPipe) { const e = new Error('Pipe/Unix sockets not yet implemented'); e.code = 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM'; throw e; }
     if (typeof host === 'function') { cb = host; host = '127.0.0.1'; }
     if (!host) host = '127.0.0.1';
-    port = +port;
-    if (Number.isNaN(port) || port !== (port >>> 0) || port > 65535) {
-      const e = new RangeError(`options.port should be >= 0 and < 65536. Received ${port}.`);
-      e.code = 'ERR_SOCKET_BAD_PORT'; throw e;
+    if (port !== undefined && typeof port !== 'number' && typeof port !== 'string') {
+      const e = new TypeError(`The "options.port" option must be of type number or string. Received type ${typeof port} (${String(port)})`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
     }
+    const _validatePort = require('internal/validators').validatePort;
+    port = _validatePort(port, 'options.port');
     if (cb) this.once('connect', cb);
     this._connecting = true;
 
@@ -107,23 +104,17 @@ class Socket extends EventEmitter {
   }
 
   _onReadable() {
+    if (this.destroyed) return;
     const data = tcp.recvBinary(this._fd);
     if (data === undefined) {
-      if (this.readable) {
-        this.readable = false;
-        this._readableState.ended = true;
-        this._readableState.endEmitted = true;
-        this.emit('end');
-      }
-      this.destroy();
+      this.push(null);
     } else if (data.length > 0) {
-      this.emit('data', Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+      this.push(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
     }
   }
 
-  write(data, encoding, cb) {
-    if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
-    if (this.destroyed) return false;
+  _write(data, encoding, cb) {
+    if (this._fd < 0) { cb(new Error('Socket is closed')); return; }
     let n;
     if (Buffer.isBuffer(data)) {
       n = tcp.sendBinary(this._fd, new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
@@ -133,36 +124,27 @@ class Socket extends EventEmitter {
       const str = typeof data === 'string' ? data : String(data);
       n = tcp.send(this._fd, str);
     }
-    if (cb) process.nextTick(cb);
-    return n >= 0;
+    if (n < 0) cb(new Error('write failed')); else cb();
   }
 
-  end(data, encoding, cb) {
-    if (typeof data === 'function') { cb = data; data = undefined; }
-    if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
-    if (data !== undefined) this.write(data, encoding);
-    this.writable = false;
-    this._writableState.ended = true;
-    this._writableState.finished = true;
+  _read(size) {
+    // Data is pushed from _onReadable via kqueue events, not pulled
+  }
+
+  _final(cb) {
     if (this._fd >= 0) tcp.shutdown(this._fd, 1); // SHUT_WR
-    if (cb) this.once('finish', cb);
-    this.emit('finish');
-    return this;
+    cb();
   }
 
-  destroy(err) {
-    if (this.destroyed) return this;
-    this.destroyed = true;
-    this.readable = false;
-    this.writable = false;
+  _destroy(err, cb) {
     if (this._fd >= 0) {
       Socket._sockets.delete(this._fd);
+      try { tcp.pollRemove(this._fd, EVFILT_READ); } catch {}
+      try { tcp.pollRemove(this._fd, EVFILT_WRITE); } catch {}
       tcp.close(this._fd);
       this._fd = -1;
     }
-    if (err) this.emit('error', err);
-    this.emit('close', !!err);
-    return this;
+    cb(err);
   }
 
   address() {
@@ -181,6 +163,18 @@ class Socket extends EventEmitter {
   }
 
   setTimeout(ms, cb) {
+    if (typeof ms !== 'number') {
+      const e = new TypeError(`The "msecs" argument must be of type number. Received type ${typeof ms}` + (typeof ms !== 'undefined' ? ` (${String(ms)})` : ''));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (ms < 0 || !Number.isFinite(ms)) {
+      const e = new RangeError(`The value of "msecs" is out of range. It must be a non-negative finite number. Received ${ms}`);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+    if (cb !== undefined && typeof cb !== 'function') {
+      const e = new TypeError(`The "callback" argument must be of type function. Received type ${typeof cb}` + (typeof cb === 'symbol' ? '' : ` (${String(cb)})`));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
     if (cb) this.once('timeout', cb);
     if (this._timeoutTimer) clearTimeout(this._timeoutTimer);
     if (ms > 0) {
@@ -191,17 +185,6 @@ class Socket extends EventEmitter {
     return this;
   }
 
-  cork() { this._corked = (this._corked || 0) + 1; }
-  uncork() { this._corked = Math.max(0, (this._corked || 0) - 1); }
-
-  read(size) { return null; }
-  pause() { this._paused = true; return this; }
-  resume() { this._paused = false; return this; }
-  pipe(dest, opts) {
-    this.on('data', (chunk) => dest.write(chunk));
-    this.on('end', () => { if (!opts || opts.end !== false) dest.end(); });
-    return dest;
-  }
 
   ref() { this._unref = false; return this; }
   unref() { this._unref = true; return this; }
@@ -308,6 +291,7 @@ class Server extends EventEmitter {
     }
 
     this._listening = true;
+    this._handle = { fd: this._fd };
     tcp.pollAdd(this._fd, EVFILT_READ);
     Server._servers.set(this._fd, this);
     const addr = this.address();
@@ -322,6 +306,7 @@ class Server extends EventEmitter {
     const clientFd = tcp.accept(this._fd);
     if (clientFd < 0) return;
     const sock = new Socket({ _fd: clientFd });
+    sock._server = this;
     const peer = tcp.getPeerName(clientFd);
     if (peer) { sock.remoteAddress = peer.address; sock.remotePort = peer.port; sock.remoteFamily = peer.family; }
     this._connections++;
@@ -337,10 +322,18 @@ class Server extends EventEmitter {
   close(cb) {
     if (cb) this.once('close', cb);
     this._listening = false;
+    this._handle = null;
     if (this._fd >= 0) {
       Server._servers.delete(this._fd);
+      try { tcp.pollRemove(this._fd, EVFILT_READ); } catch {}
       tcp.close(this._fd);
       this._fd = -1;
+    }
+    // Destroy all accepted connections so event loop can drain
+    if (this._connections > 0) {
+      for (const sock of Socket._sockets.values()) {
+        if (sock._server === this && !sock.destroyed) sock.destroy();
+      }
     }
     process.nextTick(() => this.emit('close'));
     return this;
@@ -351,6 +344,13 @@ class Server extends EventEmitter {
   getConnections(cb) { cb(null, this._connections); }
 }
 Server._servers = new Map();
+
+function _emitSocketError(sock, e) {
+  if (sock.listenerCount('error') > 0) { sock.emit('error', e); return; }
+  const handlers = process.listeners && process.listeners('uncaughtException');
+  if (handlers && handlers.length > 0) process.emit('uncaughtException', e);
+  else { console.error(e); sock.destroy(); }
+}
 
 // --- I/O pump called from event loop ---
 function _pollOnce(timeout) {
@@ -388,25 +388,16 @@ function _pollOnce(timeout) {
 
     // TLS handshake needs both read and write events
     if (filter === EVFILT_WRITE && (sock._pendingTlsConnect || sock._pendingTlsAccept)) {
-      sock._onReadable();
+      try { sock._onReadable(); } catch (e) { _emitSocketError(sock, e); }
       continue;
     }
 
     if (filter === EVFILT_READ) {
-      sock._onReadable();
+      try { sock._onReadable(); } catch (e) { _emitSocketError(sock, e); }
     }
 
-    if ((flags & EV_EOF) && !sock.destroyed) {
-      if (typeof sock.emit === 'function') {
-        if (sock.readable) {
-          sock.readable = false;
-          sock.emit('end');
-        }
-        if (typeof sock.destroy === 'function') sock.destroy();
-      } else {
-        // Pipe fd — trigger _onReadable which handles EOF internally
-        sock._onReadable();
-      }
+    if ((flags & EV_EOF) && !sock.destroyed && !sock._readableState.ended) {
+      sock.push(null);
     }
   }
   return events.length;

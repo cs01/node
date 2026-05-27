@@ -91,7 +91,7 @@ fn printVal(iso: Isolate, val: Value): void {
 
         if val.isString(iso) != 0 {
             var buf: [u8; 4096] = [0; 4096]
-            let len = val.writeUtf8(iso, buf as *u8, 4096)
+            let len = val.writeUtf8(iso, buf as *u8, 4096) - 1
             if len > 0 {
                 write(1, buf as *u8, len as i64)
                 write(1, "\n" as *u8, 1)
@@ -329,7 +329,8 @@ fn consoleWrite(info: *u8, _ud: *u8): void {
     let arg = ci.arg(0)
     var buf: [u8; 8192] = [0; 8192]
     unsafe {
-        let len = arg.writeUtf8(iso, buf as *u8, 8192)
+        // writeUtf8 returns length including null terminator
+        let len = arg.writeUtf8(iso, buf as *u8, 8192) - 1
         if len > 0 {
             write(1, buf as *u8, len as i64)
         }
@@ -343,7 +344,7 @@ fn consoleWriteError(info: *u8, _ud: *u8): void {
     let arg = ci.arg(0)
     var buf: [u8; 8192] = [0; 8192]
     unsafe {
-        let len = arg.writeUtf8(iso, buf as *u8, 8192)
+        let len = arg.writeUtf8(iso, buf as *u8, 8192) - 1
         if len > 0 {
             write(2, buf as *u8, len as i64)
         }
@@ -625,7 +626,7 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
                 let msg = Value { slot: v8c_try_catch_message(tc) }
                 if msg.slot >= 0 {
                     var mbuf: [u8; 4096] = [0; 4096]
-                    let mlen = msg.writeUtf8(iso, mbuf as *u8, 4096)
+                    let mlen = msg.writeUtf8(iso, mbuf as *u8, 4096) - 1
                     if mlen > 0 {
                         write(2, mbuf as *u8, mlen as i64)
                         write(2, "\n" as *u8, 1)
@@ -755,7 +756,7 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
             let msg = Value { slot: v8c_try_catch_message(tc2) }
             if msg.slot >= 0 {
                 var mbuf: [u8; 4096] = [0; 4096]
-                let mlen = msg.writeUtf8(iso, mbuf as *u8, 4096)
+                let mlen = msg.writeUtf8(iso, mbuf as *u8, 4096) - 1
                 if mlen > 0 {
                     write(2, mbuf as *u8, mlen as i64)
                     write(2, "\n" as *u8, 1)

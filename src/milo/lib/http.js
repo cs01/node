@@ -6,6 +6,14 @@ const net = require('net');
 const stream = require('stream');
 const { Readable } = stream;
 
+// Headers that should NOT be concatenated — first value wins
+const _SINGLE_HEADERS = new Set([
+  'content-type', 'content-length', 'user-agent', 'referer', 'host',
+  'authorization', 'proxy-authorization', 'if-modified-since',
+  'if-unmodified-since', 'from', 'location', 'max-forwards',
+  'retry-after', 'etag', 'last-modified', 'server', 'age', 'expires',
+]);
+
 class IncomingMessage extends Readable {
   constructor() {
     super();
@@ -34,8 +42,17 @@ class IncomingMessage extends Readable {
   _addHeaderLine(field, value, dest) {
     const key = field.toLowerCase();
     this.rawHeaders.push(field, value);
-    if (dest[key]) { dest[key] += ', ' + value; }
-    else { dest[key] = value; }
+    if (key === 'set-cookie') {
+      if (key in dest) dest[key].push(value);
+      else dest[key] = [value];
+    } else if (key in dest) {
+      if (_SINGLE_HEADERS.has(key)) return;
+      const sep = key === 'cookie' ? '; ' : ', ';
+      if (dest[key] !== undefined) dest[key] += sep + value;
+      else dest[key] = value;
+    } else {
+      dest[key] = value;
+    }
   }
 }
 
@@ -78,10 +95,20 @@ class OutgoingMessage extends EventEmitter {
     if (typeof encoding === 'function') { cb = encoding; encoding = null; }
     if (!this._headersSent && this._implicitHeader) this._implicitHeader();
     const data = typeof chunk === 'string' ? Buffer.from(chunk, encoding || 'utf8') : chunk;
+    if (this.socket) {
+      return this.socket.write(data, encoding, cb);
+    }
     this._outputData.push(data);
     this._outputSize += data.length;
-    if (cb) cb();
+    if (cb) process.nextTick(cb);
     return true;
+  }
+  _flushOutput(socket) {
+    if (this._outputData.length > 0) {
+      for (const d of this._outputData) socket.write(d);
+      this._outputData = [];
+      this._outputSize = 0;
+    }
   }
   end(chunk, encoding, cb) {
     if (typeof chunk === 'function') { cb = chunk; chunk = undefined; encoding = undefined; }
@@ -89,8 +116,16 @@ class OutgoingMessage extends EventEmitter {
     if (chunk) this.write(chunk, encoding);
     this.finished = true;
     this.writableEnded = true;
-    this.emit('finish');
-    if (cb) cb();
+    if (this.socket) {
+      const onFinish = () => {
+        this.emit('finish');
+        if (cb) cb();
+      };
+      this.socket.write(Buffer.alloc(0), onFinish);
+    } else {
+      this.emit('finish');
+      if (cb) cb();
+    }
     return this;
   }
   setHeader(k, v) {
@@ -160,6 +195,11 @@ class ServerResponse extends OutgoingMessage {
   _implicitHeader() { this._flushHeaders(); }
   writeHead(code, reason, headers) {
     if (typeof reason === 'object' || Array.isArray(reason)) { headers = reason; reason = undefined; }
+    code = +code;
+    if (code < 100 || code > 999 || !Number.isFinite(code) || code !== (code | 0)) {
+      const e = new RangeError(`Invalid status code: ${arguments[0] === undefined ? 'undefined' : String(arguments[0])}`);
+      e.code = 'ERR_HTTP_INVALID_STATUS_CODE'; throw e;
+    }
     this.statusCode = code;
     if (headers) {
       if (Array.isArray(headers)) {
@@ -279,11 +319,13 @@ class Server extends EventEmitter {
           if (bodyReceived >= contentLength) {
             req.push(null);
             req.complete = true;
+            req.readable = false;
           }
 
           if (req.headers['upgrade'] && this.listenerCount('upgrade') > 0) {
             req.push(null);
             req.complete = true;
+            req.readable = false;
             this.emit('upgrade', req, socket, Buffer.from(bodyPart));
           } else {
             socket._httpActive = true;
@@ -292,7 +334,15 @@ class Server extends EventEmitter {
               socket._httpActive = false;
               if (this._closing) socket.destroy();
             });
-            this.emit('request', req, res);
+            try {
+              this.emit('request', req, res);
+            } catch (e) {
+              if (!res.headersSent) {
+                res.statusCode = 500;
+                res.end();
+              }
+              this.emit('clientError', e, socket);
+            }
           }
         } else if (currentReq && !currentReq.complete) {
           currentReq.push(chunk);
@@ -300,6 +350,7 @@ class Server extends EventEmitter {
           if (contentLength >= 0 && bodyReceived >= contentLength) {
             currentReq.push(null);
             currentReq.complete = true;
+            currentReq.readable = false;
           }
         }
       });
@@ -308,11 +359,13 @@ class Server extends EventEmitter {
         if (currentReq && !currentReq.complete) {
           currentReq.push(null);
           currentReq.complete = true;
+          currentReq.readable = false;
         }
       });
     });
     this._server.listen(port, host, () => {
       this._listening = true;
+      this._handle = this._server._handle;
       this.emit('listening');
       if (cb) cb();
     });
@@ -322,6 +375,7 @@ class Server extends EventEmitter {
     if (cb) this.once('close', cb);
     this._listening = false;
     this._closing = true;
+    this._handle = null;
     if (this._server) this._server.close();
     if (!this._sockets || this._sockets.size === 0) {
       process.nextTick(() => this.emit('close'));
@@ -496,6 +550,7 @@ class ClientRequest extends EventEmitter {
         if (contentLength >= 0 && bodyReceived >= contentLength) {
           res.complete = true;
           res.push(null);
+          socket.destroy();
         }
       } else {
         if (chunked) {
@@ -506,6 +561,7 @@ class ClientRequest extends EventEmitter {
           if (contentLength >= 0 && bodyReceived >= contentLength) {
             res.complete = true;
             res.push(null);
+            socket.destroy();
           }
         }
       }
@@ -516,6 +572,7 @@ class ClientRequest extends EventEmitter {
         res.complete = true;
         res.push(null);
       }
+      socket.destroy();
     });
 
       socket.on('error', (err) => {
@@ -548,7 +605,7 @@ class ClientRequest extends EventEmitter {
       const sizeStr = this._chunkBuf.slice(0, nl).toString().trim();
       const size = parseInt(sizeStr, 16);
       if (isNaN(size)) { this._chunkBuf = this._chunkBuf.slice(nl + 2); continue; }
-      if (size === 0) { res.complete = true; res.push(null); return; }
+      if (size === 0) { res.complete = true; res.push(null); if (this.socket) this.socket.destroy(); return; }
       if (this._chunkBuf.length < nl + 2 + size + 2) break;
       res.push(this._chunkBuf.slice(nl + 2, nl + 2 + size));
       this._chunkBuf = this._chunkBuf.slice(nl + 2 + size + 2);
@@ -556,6 +613,8 @@ class ClientRequest extends EventEmitter {
   }
 
   setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
+  setNoDelay(noDelay) { if (this.socket) this.socket.setNoDelay(noDelay); }
+  setSocketKeepAlive(enable, delay) { if (this.socket) this.socket.setKeepAlive(enable, delay); }
   abort() { if (this.socket) this.socket.destroy(); }
 }
 

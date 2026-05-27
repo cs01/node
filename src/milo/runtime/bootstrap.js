@@ -875,6 +875,8 @@
     if (resolved.endsWith('.json')) { mod.exports = JSON.parse(fileSrc); }
     else {
       let src = fileSrc;
+      // Strip shebang lines — V8 doesn't handle them, Node's C++ loader normally does this
+      if (src.charCodeAt(0) === 0x23 && src.charCodeAt(1) === 0x21) src = src.replace(/^#!.*\n/, '');
       if (_isESM(resolved)) src = _esmToCjs(src, resolved);
       (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src))(mod.exports, modRequire, mod, resolved, dname, primordials);
     }
@@ -968,7 +970,7 @@
             },
             validateBuffer: (v, name) => { if (!Buffer.isBuffer(v)) _throwType(name, 'Buffer', v); },
             validateEncoding: (v, name) => { if (typeof v !== 'string') _throwType(name, 'string', v); },
-            validatePort: (v, name) => { if (typeof v !== 'number' || v < 0 || v > 65535) { const e = new RangeError(`${name || 'port'} should be >= 0 and < 65536`); e.code = 'ERR_SOCKET_BAD_PORT'; throw e; } return v | 0; },
+            validatePort: (v, name) => { let p; if (typeof v === 'string' && v.trim().length > 0 && v === v.trim()) { p = +v; } else if (typeof v === 'number') { p = v; } else { p = NaN; } if (Number.isNaN(p) || p !== (p >>> 0) || p > 0xFFFF) { const e = new RangeError(`${name || 'port'} should be >= 0 and < 65536. Received ${String(v)}.`); e.code = 'ERR_SOCKET_BAD_PORT'; throw e; } return p | 0; },
             validateAbortSignal: () => {},
             validateOneOf: (v, name, oneOf) => { if (!oneOf.includes(v)) { const e = new TypeError(`${name} must be one of: ${oneOf.join(', ')}`); e.code = 'ERR_INVALID_ARG_VALUE'; throw e; } },
             validateSignalName: (v) => { if (typeof v !== 'string') _throwType('signal', 'string', v); },
@@ -1022,6 +1024,8 @@
           }
           const fs = require('fs');
           stub = { validateRmOptionsSync, stringToFlags: fs.stringToFlags };
+        } else if (id === 'internal/event_target') {
+          stub = { CustomEvent: globalThis.CustomEvent, Event: globalThis.Event, EventTarget: globalThis.EventTarget, NodeEventTarget: globalThis.EventTarget };
         } else if (id === 'internal/util') {
           stub = {
             emitExperimentalWarning: (feature) => { process.emitWarning(`${feature} is an experimental feature`, 'ExperimentalWarning'); },
@@ -1104,6 +1108,21 @@
 
   globalThis._makeRequire = _makeRequire;
   globalThis.require = _makeRequire('');
+
+  // --- dynamic import() handler ---
+  // V8's C++ callback calls this synchronously, resolves/rejects the promise itself.
+  globalThis.__dynamicImportHandler = function(specifier) {
+    let resolved = specifier;
+    if (resolved.startsWith('file://')) resolved = resolved.slice(7);
+    const exports = require(resolved);
+    const ns = Object.create(null);
+    if (exports && typeof exports === 'object' && !Array.isArray(exports)) {
+      Object.assign(ns, exports);
+    }
+    ns.default = exports;
+    Object.freeze(ns);
+    return ns;
+  };
 
   // --- load internal init modules (order matters) ---
   require('_console_init');

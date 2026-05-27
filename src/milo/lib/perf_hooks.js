@@ -114,7 +114,12 @@ const performance = {
     Object.defineProperty(wrapped, 'name', { value: fn.name });
     return wrapped;
   },
-  nodeTiming: { name: 'node', entryType: 'node', startTime: 0, duration: 0, bootstrapComplete: 0 },
+  nodeTiming: {
+    name: 'node', entryType: 'node', startTime: 0,
+    get duration() { return performance.now(); },
+    nodeStart: 0, v8Start: 0, environment: 0, bootstrapComplete: 0,
+    loopStart: -1, loopExit: -1, idleTime: 0,
+  },
   eventLoopUtilization: () => globalThis.__eventLoopUtilization ? globalThis.__eventLoopUtilization() : { idle: 0, active: 0, utilization: 0 },
 };
 
