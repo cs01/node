@@ -105,5 +105,14 @@ class Module {
 
 Module.globalPaths = [];
 Module._cache = typeof globalThis.require !== 'undefined' && globalThis.require.cache ? globalThis.require.cache : {};
+Module._initPaths = function() {
+  const paths = [];
+  if (process.env.NODE_PATH) {
+    const sep = process.platform === 'win32' ? ';' : ':';
+    paths.push(...process.env.NODE_PATH.split(sep).filter(Boolean));
+  }
+  Module.globalPaths = paths;
+};
+Module._initPaths();
 
 module.exports = Module;

@@ -157,7 +157,18 @@
     globalThis.AbortSignal = AbortSignal;
     globalThis.AbortController = class AbortController { #signal = new AbortSignal(); get signal() { return this.#signal; } abort(reason) { this.#signal._abort(reason); } };
   }
-  if (typeof DOMException === 'undefined') globalThis.DOMException = class DOMException extends Error { constructor(msg, name) { super(msg); this.name = name || 'Error'; this.code = 0; } };
+  if (typeof DOMException === 'undefined') globalThis.DOMException = class DOMException extends Error {
+    constructor(msg, nameOrOpts) {
+      super(msg);
+      if (typeof nameOrOpts === 'object' && nameOrOpts !== null) {
+        this.name = nameOrOpts.name || 'Error';
+        if ('cause' in nameOrOpts) this.cause = nameOrOpts.cause;
+      } else {
+        this.name = nameOrOpts || 'Error';
+      }
+      this.code = 0;
+    }
+  };
   if (typeof Event === 'undefined') globalThis.Event = class Event { constructor(type, opts) { this.type = type; this.bubbles = opts?.bubbles || false; this.cancelable = opts?.cancelable || false; this.defaultPrevented = false; } preventDefault() { this.defaultPrevented = true; } };
   if (typeof EventTarget === 'undefined') globalThis.EventTarget = class EventTarget { #h = {}; addEventListener(t, fn) { (this.#h[t] ??= []).push(fn); } removeEventListener(t, fn) { const a = this.#h[t]; if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); } } dispatchEvent(ev) { for (const fn of (this.#h[ev.type] || [])) fn(ev); } };
   if (typeof ReadableStream === 'undefined') {
@@ -508,6 +519,9 @@
   }
   if (typeof global === 'undefined') globalThis.global = globalThis;
   Object.defineProperty(globalThis, Symbol.toStringTag, { value: 'global', configurable: true });
+  if (typeof Error.prepareStackTrace !== 'function') {
+    Error.prepareStackTrace = function(error, frames) { return error.toString() + frames.map(f => '\n    at ' + f.toString()).join(''); };
+  }
   if (typeof structuredClone === 'undefined') globalThis.structuredClone = function structuredClone(v) { return JSON.parse(JSON.stringify(v)); };
   if (typeof CustomEvent === 'undefined') globalThis.CustomEvent = class CustomEvent extends Event { constructor(type, opts) { super(type, opts); this.detail = opts?.detail ?? null; } };
   if (typeof Navigator === 'undefined') {

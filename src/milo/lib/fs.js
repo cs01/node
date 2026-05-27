@@ -213,7 +213,7 @@ function renameSync(old, n) { _validatePath(old, 'oldPath'); _validatePath(n, 'n
 function readdirSync(path, opts) {
   _validatePath(path, 'path');
   const sp = _toPath(path);
-  const entries = b.readdir(sp) || [];
+  const entries = (b.readdir(sp) || []).sort();
   if (opts && opts.withFileTypes) {
     return entries.map(name => new Dirent(name, sp));
   }
