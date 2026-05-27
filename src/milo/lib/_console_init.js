@@ -96,6 +96,7 @@ globalThis.console = {
   groupEnd() { if (_groupIndent.length >= 2) _groupIndent = _groupIndent.slice(2); },
   groupCollapsed(...args) { if (args.length > 0) _con.write(_groupIndent + _fmtArgs(args) + '\n'); _groupIndent += '  '; },
   table(data, columns) {
+    if (columns !== undefined && !Array.isArray(columns)) { const e = new TypeError('"columns" argument must be an instance of Array'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
     if (!data || typeof data !== 'object') { console.log(data); return; }
     const rows = Array.isArray(data) ? data : Object.entries(data).map(([k, v]) => typeof v === 'object' && v ? { '(index)': k, ...v } : { '(index)': k, Values: v });
     if (rows.length === 0) { console.log(data); return; }

@@ -81,12 +81,12 @@ function _wrapCallback(fn) {
 const _origSetTimeout = globalThis.setTimeout;
 const _origSetInterval = globalThis.setInterval;
 
-globalThis.setTimeout = function(fn, delay, ...args) {
+globalThis.setTimeout = function setTimeout(fn, delay, ...args) {
   return _origSetTimeout.call(globalThis, _wrapCallback(fn), delay, ...args);
 };
 globalThis.setTimeout.__proto__ = _origSetTimeout;
 
-globalThis.setInterval = function(fn, delay, ...args) {
+globalThis.setInterval = function setInterval(fn, delay, ...args) {
   return _origSetInterval.call(globalThis, _wrapCallback(fn), delay, ...args);
 };
 globalThis.setInterval.__proto__ = _origSetInterval;

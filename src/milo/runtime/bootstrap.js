@@ -344,7 +344,7 @@
       return s;
     }
   };
-  if (typeof queueMicrotask === 'undefined') globalThis.queueMicrotask = (fn) => Promise.resolve().then(fn);
+  if (typeof queueMicrotask === 'undefined') globalThis.queueMicrotask = function queueMicrotask(fn) { Promise.resolve().then(fn); };
   if (typeof fetch === 'undefined') globalThis.fetch = function fetch(input, init) {
     return new Promise((resolve, reject) => {
       try {
@@ -391,8 +391,8 @@
       } catch(e) { reject(e); }
     });
   };
-  if (typeof atob === 'undefined') globalThis.atob = function(s) { const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'; let r = '', i = 0; s = s.replace(/=/g, ''); while (i < s.length) { const a = chars.indexOf(s[i++]), b = chars.indexOf(s[i++]||'A'), c = chars.indexOf(s[i++]||'A'), d = chars.indexOf(s[i++]||'A'); r += String.fromCharCode((a<<2)|(b>>4)); if(s[i-2]!==undefined) r+=String.fromCharCode(((b&15)<<4)|(c>>2)); if(s[i-1]!==undefined) r+=String.fromCharCode(((c&3)<<6)|d); } return r; };
-  if (typeof btoa === 'undefined') globalThis.btoa = function(s) { const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'; let r = ''; for (let i = 0; i < s.length; i += 3) { const a = s.charCodeAt(i), b = s.charCodeAt(i+1), c = s.charCodeAt(i+2); r += chars[a>>2] + chars[((a&3)<<4)|(b>>4)] + (isNaN(b)?'=':chars[((b&15)<<2)|(c>>6)]) + (isNaN(c)?'=':chars[c&63]); } return r; };
+  if (typeof atob === 'undefined') globalThis.atob = function atob(s) { if (typeof s !== 'string') s = String(s); const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='; const stripped = s.replace(/[\s]/g, ''); for (let j = 0; j < stripped.length; j++) if (chars.indexOf(stripped[j]) === -1) throw new DOMException('The string to be decoded is not correctly encoded.', 'InvalidCharacterError'); const clean = stripped.replace(/=/g, ''); let r = '', i = 0; while (i < clean.length) { const a = chars.indexOf(clean[i++]), b = chars.indexOf(clean[i++]||'A'), c = chars.indexOf(clean[i++]||'A'), d = chars.indexOf(clean[i++]||'A'); r += String.fromCharCode((a<<2)|(b>>4)); if(clean[i-2]!==undefined) r+=String.fromCharCode(((b&15)<<4)|(c>>2)); if(clean[i-1]!==undefined) r+=String.fromCharCode(((c&3)<<6)|d); } return r; };
+  if (typeof btoa === 'undefined') globalThis.btoa = function btoa(s) { if (typeof s !== 'string') s = String(s); for (let j = 0; j < s.length; j++) if (s.charCodeAt(j) > 255) throw new DOMException('The string to be encoded contains characters outside of the Latin1 range.', 'InvalidCharacterError'); const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'; let r = ''; for (let i = 0; i < s.length; i += 3) { const a = s.charCodeAt(i), b = s.charCodeAt(i+1), c = s.charCodeAt(i+2); r += chars[a>>2] + chars[((a&3)<<4)|(b>>4)] + (isNaN(b)?'=':chars[((b&15)<<2)|(c>>6)]) + (isNaN(c)?'=':chars[c&63]); } return r; };
   if (typeof performance === 'undefined') { const _perfOrigin = Date.now(); globalThis.performance = { now() { return Date.now() - _perfOrigin; }, timeOrigin: _perfOrigin }; }
   if (!performance.mark) {
     const _entries = [];
@@ -507,7 +507,8 @@
     };
   }
   if (typeof global === 'undefined') globalThis.global = globalThis;
-  if (typeof structuredClone === 'undefined') globalThis.structuredClone = (v) => JSON.parse(JSON.stringify(v));
+  Object.defineProperty(globalThis, Symbol.toStringTag, { value: 'global', configurable: true });
+  if (typeof structuredClone === 'undefined') globalThis.structuredClone = function structuredClone(v) { return JSON.parse(JSON.stringify(v)); };
   if (typeof CustomEvent === 'undefined') globalThis.CustomEvent = class CustomEvent extends Event { constructor(type, opts) { super(type, opts); this.detail = opts?.detail ?? null; } };
   if (typeof Navigator === 'undefined') {
     class Navigator { get userAgent() { return 'milo-node'; } get language() { return 'en-US'; } get languages() { return ['en-US']; } get hardwareConcurrency() { return 1; } get platform() { return process.platform; } }
@@ -1173,7 +1174,7 @@
   require('_timers_init');
   try { const _b = require('buffer'); globalThis.Buffer = _b.Buffer || _b; } catch {}
   // Expose WebCrypto API as globalThis.crypto (Node 19+)
-  try { const _c = require('crypto'); if (_c.webcrypto) globalThis.crypto = _c.webcrypto; } catch {}
+  try { const _c = require('crypto'); if (_c.webcrypto) Object.defineProperty(globalThis, 'crypto', { value: _c.webcrypto, writable: true, enumerable: true, configurable: true }); } catch {}
 
   // Polyfill URLSearchParams.sort if missing
   if (typeof URLSearchParams !== 'undefined' && !URLSearchParams.prototype.sort) {
@@ -1286,13 +1287,13 @@
 (function() {
   const nonEnum = [
     'internalBinding', 'getInternalBinding', 'primordials', 'require',
-    'process', 'Buffer', 'crypto',
-    'AbortSignal', 'DOMException', 'Event', 'EventTarget',
+    'process', 'Buffer',
+    'AbortController', 'AbortSignal', 'DOMException', 'Event', 'EventTarget',
     'URL', 'URLSearchParams', 'TextEncoder', 'TextDecoder',
     'ReadableStream', 'WritableStream', 'TransformStream',
     'ByteLengthQueuingStrategy', 'CountQueuingStrategy',
     'Headers', 'Request', 'Response', 'Blob', 'File',
-    'PerformanceObserver', 'Navigator', 'navigator', 'CustomEvent',
+    'PerformanceObserver', 'Navigator', 'CustomEvent',
     'MessageEvent', 'MessageChannel', 'MessagePort', 'BroadcastChannel',
   ];
   for (const key of Object.getOwnPropertyNames(globalThis)) {
@@ -1300,5 +1301,10 @@
       const desc = Object.getOwnPropertyDescriptor(globalThis, key);
       if (desc && desc.enumerable) Object.defineProperty(globalThis, key, { ...desc, enumerable: false });
     }
+  }
+  // crypto and navigator must be enumerable (Node.js behavior)
+  for (const k of ['crypto', 'navigator']) {
+    const d = Object.getOwnPropertyDescriptor(globalThis, k);
+    if (d && !d.enumerable && d.configurable) Object.defineProperty(globalThis, k, { ...d, enumerable: true });
   }
 })();

@@ -19,8 +19,14 @@ class Console {
     this._inspectOptions = opts && opts.inspectOptions;
   }
 
+  _fmt(...args) {
+    if (args.length === 0) return '';
+    if (typeof args[0] === 'string' && args.length > 1) return require('util').format(...args);
+    return args.map(a => typeof a === 'string' ? a : inspect(a)).join(' ');
+  }
+
   log(...args) {
-    const msg = this._groupIndent + args.map(a => typeof a === 'object' && a !== null ? inspect(a) : String(a)).join(' ') + '\n';
+    const msg = this._groupIndent + this._fmt(...args) + '\n';
     try {
       if (this._stdout && this._stdout.write) this._stdout.write(msg);
       else internalBinding('_console').write(msg);
@@ -32,7 +38,7 @@ class Console {
   dir(obj, opts) { this.log(inspect(obj, opts)); }
 
   error(...args) {
-    const msg = this._groupIndent + args.map(a => typeof a === 'object' && a !== null ? inspect(a) : String(a)).join(' ') + '\n';
+    const msg = this._groupIndent + this._fmt(...args) + '\n';
     try {
       if (this._stderr && this._stderr.write) this._stderr.write(msg);
       else internalBinding('_console').writeError(msg);
@@ -73,7 +79,10 @@ class Console {
     this.error('Trace:', ...args, '\n' + err.stack.split('\n').slice(2).join('\n'));
   }
 
-  table(data) { this.log(data); }
+  table(data, columns) {
+    if (columns !== undefined && !Array.isArray(columns)) { const e = new TypeError('"columns" argument must be an instance of Array'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    this.log(data);
+  }
   clear() {
     if (this._stdout && this._stdout.isTTY) {
       this._stdout.write('\x1b[1;1H\x1b[0J');

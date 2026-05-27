@@ -49,7 +49,7 @@ function _validateTimerCb(fn) {
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
 }
-globalThis.setTimeout = function(fn, delay, ...args) {
+globalThis.setTimeout = function setTimeout(fn, delay, ...args) {
   _validateTimerCb(fn);
   if (typeof delay === 'number' && delay < 0 && !_negativeTimerWarned) {
     _negativeTimerWarned = true;
@@ -64,7 +64,7 @@ globalThis.setTimeout = function(fn, delay, ...args) {
   return t;
 };
 
-globalThis.clearTimeout = function(t) {
+globalThis.clearTimeout = function clearTimeout(t) {
   if (t && typeof t === 'object') t._destroyed = true;
   const id = t && typeof t === 'object' ? t._id : t;
   _timerCallbacks.delete(id);
@@ -72,7 +72,7 @@ globalThis.clearTimeout = function(t) {
   _tb.clear(id);
 };
 
-globalThis.setInterval = function(fn, delay, ...args) {
+globalThis.setInterval = function setInterval(fn, delay, ...args) {
   _validateTimerCb(fn);
   const t = new Timeout(0, fn, delay, args, true);
   const wrapped = () => _safeCall(fn, args);
@@ -81,7 +81,7 @@ globalThis.setInterval = function(fn, delay, ...args) {
   return t;
 };
 
-globalThis.clearInterval = function(t) {
+globalThis.clearInterval = function clearInterval(t) {
   if (t && typeof t === 'object') t._destroyed = true;
   const id = t && typeof t === 'object' ? t._id : t;
   _timerCallbacks.delete(id);
@@ -94,14 +94,14 @@ const _immediateQueue = [];
 let _immediateId = 0;
 const _activeImmediates = new Set();
 
-globalThis.setImmediate = function(fn, ...args) {
+globalThis.setImmediate = function setImmediate(fn, ...args) {
   _validateTimerCb(fn);
   const id = ++_immediateId;
   _activeImmediates.add(id);
   _immediateQueue.push({ id, fn, args });
   return new Timeout(id, fn, 0, args, false);
 };
-globalThis.clearImmediate = function(t) {
+globalThis.clearImmediate = function clearImmediate(t) {
   const id = t && typeof t === 'object' ? t._id : t;
   _activeImmediates.delete(id);
 };

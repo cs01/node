@@ -100,7 +100,14 @@ if (!process.umask) {
 process.getActiveResourcesInfo = () => [];
 process.constrainedMemory = () => 0;
 process.availableMemory = () => 0;
-process.cpuUsage = (prev) => {
+process.cpuUsage = function cpuUsage(prev) {
+  if (prev !== undefined) {
+    if (typeof prev !== 'object' || prev === null) { const e = new TypeError('The "prevValue" argument must be of type object. Received type ' + typeof prev + ' (' + prev + ')'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (typeof prev.user !== 'number') { const e = new TypeError('The "prevValue.user" property must be of type number.' + (prev.user === null ? ' Received null' : prev.user === undefined ? ' Received undefined' : " Received type " + typeof prev.user + " ('" + prev.user + "')")); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (typeof prev.system !== 'number') { const e = new TypeError('The "prevValue.system" property must be of type number.' + (prev.system === null ? ' Received null' : prev.system === undefined ? ' Received undefined' : " Received type " + typeof prev.system + " ('" + prev.system + "')")); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (prev.user < 0 || !Number.isFinite(prev.user)) { const e = new RangeError("The property 'prevValue.user' is invalid. Received " + prev.user); e.code = 'ERR_INVALID_ARG_VALUE'; throw e; }
+    if (prev.system < 0 || !Number.isFinite(prev.system)) { const e = new RangeError("The property 'prevValue.system' is invalid. Received " + prev.system); e.code = 'ERR_INVALID_ARG_VALUE'; throw e; }
+  }
   const usage = { user: 0, system: 0 };
   if (prev) { usage.user -= prev.user; usage.system -= prev.system; }
   return usage;
@@ -108,9 +115,13 @@ process.cpuUsage = (prev) => {
 
 if (!process.hrtime) {
   const b = internalBinding('process_methods');
-  process.hrtime = (...a) => {
+  process.hrtime = function hrtime(time) {
+    if (time !== undefined) {
+      if (!Array.isArray(time)) { const e = new TypeError('The "time" argument must be an instance of Array. Received type ' + typeof time + ' (' + time + ')'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+      if (time.length !== 2) { const e = new RangeError('The value of "time" is out of range. It must be 2. Received ' + time.length); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    }
     const r = b.hrtime();
-    if (a.length && a[0]) { r[0] -= a[0][0]; r[1] -= a[0][1]; if (r[1] < 0) { r[0]--; r[1] += 1e9; } }
+    if (time) { r[0] -= time[0]; r[1] -= time[1]; if (r[1] < 0) { r[0]--; r[1] += 1e9; } }
     return r;
   };
   process.hrtime.bigint = b.hrtimeBigint;
