@@ -217,10 +217,21 @@ function promisify(fn) {
 promisify.custom = Symbol.for('nodejs.util.promisify.custom');
 
 function callbackify(fn) {
-  return function(...args) {
+  if (typeof fn !== 'function') {
+    const e = new TypeError('The "original" argument must be of type function. Received ' + (fn === null ? 'null' : typeof fn));
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  const callbackified = function(...args) {
     const cb = args.pop();
-    fn(...args).then(r => cb(null, r), e => cb(e));
+    if (typeof cb !== 'function') throw new TypeError('The last argument must be of type function');
+    fn(...args).then(
+      (r) => process.nextTick(cb, null, r),
+      (e) => { if (!e) { const wrapped = new Error('Promise was rejected with falsy value'); wrapped.reason = e; e = wrapped; } process.nextTick(cb, e); }
+    );
   };
+  Object.defineProperty(callbackified, 'length', { value: fn.length + 1 });
+  Object.defineProperty(callbackified, 'name', { value: fn.name + 'Callbackified' });
+  return callbackified;
 }
 
 function debuglog(section) {
@@ -250,7 +261,7 @@ function getCallSites() {
 
 function stripVTControlCharacters(str) {
   // eslint-disable-next-line no-control-regex
-  return str.replace(/\x1B\[[0-9;]*[A-Za-z]/g, '').replace(/\x1B\][^\x07]*\x07/g, '');
+  return str.replace(/(?:\x1B\]|\x9D)[^\x07\x1B\x9C]*(?:\x07|\x1B\\|\x9C)/g, '').replace(/(?:\x1B[@-Z\\-_]|\x9B|\x1B\[)[0-?]*[ -/]*[@-~]/g, '');
 }
 
 function parseEnv(content) {

@@ -117,9 +117,15 @@ function _hexVal(c) {
 
 function _checkOffset(offset, byteLength, bufLength) {
   if (offset === undefined) offset = 0;
-  if (typeof offset !== 'number' || Number.isNaN(offset) || offset % 1 !== 0) throw _ERR_OUT_OF_RANGE('offset', 'an integer', offset);
-  if (offset < 0) throw _ERR_OUT_OF_RANGE('offset', '>= 0', offset);
-  if (offset + byteLength > bufLength) throw _ERR_BUFFER_OUT_OF_BOUNDS();
+  if (typeof offset !== 'number') {
+    const e = new TypeError('The "offset" argument must be of type number. Received type ' + typeof offset);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (Number.isNaN(offset) || offset % 1 !== 0) {
+    if (!Number.isFinite(offset)) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${Math.max(0, bufLength - byteLength)}`, offset);
+    throw _ERR_OUT_OF_RANGE('offset', 'an integer', offset);
+  }
+  if (offset < 0 || offset + byteLength > bufLength) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${Math.max(0, bufLength - byteLength)}`, offset);
   return offset;
 }
 
@@ -639,10 +645,10 @@ class Buffer extends Uint8Array {
   readBigInt64LE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigInt64(offset, true); }
   readBigUInt64BE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigUint64(offset, false); }
   readBigUInt64LE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigUint64(offset, true); }
-  writeBigInt64BE(value, offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigInt64(offset || 0, value, false); }
-  writeBigInt64LE(value, offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigInt64(offset || 0, value, true); }
-  writeBigUInt64BE(value, offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigUint64(offset || 0, value, false); }
-  writeBigUInt64LE(value, offset) { const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigUint64(offset || 0, value, true); }
+  writeBigInt64BE(value, offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigInt64(offset, BigInt(value), false); return offset + 8; }
+  writeBigInt64LE(value, offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigInt64(offset, BigInt(value), true); return offset + 8; }
+  writeBigUInt64BE(value, offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigUint64(offset, BigInt(value), false); return offset + 8; }
+  writeBigUInt64LE(value, offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigUint64(offset, BigInt(value), true); return offset + 8; }
 
   swap16() { if (this.length % 2 !== 0) { const e = new RangeError('Buffer size must be a multiple of 16-bits'); e.code = 'ERR_INVALID_BUFFER_SIZE'; throw e; } for (let i = 0; i < this.length; i += 2) { const t = this[i]; this[i] = this[i+1]; this[i+1] = t; } return this; }
   swap32() { if (this.length % 4 !== 0) { const e = new RangeError('Buffer size must be a multiple of 32-bits'); e.code = 'ERR_INVALID_BUFFER_SIZE'; throw e; } for (let i = 0; i < this.length; i += 4) { let t = this[i]; this[i] = this[i+3]; this[i+3] = t; t = this[i+1]; this[i+1] = this[i+2]; this[i+2] = t; } return this; }

@@ -1,10 +1,22 @@
 // events module — EventEmitter (function-based for util.inherits/.call() compat)
 'use strict';
 
+function _ERR_INVALID_ARG_TYPE(name, expected, actual) {
+  let received;
+  if (actual === null) received = 'null';
+  else if (actual === undefined) received = 'undefined';
+  else if (typeof actual === 'function') received = 'function ' + (actual.name || '');
+  else if (typeof actual === 'object') received = 'an instance of ' + (actual.constructor && actual.constructor.name || 'Object');
+  else received = 'type ' + typeof actual + ' (' + String(actual) + ')';
+  const e = new TypeError('The "' + name + '" argument must be of type ' + expected + '. Received ' + received);
+  e.code = 'ERR_INVALID_ARG_TYPE';
+  return e;
+}
+
 function EventEmitter() {
   if (!(this instanceof EventEmitter)) return new EventEmitter();
   this._events = Object.create(null);
-  this._maxListeners = EventEmitter.defaultMaxListeners;
+  this._maxListeners = undefined;
 }
 
 EventEmitter.prototype.setMaxListeners = function(n) {
@@ -62,8 +74,8 @@ EventEmitter.prototype.on = function(type, fn) {
   if (type !== 'newListener' && typeof this.emit === 'function') this.emit('newListener', type, fn.listener || fn);
   (this._events[type] || (this._events[type] = [])).push(fn);
   const max = this._maxListeners !== undefined ? this._maxListeners : EventEmitter.defaultMaxListeners;
-  if (max > 0 && this._events[type].length > max && !this._events[type]._warned) {
-    this._events[type]._warned = true;
+  if (max > 0 && this._events[type].length > max && !this._events[type].warned) {
+    this._events[type].warned = true;
     const w = new Error(`Possible EventEmitter memory leak detected. ${this._events[type].length} ${String(type)} listeners added to [${this.constructor.name}]. MaxListeners is ${max}. Use emitter.setMaxListeners() to increase limit`);
     w.name = 'MaxListenersExceededWarning'; w.emitter = this; w.type = type; w.count = this._events[type].length;
     if (typeof process !== 'undefined' && process.emitWarning) process.emitWarning(w);
@@ -82,6 +94,7 @@ EventEmitter.prototype.prependListener = function(type, fn) {
 };
 
 EventEmitter.prototype.once = function(type, fn) {
+  if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   const self = this;
   let fired = false;
   function wrapped() { if (fired) return; fired = true; self.removeListener(type, wrapped); return fn.apply(self, arguments); }
@@ -90,6 +103,7 @@ EventEmitter.prototype.once = function(type, fn) {
 };
 
 EventEmitter.prototype.prependOnceListener = function(type, fn) {
+  if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   const self = this;
   let fired = false;
   function wrapped() { if (fired) return; fired = true; self.removeListener(type, wrapped); return fn.apply(self, arguments); }
@@ -98,6 +112,7 @@ EventEmitter.prototype.prependOnceListener = function(type, fn) {
 };
 
 EventEmitter.prototype.removeListener = function(type, fn) {
+  if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   if (!this._events) this._events = Object.create(null);
   const list = this._events[type];
   if (!list) return this;

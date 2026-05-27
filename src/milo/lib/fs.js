@@ -156,17 +156,34 @@ function appendFileSync(path, data, options) {
   }
 }
 
+function Stats(dev, mode, nlink, uid, gid, rdev, blksize, ino, size, blocks, atimeMs, mtimeMs, ctimeMs, birthtimeMs) {
+  this.dev = dev || 0; this.mode = mode || 0; this.nlink = nlink || 0;
+  this.uid = uid || 0; this.gid = gid || 0; this.rdev = rdev || 0;
+  this.blksize = blksize || 4096; this.ino = ino || 0; this.size = size || 0;
+  this.blocks = blocks || 0;
+  this.atimeMs = atimeMs || 0; this.mtimeMs = mtimeMs || 0;
+  this.ctimeMs = ctimeMs || 0; this.birthtimeMs = birthtimeMs || 0;
+  this.atime = new Date(this.atimeMs); this.mtime = new Date(this.mtimeMs);
+  this.ctime = new Date(this.ctimeMs); this.birthtime = new Date(this.birthtimeMs);
+}
+Stats.prototype.isFile = function() { return (this.mode & 0o170000) === 0o100000; };
+Stats.prototype.isDirectory = function() { return (this.mode & 0o170000) === 0o040000; };
+Stats.prototype.isSymbolicLink = function() { return (this.mode & 0o170000) === 0o120000; };
+Stats.prototype.isBlockDevice = function() { return (this.mode & 0o170000) === 0o060000; };
+Stats.prototype.isCharacterDevice = function() { return (this.mode & 0o170000) === 0o020000; };
+Stats.prototype.isFIFO = function() { return (this.mode & 0o170000) === 0o010000; };
+Stats.prototype.isSocket = function() { return (this.mode & 0o170000) === 0o140000; };
+
 function _wrapStats(s) {
-  return {
-    dev: s.dev || 0, ino: s.ino || 0, mode: s.mode || 0, nlink: s.nlink || 0,
-    uid: s.uid || 0, gid: s.gid || 0, rdev: 0, size: s.size || 0,
-    blksize: s.blksize || 4096, blocks: s.blocks || 0,
-    atimeMs: s.atimeMs || 0, mtimeMs: s.mtimeMs || 0, ctimeMs: s.ctimeMs || 0, birthtimeMs: s.birthtimeMs || 0,
-    atime: new Date(s.atimeMs || 0), mtime: new Date(s.mtimeMs || 0), ctime: new Date(s.ctimeMs || 0), birthtime: new Date(s.birthtimeMs || 0),
-    isFile: () => !!s.isFile, isDirectory: () => !!s.isDirectory,
-    isSymbolicLink: () => !!s.isSymbolicLink, isBlockDevice: () => false,
-    isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
-  };
+  const st = new Stats(
+    s.dev, s.mode, s.nlink, s.uid, s.gid, 0, s.blksize,
+    s.ino, s.size, s.blocks, s.atimeMs, s.mtimeMs, s.ctimeMs, s.birthtimeMs
+  );
+  // Preserve binding-level type flags for modes not detected from mode bits
+  if (s.isFile && !st.isFile()) st.isFile = () => true;
+  if (s.isDirectory && !st.isDirectory()) st.isDirectory = () => true;
+  if (s.isSymbolicLink && !st.isSymbolicLink()) st.isSymbolicLink = () => true;
+  return st;
 }
 
 function statSync(path) {
@@ -386,6 +403,54 @@ function writevSync(fd, buffers, position) {
   return total;
 }
 
+function writev(fd, buffers, position, cb) {
+  if (typeof position === 'function') { cb = position; position = null; }
+  if (typeof cb !== 'function') throw _ERR_INVALID_ARG_TYPE('cb', 'function', cb);
+  _validateFd(fd);
+  if (!Array.isArray(buffers)) throw _ERR_INVALID_ARG_TYPE('buffers', 'ArrayBufferView[]', buffers);
+  for (let i = 0; i < buffers.length; i++) {
+    if (!ArrayBuffer.isView(buffers[i])) throw _ERR_INVALID_ARG_TYPE('buffers[' + i + ']', 'Buffer or TypedArray', buffers[i]);
+  }
+  try {
+    if (position != null && position !== -1) b.fdSeek(fd, position, 0);
+    let total = 0;
+    for (const buf of buffers) {
+      const data = Buffer.isBuffer(buf) ? buf : Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
+      if (data.length === 0) continue;
+      const n = b.fdWrite(fd, data, data.length);
+      if (n > 0) total += n;
+    }
+    process.nextTick(cb, null, total, buffers);
+  } catch (e) {
+    process.nextTick(cb, e);
+  }
+}
+
+function readv(fd, buffers, position, cb) {
+  if (typeof position === 'function') { cb = position; position = null; }
+  if (typeof cb !== 'function') throw _ERR_INVALID_ARG_TYPE('cb', 'function', cb);
+  _validateFd(fd);
+  if (!Array.isArray(buffers)) throw _ERR_INVALID_ARG_TYPE('buffers', 'ArrayBufferView[]', buffers);
+  for (let i = 0; i < buffers.length; i++) {
+    if (!ArrayBuffer.isView(buffers[i])) throw _ERR_INVALID_ARG_TYPE('buffers[' + i + ']', 'Buffer or TypedArray', buffers[i]);
+  }
+  try {
+    if (position != null && position !== -1) b.fdSeek(fd, position, 0);
+    let total = 0;
+    for (const buf of buffers) {
+      const result = b.fdRead(fd, buf.byteLength);
+      if (typeof result === 'number' || !result) break;
+      const bytes = new Uint8Array(result.buffer || result);
+      for (let i = 0; i < bytes.length; i++) buf[i] = bytes[i];
+      total += bytes.length;
+      if (bytes.length < buf.byteLength) break;
+    }
+    process.nextTick(cb, null, total, buffers);
+  } catch (e) {
+    process.nextTick(cb, e);
+  }
+}
+
 function rmSync(path, opts) {
   _validatePath(path, 'path');
   const p = _toPath(path);
@@ -562,6 +627,11 @@ function readFile(path, opts, cb) {
     return;
   }
   _validatePath(path, 'path');
+  const _enc = typeof opts === 'string' ? opts : (opts && opts.encoding);
+  if (_enc && !Buffer.isEncoding(_enc)) {
+    const e = new TypeError(`The argument 'encoding' is invalid for this operation. Received '${_enc}'`);
+    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+  }
   _async(readFileSync, [path, opts], cb);
 }
 
@@ -1076,10 +1146,10 @@ module.exports = {
   symlinkSync, lstatSync, readlinkSync, linkSync,
   chownSync, lchownSync, utimesSync, truncateSync,
   openSync, closeSync, fstatSync, writeSync, readSync,
-  fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync, fchownSync, writevSync,
+  fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync, fchownSync, writevSync, writev, readv,
   createReadStream, createWriteStream,
   ReadStream: createReadStream, WriteStream: createWriteStream,
-  watch, watchFile, unwatchFile, FSWatcher, Dirent, Dir,
+  watch, watchFile, unwatchFile, FSWatcher, Dirent, Dir, Stats,
   opendirSync, _toUnixTimestamp, statfsSync, statfs,
   promises, assertEncoding, stringToFlags, Utf8Stream,
   constants: internalBinding('constants').fs,

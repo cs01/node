@@ -3,10 +3,22 @@
 
 const EventEmitter = require('events');
 
-function _validateHWM(hwm) {
+function _ERR_UNKNOWN_ENCODING(enc) {
+  const e = new TypeError('Unknown encoding: ' + enc);
+  e.code = 'ERR_UNKNOWN_ENCODING';
+  return e;
+}
+
+function _ERR_METHOD_NOT_IMPLEMENTED(method) {
+  const e = new Error('The ' + method + ' method is not implemented');
+  e.code = 'ERR_METHOD_NOT_IMPLEMENTED';
+  return e;
+}
+
+function _validateHWM(hwm, name) {
   if (hwm != null && (typeof hwm !== 'number' || !(hwm >= 0) || !Number.isFinite(hwm))) {
     const { inspect } = require('util');
-    const e = new TypeError(`The property 'options.highWaterMark' is invalid. Received ${inspect(hwm)}`);
+    const e = new TypeError(`The property 'options.${name || 'highWaterMark'}' is invalid. Received ${inspect(hwm)}`);
     e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
   }
 }
@@ -95,12 +107,19 @@ class Readable extends Stream {
   constructor(opts) {
     super();
     this.readable = true;
-    if (opts) { _validateHWM(opts.highWaterMark); _validateHWM(opts.readableHighWaterMark); }
+    if (opts) { _validateHWM(opts.highWaterMark, 'highWaterMark'); _validateHWM(opts.readableHighWaterMark, 'readableHighWaterMark'); }
+    const _isDuplex = this instanceof Duplex;
     const _rOM = opts ? (opts.readableObjectMode != null ? opts.readableObjectMode : !!opts.objectMode) : false;
     const _rDefaultHWM = _rOM ? 16 : 65536;
+    let _rHWM = _rDefaultHWM;
+    if (opts) {
+      if (opts.highWaterMark != null) _rHWM = opts.highWaterMark;
+      else if (_isDuplex && opts.readableHighWaterMark != null) _rHWM = opts.readableHighWaterMark;
+    }
     this._readableState = {
+      readable: true,
       flowing: null, ended: false, buffer: [], length: 0,
-      highWaterMark: (opts && opts.readableHighWaterMark != null) ? opts.readableHighWaterMark : (opts && opts.highWaterMark != null) ? opts.highWaterMark : _rDefaultHWM,
+      highWaterMark: _rHWM,
       objectMode: _rOM,
       encoding: null,
       pipes: [],
@@ -360,6 +379,14 @@ class Readable extends Stream {
   get readableObjectMode() { return this._readableState.objectMode; }
   get readableEncoding() { return this._readableState.encoding; }
   get readableDidRead() { return !!this._didPush; }
+  get readableAborted() {
+    const state = this._readableState;
+    return !!(
+      state.readable !== false &&
+      (state._destroyed || state.errored) &&
+      !state.endEmitted
+    );
+  }
 
   wrap(stream) {
     stream.on('data', (chunk) => { this.push(chunk); });
@@ -550,16 +577,20 @@ class Writable extends Stream {
   constructor(opts) {
     super();
     this.writable = true;
-    if (opts) { _validateHWM(opts.highWaterMark); _validateHWM(opts.writableHighWaterMark); }
+    if (opts) { _validateHWM(opts.highWaterMark, 'highWaterMark'); _validateHWM(opts.writableHighWaterMark, 'writableHighWaterMark'); }
     const _wOM2 = !!(opts && opts.objectMode);
     const _wDefaultHWM2 = _wOM2 ? 16 : 65536;
-    const _wHWM2 = (opts && opts.writableHighWaterMark != null) ? opts.writableHighWaterMark : (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM2;
+    const _wHWM2 = (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM2;
     this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], bufferedRequestCount: 0, objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2, errorEmitted: false, errored: null, autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true, _destroyed: false, writable: true };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;
     if (opts && opts.destroy) this._destroy = opts.destroy;
     if (opts && opts.final) this._final = opts.final;
-    if (opts && opts.defaultEncoding) this._defaultEncoding = opts.defaultEncoding;
+    if (opts && opts.defaultEncoding !== undefined) {
+      if (opts.defaultEncoding === null) this._defaultEncoding = 'utf8';
+      else if (!Buffer.isEncoding(opts.defaultEncoding)) throw _ERR_UNKNOWN_ENCODING(opts.defaultEncoding);
+      else this._defaultEncoding = opts.defaultEncoding;
+    }
     if (opts && opts.decodeStrings === false) this._decodeStrings = false;
     if (opts && opts.objectMode) this._writableState.objectMode = true;
     if (opts && opts.signal) {
@@ -574,10 +605,17 @@ class Writable extends Stream {
   write(chunk, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
     if (!encoding) encoding = this._defaultEncoding || 'utf8';
-    if (this._writableState._destroyed) {
-      const err = new Error('Cannot call write after a stream was destroyed');
-      err.code = 'ERR_STREAM_DESTROYED';
+    if (this._writableState._destroyed || this._writableState.errored) {
+      const err = this._writableState.errored || new Error('Cannot call write after a stream was destroyed');
+      if (!err.code) err.code = 'ERR_STREAM_DESTROYED';
       if (cb) process.nextTick(cb, err);
+      return false;
+    }
+    if (this._writableState.ended) {
+      const err = new Error('write after end');
+      err.code = 'ERR_STREAM_WRITE_AFTER_END';
+      if (cb) process.nextTick(cb, err);
+      process.nextTick(() => this.emit('error', err));
       return false;
     }
     if (chunk === null) {
@@ -593,7 +631,10 @@ class Writable extends Stream {
       err.code = 'ERR_INVALID_ARG_TYPE';
       throw err;
     }
-    if (typeof chunk === 'string' && this._decodeStrings !== false) { chunk = Buffer.from(chunk, encoding); encoding = 'buffer'; }
+    if (typeof chunk === 'string') {
+      if (encoding && !Buffer.isEncoding(encoding)) throw _ERR_UNKNOWN_ENCODING(encoding);
+      if (this._decodeStrings !== false) { chunk = Buffer.from(chunk, encoding); encoding = 'buffer'; }
+    }
     this._writableState.length += (this._writableState.objectMode ? 1 : (chunk.length || 0));
     const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 65536;
     const ret = this._writableState.length < hwm;
@@ -605,7 +646,7 @@ class Writable extends Stream {
     }
     this._writableState.writing = true;
     this._doWrite(chunk, encoding || 'buffer', cb);
-    return ret;
+    return ret && !this._writableState.errored;
   }
 
   _doWrite(chunk, encoding, cb) {
@@ -620,15 +661,18 @@ class Writable extends Stream {
         if (cb) cb(err);
         return;
       }
-      if (err) { state.errored = err; this.emit('error', err); }
-      else {
+      if (err) {
+        state.errored = err;
+        if (cb) cb(err);
+        process.nextTick(() => this.emit('error', err));
+      } else {
         const hwm = state.highWaterMark != null ? state.highWaterMark : 65536;
         if (state.needDrain && state.length < hwm) {
           state.needDrain = false;
           this.emit('drain');
         }
+        if (cb) cb(err);
       }
-      if (cb) cb(err);
       this._flushBuffered();
     });
   }
@@ -784,11 +828,17 @@ class Duplex extends Readable {
   constructor(opts) {
     super(opts);
     this.writable = true;
-    if (opts) _validateHWM(opts.writableHighWaterMark);
+    if (opts && opts.readable === false) { this.readable = false; this._readableState.readable = false; }
+    if (opts && opts.writable === false) this.writable = false;
+    if (opts) _validateHWM(opts.writableHighWaterMark, 'writableHighWaterMark');
     this.allowHalfOpen = opts && opts.allowHalfOpen !== undefined ? opts.allowHalfOpen : true;
     const _wOM = opts ? (opts.writableObjectMode != null ? opts.writableObjectMode : !!opts.objectMode) : false;
     const _wDefaultHWM = _wOM ? 16 : 65536;
-    const _wHWM = (opts && opts.writableHighWaterMark != null) ? opts.writableHighWaterMark : (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM;
+    let _wHWM = _wDefaultHWM;
+    if (opts) {
+      if (opts.highWaterMark != null) _wHWM = opts.highWaterMark;
+      else if (opts.writableHighWaterMark != null) _wHWM = opts.writableHighWaterMark;
+    }
     this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM, errorEmitted: false, errored: null, autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;

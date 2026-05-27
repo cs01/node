@@ -342,15 +342,17 @@ function assert(value, message) {
 }
 
 function fail(actual, expected, message, operator) {
+  let generatedMessage = false;
   if (arguments.length === 0 || (arguments.length === 1 && typeof actual === 'undefined')) {
     message = 'Failed';
+    generatedMessage = true;
   } else if (arguments.length === 1) {
     message = actual; actual = undefined;
   }
   if (message instanceof Error) throw message;
   const genMsg = !message && operator && operator !== 'fail';
   const msg = message || (genMsg ? _createDefaultMessage({ actual, expected, operator }) : 'Failed');
-  throw new AssertionError({ actual, expected, message: msg, operator: operator || 'fail', generatedMessage: !message });
+  throw new AssertionError({ actual, expected, message: msg, operator: operator || 'fail', generatedMessage: generatedMessage || (!message && !genMsg) });
 }
 
 function ok(value, message) {

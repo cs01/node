@@ -182,9 +182,15 @@ if (!process.kill) {
     return 0;
   };
   process.kill = function(pid, signal) {
+    const origPid = pid;
     if (typeof pid === 'string') pid = Number(pid);
     if (typeof pid !== 'number' || Number.isNaN(pid) || !Number.isFinite(pid)) {
-      const e = new TypeError('The "pid" argument must be of type number. Received ' + (pid === null ? 'null' : pid === undefined ? 'undefined' : 'type ' + typeof pid + ' (' + String(pid) + ')'));
+      let received;
+      if (origPid === null) received = 'null';
+      else if (origPid === undefined) received = 'undefined';
+      else if (typeof origPid === 'string') received = "type string ('" + origPid + "')";
+      else received = 'type ' + typeof origPid + ' (' + String(origPid) + ')';
+      const e = new TypeError('The "pid" argument must be of type number. Received ' + received);
       e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
     }
     let sig;
@@ -195,7 +201,8 @@ if (!process.kill) {
       if (sig === undefined) { const e = new TypeError('Unknown signal: ' + signal); e.code = 'ERR_UNKNOWN_SIGNAL'; throw e; }
     } else { sig = signal; }
     const r = process._kill(pid, sig);
-    if (r === -1) { const e = new Error('kill EINVAL'); e.code = 'EINVAL'; throw e; }
+    if (r !== 0 && r !== undefined) { const e = new Error('kill EINVAL'); e.code = 'EINVAL'; throw e; }
+    if (sig < 0 || sig > 31) { const e = new Error('kill EINVAL'); e.code = 'EINVAL'; throw e; }
   };
 }
 // Wrap process.exit to emit 'exit' event before native exit
