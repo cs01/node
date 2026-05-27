@@ -25,6 +25,7 @@ extern fn closedir(dir: *u8): i32
 extern fn malloc(size: i64): *u8
 extern fn free(ptr: *u8): void
 extern fn strlen(s: *u8): i64
+extern fn nm_statvfs(path: *u8, out: *u8): i32
 
 fn getStringArg(info: *u8, idx: i32, buf: *u8, bufsize: i32): i32 {
     let ci = CallbackInfo { ptr: info }
@@ -570,6 +571,36 @@ fn fsFchown(info: *u8, _ud: *u8): void {
     unsafe { ci.retI32(fchown(fd, uid as u32, gid as u32)) }
 }
 
+// statvfs — returns [bsize, frsize, blocks, bfree, bavail, files, ffree]
+fn fsStatvfs(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    var pathBuf: [u8; 4096] = [0; 4096]
+    unsafe {
+        let pathLen = ci.arg(0).writeUtf8(iso, pathBuf as *u8, 4096)
+        if pathLen <= 0 {
+            ci.retI32(-1)
+            return
+        }
+        var out: [i64; 8] = [0; 8]
+        let r = nm_statvfs(pathBuf as *u8, out as *u8)
+        if r != 0 {
+            ci.retI32(-1)
+            return
+        }
+        let ctx = ci.context()
+        let arr = iso.array(7)
+        ctx.objectSetIndex(arr, 0, iso.number(out[0] as f64))
+        ctx.objectSetIndex(arr, 1, iso.number(out[1] as f64))
+        ctx.objectSetIndex(arr, 2, iso.number(out[2] as f64))
+        ctx.objectSetIndex(arr, 3, iso.number(out[3] as f64))
+        ctx.objectSetIndex(arr, 4, iso.number(out[4] as f64))
+        ctx.objectSetIndex(arr, 5, iso.number(out[5] as f64))
+        ctx.objectSetIndex(arr, 6, iso.number(out[6] as f64))
+        ci.ret(arr)
+    }
+}
+
 fn nm_init_fs(_iso: *u8, ctx: *u8, exports: i32): void {
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
@@ -600,5 +631,6 @@ fn nm_init_fs(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "ftruncate" as *u8, fsFtruncate as *u8)
         c.setMethod(exp, "fchmod" as *u8, fsFchmod as *u8)
         c.setMethod(exp, "fchown" as *u8, fsFchown as *u8)
+        c.setMethod(exp, "statvfs" as *u8, fsStatvfs as *u8)
     }
 }

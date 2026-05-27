@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <sys/sysctl.h>
 #include <sys/socket.h>
+#include <sys/statvfs.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <string.h>
@@ -687,6 +688,21 @@ int nm_zlib_inflate(const unsigned char* in, int in_len, unsigned char* out, int
     if (written > 0 && (ret == Z_OK || ret == Z_BUF_ERROR || ret == Z_DATA_ERROR))
         return -(written + 1);
     return -1;
+}
+
+// statvfs — returns fields as i64 array: [bsize, frsize, blocks, bfree, bavail, files, ffree, type]
+int nm_statvfs(const char* path, long long* out) {
+    struct statvfs buf;
+    if (statvfs(path, &buf) != 0) return -1;
+    out[0] = (long long)buf.f_bsize;
+    out[1] = (long long)buf.f_frsize;
+    out[2] = (long long)buf.f_blocks;
+    out[3] = (long long)buf.f_bfree;
+    out[4] = (long long)buf.f_bavail;
+    out[5] = (long long)buf.f_files;
+    out[6] = (long long)buf.f_ffree;
+    out[7] = 0; // type not available in statvfs
+    return 0;
 }
 
 int main(int argc, char** argv) {

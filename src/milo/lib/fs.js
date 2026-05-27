@@ -222,6 +222,17 @@ function readdirSync(path, opts) {
 function realpathSync(path) { _validatePath(path, 'path'); return b.realpath(_toPath(path)); }
 function chmodSync(path, mode) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); b.chmod(_toPath(path), mode); }
 function lchmodSync(path, mode) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); b.lchmod ? b.lchmod(_toPath(path), mode) : b.chmod(_toPath(path), mode); }
+function statfsSync(path, opts) {
+  _validatePath(path, 'path');
+  const r = b.statvfs(_toPath(path));
+  if (r === -1) throw _fsError('EIO', 'statfs', _toPath(path));
+  return { type: 0, bsize: r[0], blocks: r[2], bfree: r[3], bavail: r[4], files: r[5], ffree: r[6] };
+}
+function statfs(path, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _validatePath(path, 'path'); _validateCb(cb);
+  _async(statfsSync, [path, opts], (err, res) => cb(err, res));
+}
 function lchmod(path, mode, cb) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); _validateCb(cb); _async(lchmodSync, [path, mode], (err) => cb(err)); }
 function symlinkSync(target, path) { _validatePath(target, 'target'); _validatePath(path, 'path'); b.symlink(_toPath(target), _toPath(path)); }
 function lstatSync(path) {
@@ -1003,7 +1014,7 @@ module.exports = {
   createReadStream, createWriteStream,
   ReadStream: createReadStream, WriteStream: createWriteStream,
   watch, watchFile, unwatchFile, FSWatcher, Dirent, Dir,
-  opendirSync, _toUnixTimestamp,
+  opendirSync, _toUnixTimestamp, statfsSync, statfs,
   promises, assertEncoding, stringToFlags, Utf8Stream,
   constants: internalBinding('constants').fs,
 };

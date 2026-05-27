@@ -61,7 +61,14 @@ function inspect(obj, opts) {
   if (typeof obj === 'boolean') return _c('boolean', String(obj));
   if (typeof obj === 'bigint') return _c('bigint', String(obj) + 'n');
   if (typeof obj === 'symbol') return _c('symbol', obj.toString());
-  if (typeof obj === 'function') return _c('special', '[Function: ' + (obj.name || 'anonymous') + ']');
+  if (typeof obj === 'function') {
+    const ctorName = obj.constructor && obj.constructor.name;
+    const tag = ctorName === 'AsyncFunction' ? 'AsyncFunction'
+      : ctorName === 'GeneratorFunction' ? 'GeneratorFunction'
+      : ctorName === 'AsyncGeneratorFunction' ? 'AsyncGeneratorFunction'
+      : 'Function';
+    return _c('special', obj.name ? '[' + tag + ': ' + obj.name + ']' : '[' + tag + ' (anonymous)]');
+  }
 
   if (obj[Symbol.for('nodejs.util.inspect.custom')]) {
     const custom = obj[Symbol.for('nodejs.util.inspect.custom')](opts && opts.depth !== undefined ? opts.depth : 2, opts || {}, inspect);
@@ -154,7 +161,7 @@ function format(fmt, ...args) {
     if (i >= args.length) return m;
     const a = args[i++];
     if (m === '%s') return String(a);
-    if (m === '%d') return Number(a).toString();
+    if (m === '%d') { const n = Number(a); return Object.is(n, -0) ? '-0' : String(n); }
     if (m === '%i') return parseInt(a, 10).toString();
     if (m === '%f') return parseFloat(a).toString();
     if (m === '%j') { try { return JSON.stringify(a); } catch { return '[Circular]'; } }
@@ -287,12 +294,22 @@ function _parseHexColor(format) {
 }
 
 function styleText(format, text, options) {
+  if (typeof text !== 'string') {
+    let desc;
+    if (text === null) desc = 'null';
+    else if (text === undefined) desc = 'undefined';
+    else if (typeof text === 'object') desc = 'an instance of ' + ((text.constructor && text.constructor.name) || 'Object');
+    else if (typeof text === 'symbol') desc = 'type symbol (' + text.toString() + ')';
+    else desc = 'type ' + typeof text + ' (' + String(text) + ')';
+    const e = new TypeError('The "text" argument must be of type string. Received ' + desc);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
   if (Array.isArray(format)) {
-    let result = String(text);
+    let result = text;
     for (let i = format.length - 1; i >= 0; i--) result = styleText(format[i], result, options);
     return result;
   }
-  if (format === 'none') return String(text);
+  if (format === 'none') return text;
   const validateStream = !options || options.validateStream !== false;
   if (validateStream && options && options.stream) {
     const stream = options.stream;
