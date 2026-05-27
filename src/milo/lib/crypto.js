@@ -5,9 +5,10 @@ const b = internalBinding('crypto');
 const ALGO_MAP = { md5: 0, sha1: 1, sha256: 2, sha512: 3 };
 const HASH_LEN = { md5: 16, sha1: 20, sha256: 32, sha512: 64 };
 
-function randomBytes(size) {
+function randomBytes(size, cb) {
   const buf = Buffer.alloc(size);
   b.randomFill(buf, size);
+  if (typeof cb === 'function') { process.nextTick(cb, null, buf); return; }
   return buf;
 }
 
@@ -442,7 +443,7 @@ const subtle = {
 const webcrypto = { subtle, getRandomValues(buf) { randomFillSync(buf); return buf; } };
 
 module.exports = {
-  randomBytes, randomFillSync, randomFill, randomUUID, randomInt, createHash, createHmac, timingSafeEqual,
+  randomBytes, pseudoRandomBytes: randomBytes, randomFillSync, randomFill, randomUUID, randomInt, createHash, createHmac, timingSafeEqual,
   createCipheriv, createDecipheriv,
   pbkdf2, pbkdf2Sync, scrypt, scryptSync,
   createSign, createVerify, generateKeyPair, generateKeyPairSync, generateKeySync,

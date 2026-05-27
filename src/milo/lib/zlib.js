@@ -20,7 +20,9 @@ function _syncOp(mode, buf, opts) {
   const level = (opts && opts.level != null) ? opts.level : -1;
   const result = b.zlibOp(input, mode, level);
   if (!result) throw new Error('zlib operation failed');
-  return Buffer.from(result.buffer, result.byteOffset, result.byteLength);
+  const out = Buffer.from(result.buffer, result.byteOffset, result.byteLength);
+  out._truncated = result.truncated === -1;
+  return out;
 }
 
 function gzipSync(buf, opts) { return _syncOp(0, buf, opts); }
@@ -110,7 +112,15 @@ class ZlibTransform extends Transform {
     const input = Buffer.concat(this._chunks);
     try {
       const result = _syncOp(this._mode, input, this._opts);
-      cb(null, result);
+      if (result._truncated) {
+        // Push partial data then error — matches Node.js behavior for truncated streams
+        this.push(result);
+        const e = new Error('unexpected end of file');
+        e.code = 'Z_BUF_ERROR'; e.errno = -5;
+        cb(e);
+      } else {
+        cb(null, result);
+      }
     } catch (e) { cb(e); }
   }
   flush(kind, cb) {

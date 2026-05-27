@@ -87,7 +87,17 @@ function _toPath(p) {
 
 function readFileSync(path, opts) {
   _validatePath(path, 'path');
-  const r = b.readFile(_toPath(path));
+  const p = _toPath(path);
+  const flag = (opts && typeof opts === 'object') ? (opts.flag || 'r') : 'r';
+  // Handle exclusive flags (ax+, wx+) — fail if file exists
+  if (flag.indexOf('x') !== -1) {
+    if (existsSync(p)) throw _fsError('EEXIST', 'open', p, 'file already exists');
+  }
+  // For append flags, create file if it doesn't exist
+  if (flag.indexOf('a') !== -1 || flag.indexOf('w') !== -1) {
+    if (!existsSync(p)) { writeFileSync(path, ''); }
+  }
+  const r = b.readFile(p);
   if (r === -1) { const e = new Error(`ENOENT: no such file or directory, open '${path}'`); e.code = 'ENOENT'; e.syscall = 'open'; e.path = String(path); throw e; }
   const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
   if (encoding === 'utf8' || encoding === 'utf-8') return r;
@@ -131,6 +141,7 @@ function _wrapStats(s) {
 function statSync(path) {
   _validatePath(path, 'path');
   const p = _toPath(path);
+  if (p.length > 1024) throw _fsError('ENAMETOOLONG', 'stat', p, 'name too long');
   const s = b.stat(p);
   if (s === -1) throw _fsError('ENOENT', 'stat', p, 'no such file or directory');
   return _wrapStats(s);
@@ -216,6 +227,7 @@ function symlinkSync(target, path) { _validatePath(target, 'target'); _validateP
 function lstatSync(path) {
   _validatePath(path, 'path');
   const sp = _toPath(path);
+  if (sp.length > 1024) throw _fsError('ENAMETOOLONG', 'lstat', sp, 'name too long');
   const result = b.lstat(sp);
   if (typeof result === 'number') throw _fsError('ENOENT', 'lstat', sp, 'no such file or directory');
   return _wrapStats(result);
@@ -270,6 +282,11 @@ function fstatSync(fd) {
 }
 
 function readSync(fd, buffer, offset, length, position) {
+  if (!Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
+    const e = new TypeError('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received ' +
+      (buffer == null ? String(buffer) : 'an instance of ' + (buffer.constructor && buffer.constructor.name || 'Object')));
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
   if (offset != null && typeof offset === 'object') {
     ({ offset = 0, length = buffer.length, position = null } = offset);
   }
@@ -596,7 +613,20 @@ function close(fd, cb) {
 
 function read(fd, buffer, offset, length, position, cb) {
   if (typeof position === 'function') { cb = position; position = null; }
-  if (fd == null || typeof fd !== 'number') throw new TypeError('The "fd" argument must be of type number. Received ' + typeof fd);
+  _validateFd(fd);
+  // options object form: read(fd, {buffer, offset, length, position}, cb)
+  if (buffer != null && typeof buffer === 'object' && !Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
+    if (typeof offset === 'function') { cb = offset; }
+    const opts = buffer;
+    buffer = opts.buffer;
+    offset = opts.offset || 0;
+    length = opts.length;
+    position = opts.position || null;
+  }
+  if (typeof cb !== 'function') throw _ERR_INVALID_ARG_TYPE('cb', 'function', cb);
+  if (!Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
+    throw _ERR_INVALID_ARG_TYPE('buffer', 'Buffer, TypedArray, or DataView', buffer);
+  }
   try {
     const n = readSync(fd, buffer, offset, length, position);
     process.nextTick(() => cb(null, n, buffer));
@@ -628,7 +658,7 @@ function symlink(target, path, type, cb) {
   _async(symlinkSync, [target, path], (err) => cb(err));
 }
 function write(fd, buffer, offset, length, position, cb) {
-  if (fd == null || typeof fd !== 'number') throw new TypeError('The "fd" argument must be of type number. Received ' + typeof fd);
+  _validateFd(fd);
   if (offset != null && typeof offset === 'object') {
     cb = length; ({ offset = 0, length = buffer.length - offset, position = null } = offset);
   }
@@ -787,6 +817,13 @@ class Dirent {
   isSocket() { return this._getStat().isSocket ? this._getStat().isSocket() : false; }
 }
 
+class Dir {
+  constructor(path) {
+    if (path === undefined) { const e = new TypeError('The "path" argument must be specified'); e.code = 'ERR_MISSING_ARGS'; throw e; }
+    this.path = path;
+  }
+}
+
 function _promisify(fn) { return (...args) => { try { return Promise.resolve(fn(...args)); } catch (e) { return Promise.reject(e); } }; }
 const promises = {
   readFile: _promisify((path, opts) => readFileSync(path, opts)),
@@ -942,7 +979,7 @@ module.exports = {
   fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync, fchownSync,
   createReadStream, createWriteStream,
   ReadStream: createReadStream, WriteStream: createWriteStream,
-  watch, watchFile, unwatchFile, FSWatcher, Dirent,
+  watch, watchFile, unwatchFile, FSWatcher, Dirent, Dir,
   promises, assertEncoding, stringToFlags, Utf8Stream,
   constants: internalBinding('constants').fs,
 };

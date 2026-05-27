@@ -657,7 +657,7 @@ int nm_zlib_deflate(const unsigned char* in, int in_len, unsigned char* out, int
     return (ret == Z_STREAM_END) ? written : -1;
 }
 
-// Returns decompressed size, or -1 on error.
+// Returns: >=0 = complete bytes (Z_STREAM_END), <-1 = truncated (bytes = -(ret+1)), -1 = failure
 int nm_zlib_inflate(const unsigned char* in, int in_len, unsigned char* out, int out_len, int windowBits) {
     z_stream strm;
     memset(&strm, 0, sizeof(strm));
@@ -666,10 +666,14 @@ int nm_zlib_inflate(const unsigned char* in, int in_len, unsigned char* out, int
     strm.avail_in = in_len;
     strm.next_out = out;
     strm.avail_out = out_len;
-    int ret = inflate(&strm, Z_FINISH);
+    int ret = inflate(&strm, Z_NO_FLUSH);
     int written = out_len - strm.avail_out;
     inflateEnd(&strm);
-    return (ret == Z_STREAM_END || ret == Z_OK) ? written : -1;
+    if (ret == Z_STREAM_END) return written;
+    // Partial/truncated: return data as negative-encoded
+    if (written > 0 && (ret == Z_OK || ret == Z_BUF_ERROR || ret == Z_DATA_ERROR))
+        return -(written + 1);
+    return -1;
 }
 
 int main(int argc, char** argv) {

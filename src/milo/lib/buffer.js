@@ -141,6 +141,12 @@ class Buffer extends Uint8Array {
       const e = new TypeError('The "string" argument must be of type string. Received type number (' + arg + ')');
       e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
     }
+    // new Buffer(string, encoding) — delegate to from() logic
+    if (typeof arg === 'string' && typeof byteOffsetOrEncoding === 'string') {
+      const tmp = Buffer.from(arg, byteOffsetOrEncoding);
+      super(tmp.buffer, tmp.byteOffset, tmp.byteLength);
+      return;
+    }
     if (arguments.length === 3) super(arg, byteOffsetOrEncoding, length);
     else if (arguments.length === 2) super(arg, byteOffsetOrEncoding);
     else super(arg);

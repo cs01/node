@@ -195,7 +195,7 @@ class ServerResponse extends OutgoingMessage {
     this.statusCode = 200;
     this.writable = true;
   }
-  _implicitHeader() { this._flushHeaders(); }
+  _implicitHeader() { this.writeHead(this.statusCode); }
   writeHead(code, reason, headers) {
     if (typeof reason === 'object' || Array.isArray(reason)) { headers = reason; reason = undefined; }
     code = +code;
@@ -234,7 +234,7 @@ class ServerResponse extends OutgoingMessage {
   }
   write(chunk, encoding, cb) {
     if (this.finished) { if (typeof cb === 'function') cb(); return true; }
-    this._flushHeaders();
+    if (!this._headersSent) this._implicitHeader();
     if (this._chunked) {
       let data;
       if (Buffer.isBuffer(chunk)) data = chunk;
@@ -251,7 +251,7 @@ class ServerResponse extends OutgoingMessage {
   end(chunk, encoding, cb) {
     if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
     if (this.finished) { if (cb) cb(); return this; }
-    this._flushHeaders();
+    if (!this._headersSent) this._implicitHeader();
     if (chunk) this.write(chunk, encoding);
     if (this._chunked) this._socket.write('0\r\n\r\n');
     this.finished = true;

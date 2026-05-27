@@ -72,7 +72,8 @@ fn zlibOp(info: *u8, _ud: *u8): void {
 
             var written = nm_zlib_inflate(inputData, inputLen, outBuf, outSize, windowBits)
             var attempts = 0
-            while written < 0 && attempts < 8 {
+            // -1 = failure (buffer too small), retry; < -1 = truncated (partial data), don't retry
+            while written == -1 && attempts < 8 {
                 free(outBuf)
                 outSize = outSize * 4
                 outBuf = malloc(outSize as i64)
@@ -80,18 +81,33 @@ fn zlibOp(info: *u8, _ud: *u8): void {
                 written = nm_zlib_inflate(inputData, inputLen, outBuf, outSize, windowBits)
                 attempts = attempts + 1
             }
-            if written < 0 {
+            if written == -1 {
                 free(outBuf)
                 return
             }
 
-            let ab = iso.arraybufferNew(written as i64)
-            let result = iso.uint8arrayNew(ab, 0, written as i64)
+            // Decode: >= 0 means complete, < -1 means truncated (actual = -(written+1))
+            var actualLen = written
+            var truncated = false
+            if written < -1 {
+                actualLen = 0 - (written + 1)
+                truncated = true
+            }
+
+            let ab = iso.arraybufferNew(actualLen as i64)
+            let result = iso.uint8arrayNew(ab, 0, actualLen as i64)
             let resultData = result.typedArrayData(iso)
-            for i in 0..written as i64 {
+            for i in 0..actualLen as i64 {
                 resultData[i] = outBuf[i]
             }
             free(outBuf)
+
+            if truncated {
+                let ctx = ci.context()
+                let negOne = iso.number(0.0 - 1.0)
+                ctx.objectSet(result, "truncated" as *u8, negOne)
+            }
+
             ci.ret(result)
         }
     }
