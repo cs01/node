@@ -127,8 +127,49 @@ const dns = {
       cb(null, [result]);
     }
   }),
-  setServers: () => {},
-  getServers: () => [],
+  setServers: (servers) => {
+    if (!Array.isArray(servers)) throw new TypeError('The "servers" argument must be an instance of Array');
+    const newServers = [];
+    for (let i = 0; i < servers.length; i++) {
+      if (!(i in servers)) continue;
+      const s = servers[i];
+      if (typeof s !== 'string') continue;
+      // strip brackets and port for validation
+      let addr = s;
+      if (addr.startsWith('[')) {
+        const ci = addr.indexOf(']');
+        addr = ci > 0 ? addr.substring(1, ci) : addr.substring(1);
+      } else {
+        // strip trailing :port for IPv4
+        const li = addr.lastIndexOf(':');
+        if (li > 0 && !addr.includes(':', li + 1)) addr = addr.substring(0, li);
+      }
+      // basic check — must look like IP
+      if (!/^[\d.:a-fA-F]+$/.test(addr)) {
+        const e = new TypeError(`Invalid IP address: ${s}`);
+        e.code = 'ERR_INVALID_IP_ADDRESS'; throw e;
+      }
+      newServers.push(s);
+    }
+    dns._servers = newServers;
+  },
+  getServers: () => {
+    if (dns._servers) return dns._servers.slice();
+    // Read from /etc/resolv.conf on first call
+    try {
+      const fs = require('fs');
+      const content = fs.readFileSync('/etc/resolv.conf', 'utf8');
+      const servers = [];
+      for (const line of content.split('\n')) {
+        const m = line.match(/^\s*nameserver\s+(\S+)/);
+        if (m) servers.push(m[1]);
+      }
+      dns._servers = servers;
+      return servers.slice();
+    } catch {
+      return [];
+    }
+  },
   ADDRCONFIG: 0, V4MAPPED: 0, ALL: 0,
   NODATA, FORMERR, SERVFAIL, NOTFOUND, NOTIMP, REFUSED, BADQUERY, BADNAME, BADFAMILY,
   promises,

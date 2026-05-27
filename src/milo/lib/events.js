@@ -83,14 +83,16 @@ EventEmitter.prototype.prependListener = function(type, fn) {
 
 EventEmitter.prototype.once = function(type, fn) {
   const self = this;
-  function wrapped() { self.removeListener(type, wrapped); return fn.apply(self, arguments); }
+  let fired = false;
+  function wrapped() { if (fired) return; fired = true; self.removeListener(type, wrapped); return fn.apply(self, arguments); }
   wrapped.listener = fn;
   return this.on(type, wrapped);
 };
 
 EventEmitter.prototype.prependOnceListener = function(type, fn) {
   const self = this;
-  function wrapped() { self.removeListener(type, wrapped); return fn.apply(self, arguments); }
+  let fired = false;
+  function wrapped() { if (fired) return; fired = true; self.removeListener(type, wrapped); return fn.apply(self, arguments); }
   wrapped.listener = fn;
   return this.prependListener(type, wrapped);
 };

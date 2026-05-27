@@ -130,6 +130,7 @@ class OutgoingMessage extends EventEmitter {
     return this;
   }
   setHeader(k, v) {
+    if (this._headersSent) { const e = new Error('Cannot set headers after they are sent to the client'); e.code = 'ERR_HTTP_HEADERS_SENT'; throw e; }
     if (typeof k !== 'string' || !/^[\t\x20-\x7e]+$/.test(k) || /[^!#$%&'*+\-.0-9A-Z^_`a-z|~]/.test(k)) {
       const e = new TypeError(`Header name must be a valid HTTP token ["${k}"]`);
       e.code = 'ERR_INVALID_HTTP_TOKEN';
@@ -147,6 +148,7 @@ class OutgoingMessage extends EventEmitter {
   }
   getHeader(k) { return this._headers[k.toLowerCase()]; }
   removeHeader(k) {
+    if (this._headersSent) { const e = new Error('Cannot remove headers after they are sent to the client'); e.code = 'ERR_HTTP_HEADERS_SENT'; throw e; }
     const lower = k.toLowerCase();
     delete this._headers[lower];
     delete this._rawHeaderNames[lower];
@@ -210,6 +212,7 @@ class ServerResponse extends OutgoingMessage {
         for (const [k,v] of Object.entries(headers)) this.setHeader(k, v);
       }
     }
+    this._flushHeaders();
     return this;
   }
   _flushHeaders() {
@@ -230,6 +233,7 @@ class ServerResponse extends OutgoingMessage {
     this._socket.write(head);
   }
   write(chunk, encoding, cb) {
+    if (this.finished) { if (typeof cb === 'function') cb(); return true; }
     this._flushHeaders();
     if (this._chunked) {
       let data;
@@ -246,6 +250,7 @@ class ServerResponse extends OutgoingMessage {
   }
   end(chunk, encoding, cb) {
     if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
+    if (this.finished) { if (cb) cb(); return this; }
     this._flushHeaders();
     if (chunk) this.write(chunk, encoding);
     if (this._chunked) this._socket.write('0\r\n\r\n');
@@ -375,9 +380,14 @@ class Server extends EventEmitter {
         }
       });
     });
+    this._server.on('error', (err) => {
+      this.emit('error', err);
+    });
+    if (cb) this.once('error', cb);
     this._server.listen(port, host, () => {
       this._listening = true;
       this._handle = this._server._handle;
+      if (cb) this.removeListener('error', cb);
       this.emit('listening');
       if (cb) cb();
     });

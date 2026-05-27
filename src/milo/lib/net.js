@@ -119,16 +119,19 @@ class Socket extends Duplex {
 
   _write(data, encoding, cb) {
     if (this._fd < 0) { cb(new Error('Socket is closed')); return; }
-    let n;
-    if (Buffer.isBuffer(data)) {
-      n = tcp.sendBinary(this._fd, new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
-    } else if (data instanceof Uint8Array) {
-      n = tcp.sendBinary(this._fd, data);
-    } else {
-      const str = typeof data === 'string' ? data : String(data);
-      n = tcp.send(this._fd, str);
+    let buf;
+    if (Buffer.isBuffer(data)) buf = data;
+    else if (data instanceof Uint8Array) buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    else buf = Buffer.from(typeof data === 'string' ? data : String(data), encoding);
+    let offset = 0;
+    while (offset < buf.length) {
+      const chunk = new Uint8Array(buf.buffer, buf.byteOffset + offset, buf.length - offset);
+      const n = tcp.sendBinary(this._fd, chunk);
+      if (n < 0) { cb(new Error('write failed')); return; }
+      if (n === 0) { cb(new Error('write failed')); return; }
+      offset += n;
     }
-    if (n < 0) cb(new Error('write failed')); else cb();
+    cb();
   }
 
   _read(size) {
@@ -283,7 +286,9 @@ class Server extends EventEmitter {
     if (tcp.bind(this._fd, host, port) !== 0) {
       tcp.close(this._fd);
       this._fd = -1;
-      process.nextTick(() => this.emit('error', new Error('bind() failed on port ' + port)));
+      const err = new Error('bind EADDRINUSE 0.0.0.0:' + port);
+      err.code = 'EADDRINUSE'; err.errno = -48; err.syscall = 'bind'; err.address = '0.0.0.0'; err.port = port;
+      process.nextTick(() => this.emit('error', err));
       return this;
     }
 
@@ -401,7 +406,13 @@ function _pollOnce(timeout) {
     }
 
     if ((flags & EV_EOF) && !sock.destroyed && !sock._readableState.ended) {
-      sock.push(null);
+      // Drain any remaining data before signaling EOF
+      while (!sock.destroyed && !sock._readableState.ended) {
+        const data = tcp.recvBinary(sock._fd);
+        if (data === undefined || data.length === 0) break;
+        sock.push(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+      }
+      if (!sock.destroyed && !sock._readableState.ended) sock.push(null);
     }
   }
   return events.length;
