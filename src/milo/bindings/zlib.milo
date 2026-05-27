@@ -6,6 +6,10 @@ from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
 // windowBits: 15=deflate, 15+16=gzip, -15=raw deflate
 extern fn nm_zlib_deflate(input: *u8, inputLen: i32, output: *u8, outputLen: i32, level: i32, windowBits: i32): i32
 extern fn nm_zlib_inflate(input: *u8, inputLen: i32, output: *u8, outputLen: i32, windowBits: i32): i32
+extern fn nm_zlib_stream_create(isDeflate: i32, level: i32, windowBits: i32, memLevel: i32, strategy: i32): *u8
+extern fn nm_zlib_stream_write(handle: *u8, isDeflate: i32, input: *u8, inputLen: i32, output: *u8, outputLen: i32, flush: i32): i32
+extern fn nm_zlib_stream_reset(handle: *u8, isDeflate: i32): i32
+extern fn nm_zlib_stream_close(handle: *u8, isDeflate: i32): void
 extern fn malloc(size: i64): *u8
 extern fn free(ptr: *u8): void
 
@@ -113,10 +117,96 @@ fn zlibOp(info: *u8, _ud: *u8): void {
     }
 }
 
+// streamCreate(isDeflate, level, windowBits, memLevel, strategy) → handle (as number/pointer)
+fn zlibStreamCreate(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 3 { return }
+    let iso = ci.isolate()
+    let isDeflate = ci.i32Arg(0, 1)
+    let level = ci.i32Arg(1, -1)
+    let windowBits = ci.i32Arg(2, 15)
+    let memLevel = ci.i32Arg(3, 8)
+    let strategy = ci.i32Arg(4, 0)
+    unsafe {
+        let handle = nm_zlib_stream_create(isDeflate, level, windowBits, memLevel, strategy)
+        if handle as i64 == 0 { return }
+        // Return handle as a float64 (pointer fits in f64 mantissa on 48-bit address space)
+        let val = iso.number(handle as i64 as f64)
+        ci.ret(val)
+    }
+}
+
+// streamWrite(handle, isDeflate, inputUint8Array, flush) → Uint8Array
+fn zlibStreamWrite(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 4 { return }
+    let iso = ci.isolate()
+    unsafe {
+        let handleVal = ci.i64Arg(0, 0)
+        let handle = handleVal as *u8
+        if handle as i64 == 0 { return }
+        let isDeflate = ci.i32Arg(1, 1)
+        let inputArr = ci.arg(2)
+        let inputData = inputArr.typedArrayData(iso)
+        let inputLen = inputArr.typedArrayByteLength(iso) as i32
+        let flush = ci.i32Arg(3, 0)
+
+        var outSize: i32 = inputLen * 2 + 256
+        if outSize < 16384 { outSize = 16384 }
+        var outBuf = malloc(outSize as i64)
+        if outBuf as i64 == 0 { return }
+
+        let written = nm_zlib_stream_write(handle, isDeflate, inputData, inputLen, outBuf, outSize, flush)
+        if written < 0 {
+            free(outBuf)
+            return
+        }
+
+        let ab = iso.arraybufferNew(written as i64)
+        let result = iso.uint8arrayNew(ab, 0, written as i64)
+        let resultData = result.typedArrayData(iso)
+        for i in 0..written as i64 {
+            resultData[i] = outBuf[i]
+        }
+        free(outBuf)
+        ci.ret(result)
+    }
+}
+
+// streamReset(handle, isDeflate) → 0 on success
+fn zlibStreamReset(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 2 { return }
+    let iso = ci.isolate()
+    unsafe {
+        let handleVal = ci.i64Arg(0, 0)
+        let handle = handleVal as *u8
+        let isDeflate = ci.i32Arg(1, 1)
+        let ret = nm_zlib_stream_reset(handle, isDeflate)
+        ci.ret(iso.number(ret as f64))
+    }
+}
+
+// streamClose(handle, isDeflate)
+fn zlibStreamClose(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 2 { return }
+    unsafe {
+        let handleVal = ci.i64Arg(0, 0)
+        let handle = handleVal as *u8
+        let isDeflate = ci.i32Arg(1, 1)
+        nm_zlib_stream_close(handle, isDeflate)
+    }
+}
+
 fn nm_init_zlib(_iso: *u8, ctxPtr: *u8, exports: i32): void {
     let ctx = Context { ptr: ctxPtr }
     let exp = Value { slot: exports }
     unsafe {
         ctx.setMethod(exp, "zlibOp" as *u8, zlibOp as *u8)
+        ctx.setMethod(exp, "streamCreate" as *u8, zlibStreamCreate as *u8)
+        ctx.setMethod(exp, "streamWrite" as *u8, zlibStreamWrite as *u8)
+        ctx.setMethod(exp, "streamReset" as *u8, zlibStreamReset as *u8)
+        ctx.setMethod(exp, "streamClose" as *u8, zlibStreamClose as *u8)
     }
 }

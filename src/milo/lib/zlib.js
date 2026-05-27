@@ -1,4 +1,4 @@
-// zlib module — real compression via system zlib
+// zlib module — real compression via system zlib with persistent streaming support
 'use strict';
 
 const { Transform } = require('stream');
@@ -65,8 +65,33 @@ function _validateFlushFlag(val, name) {
   }
 }
 
-// Compression modes where windowBits=0 is invalid (must be 9-15)
-const _COMPRESS_MODES = new Set([0, 2, 4]); // gzip, deflate, deflateRaw
+const constants = Object.freeze({
+  Z_NO_FLUSH: 0, Z_PARTIAL_FLUSH: 1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3, Z_FINISH: 4,
+  Z_BLOCK: 5,
+  Z_OK: 0, Z_STREAM_END: 1, Z_NEED_DICT: 2, Z_ERRNO: -1, Z_STREAM_ERROR: -2,
+  Z_DATA_ERROR: -3, Z_MEM_ERROR: -4, Z_BUF_ERROR: -5, Z_VERSION_ERROR: -6,
+  Z_NO_COMPRESSION: 0, Z_BEST_SPEED: 1, Z_BEST_COMPRESSION: 9, Z_DEFAULT_COMPRESSION: -1,
+  Z_DEFAULT_STRATEGY: 0, Z_FILTERED: 1, Z_HUFFMAN_ONLY: 2, Z_RLE: 3, Z_FIXED: 4,
+  Z_DEFAULT_WINDOWBITS: 15, Z_MIN_WINDOWBITS: 8, Z_MAX_WINDOWBITS: 15,
+  Z_MIN_CHUNK: 64, Z_MAX_CHUNK: Infinity,
+  Z_DEFAULT_CHUNK: 16384,
+  Z_MIN_MEMLEVEL: 1, Z_MAX_MEMLEVEL: 9, Z_DEFAULT_MEMLEVEL: 8,
+  Z_MIN_LEVEL: -1, Z_MAX_LEVEL: 9, Z_DEFAULT_LEVEL: -1,
+  BROTLI_OPERATION_PROCESS: 0, BROTLI_OPERATION_FLUSH: 1, BROTLI_OPERATION_FINISH: 2,
+});
+
+function _windowBitsForMode(mode, opts) {
+  const wb = (opts && opts.windowBits) || 15;
+  if (mode === 0) return wb + 16;       // gzip
+  if (mode === 1) return wb + 32;       // gunzip (auto-detect)
+  if (mode === 2) return wb;            // deflate
+  if (mode === 3) return wb + 32;       // inflate (auto-detect)
+  if (mode === 4) return -wb;           // deflateRaw
+  if (mode === 5) return -wb;           // inflateRaw
+  return wb;
+}
+
+function _isCompressMode(mode) { return mode === 0 || mode === 2 || mode === 4; }
 
 class ZlibTransform extends Transform {
   constructor(mode, opts) {
@@ -147,11 +172,20 @@ class ZlibTransform extends Transform {
     }
     super(opts);
     this._mode = mode;
-    this._chunks = [];
     this._opts = opts || {};
+    this._isCompress = _isCompressMode(mode);
+    const wb = _windowBitsForMode(mode, this._opts);
+    const level = this._opts.level != null ? this._opts.level : -1;
+    const memLevel = this._opts.memLevel || 8;
+    const strategy = this._opts.strategy || 0;
+    this._streamHandle = b.streamCreate(this._isCompress ? 1 : 0, level, wb, memLevel, strategy);
     this._handle = {};
   }
   _destroy(err, cb) {
+    if (this._streamHandle) {
+      b.streamClose(this._streamHandle, this._isCompress ? 1 : 0);
+      this._streamHandle = null;
+    }
     this._handle = null;
     cb(err);
   }
@@ -161,34 +195,25 @@ class ZlibTransform extends Transform {
       const e = new TypeError('The "chunk" argument must be of type string or an instance of Buffer or Uint8Array');
       e.code = 'ERR_INVALID_ARG_TYPE'; return cb(e);
     }
-    this._chunks.push(chunk);
+    if (!this._streamHandle) return cb();
+    const input = new Uint8Array(chunk.buffer || chunk, chunk.byteOffset || 0, chunk.length);
+    const result = b.streamWrite(this._streamHandle, this._isCompress ? 1 : 0, input, constants.Z_NO_FLUSH);
+    if (result && result.length > 0) this.push(Buffer.from(result.buffer, result.byteOffset, result.byteLength));
     cb();
   }
   _flush(cb) {
-    const input = Buffer.concat(this._chunks);
-    try {
-      const result = _syncOp(this._mode, input, this._opts);
-      if (result._truncated) {
-        // Push partial data then error — matches Node.js behavior for truncated streams
-        this.push(result);
-        const e = new Error('unexpected end of file');
-        e.code = 'Z_BUF_ERROR'; e.errno = -5;
-        cb(e);
-      } else {
-        cb(null, result);
-      }
-    } catch (e) { cb(e); }
+    if (!this._streamHandle) return cb();
+    const input = new Uint8Array(0);
+    const result = b.streamWrite(this._streamHandle, this._isCompress ? 1 : 0, input, constants.Z_FINISH);
+    if (result && result.length > 0) this.push(Buffer.from(result.buffer, result.byteOffset, result.byteLength));
+    cb();
   }
   flush(kind, cb) {
-    if (typeof kind === 'function') { cb = kind; kind = constants.Z_FULL_FLUSH; }
-    if (this._chunks.length > 0) {
-      const input = Buffer.concat(this._chunks);
-      this._chunks = [];
-      try {
-        const result = _syncOp(this._mode, input, this._opts);
-        this.push(result);
-      } catch (e) { if (cb) { cb(e); return; } throw e; }
-    }
+    if (typeof kind === 'function') { cb = kind; kind = constants.Z_SYNC_FLUSH; }
+    if (!this._streamHandle) { if (cb) process.nextTick(cb); return; }
+    const input = new Uint8Array(0);
+    const result = b.streamWrite(this._streamHandle, this._isCompress ? 1 : 0, input, kind || constants.Z_SYNC_FLUSH);
+    if (result && result.length > 0) this.push(Buffer.from(result.buffer, result.byteOffset, result.byteLength));
     if (cb) process.nextTick(cb);
   }
   close(cb) { if (cb) process.nextTick(cb); this.destroy(); }
@@ -216,6 +241,28 @@ class ZlibTransform extends Transform {
     }
     if (cb) process.nextTick(cb);
   }
+  reset() {
+    if (this._streamHandle) {
+      b.streamReset(this._streamHandle, this._isCompress ? 1 : 0);
+    }
+    if (this._writableState) {
+      this._writableState.ended = false;
+      this._writableState.ending = false;
+      this._writableState.finished = false;
+      this._writableState.length = 0;
+      this._writableState.errored = null;
+      this._writableState.writing = false;
+      this._writableState.buffered = [];
+      if (this._writableState.writable !== undefined) this._writableState.writable = true;
+    }
+    if (this._readableState) {
+      this._readableState.ended = false;
+      this._readableState.length = 0;
+      this._readableState.buffer = [];
+      this._readableState.endEmitted = false;
+      if (this._readableState.readable !== undefined) this._readableState.readable = true;
+    }
+  }
 }
 
 class Gzip extends ZlibTransform { constructor(opts) { super(0, opts); } }
@@ -237,21 +284,6 @@ function createInflateRaw(opts) { return new InflateRaw(opts); }
 function createUnzip(opts) { return new Unzip(opts); }
 function createBrotliCompress(opts) { return new BrotliCompress(opts); }
 function createBrotliDecompress(opts) { return new BrotliDecompress(opts); }
-
-const constants = Object.freeze({
-  Z_NO_FLUSH: 0, Z_PARTIAL_FLUSH: 1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3, Z_FINISH: 4,
-  Z_BLOCK: 5,
-  Z_OK: 0, Z_STREAM_END: 1, Z_NEED_DICT: 2, Z_ERRNO: -1, Z_STREAM_ERROR: -2,
-  Z_DATA_ERROR: -3, Z_MEM_ERROR: -4, Z_BUF_ERROR: -5, Z_VERSION_ERROR: -6,
-  Z_NO_COMPRESSION: 0, Z_BEST_SPEED: 1, Z_BEST_COMPRESSION: 9, Z_DEFAULT_COMPRESSION: -1,
-  Z_DEFAULT_STRATEGY: 0, Z_FILTERED: 1, Z_HUFFMAN_ONLY: 2, Z_RLE: 3, Z_FIXED: 4,
-  Z_DEFAULT_WINDOWBITS: 15, Z_MIN_WINDOWBITS: 8, Z_MAX_WINDOWBITS: 15,
-  Z_MIN_CHUNK: 64, Z_MAX_CHUNK: Infinity,
-  Z_DEFAULT_CHUNK: 16384,
-  Z_MIN_MEMLEVEL: 1, Z_MAX_MEMLEVEL: 9, Z_DEFAULT_MEMLEVEL: 8,
-  Z_MIN_LEVEL: -1, Z_MAX_LEVEL: 9, Z_DEFAULT_LEVEL: -1,
-  BROTLI_OPERATION_PROCESS: 0, BROTLI_OPERATION_FLUSH: 1, BROTLI_OPERATION_FINISH: 2,
-});
 
 // Allow calling constructors without new
 function _wrapClass(Cls) { const w = function(opts) { return new Cls(opts); }; Object.setPrototypeOf(w, Cls); w.prototype = Cls.prototype; return w; }

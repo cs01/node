@@ -690,6 +690,52 @@ int nm_zlib_inflate(const unsigned char* in, int in_len, unsigned char* out, int
     return -1;
 }
 
+// Persistent zlib stream handles for streaming compression/decompression
+// Returns heap-allocated z_stream pointer, or NULL on error
+void* nm_zlib_stream_create(int is_deflate, int level, int windowBits, int memLevel, int strategy) {
+    z_stream* strm = (z_stream*)calloc(1, sizeof(z_stream));
+    if (!strm) return NULL;
+    int ret;
+    if (is_deflate) {
+        ret = deflateInit2(strm, level, Z_DEFLATED, windowBits, memLevel, strategy);
+    } else {
+        ret = inflateInit2(strm, windowBits);
+    }
+    if (ret != Z_OK) { free(strm); return NULL; }
+    return strm;
+}
+
+// Write data to persistent stream. flush: 0=Z_NO_FLUSH, 2=Z_SYNC_FLUSH, 3=Z_FULL_FLUSH, 4=Z_FINISH
+// Returns bytes written to out, or -1 on error
+int nm_zlib_stream_write(void* handle, int is_deflate, const unsigned char* in, int in_len,
+                         unsigned char* out, int out_len, int flush) {
+    z_stream* strm = (z_stream*)handle;
+    if (!strm) return -1;
+    strm->next_in = (unsigned char*)in;
+    strm->avail_in = in_len;
+    strm->next_out = out;
+    strm->avail_out = out_len;
+    int ret = is_deflate ? deflate(strm, flush) : inflate(strm, flush);
+    if (ret == Z_STREAM_ERROR || ret == Z_MEM_ERROR) return -1;
+    return out_len - strm->avail_out;
+}
+
+// Reset persistent stream state
+int nm_zlib_stream_reset(void* handle, int is_deflate) {
+    z_stream* strm = (z_stream*)handle;
+    if (!strm) return -1;
+    return is_deflate ? deflateReset(strm) : inflateReset(strm);
+}
+
+// Free persistent stream
+void nm_zlib_stream_close(void* handle, int is_deflate) {
+    z_stream* strm = (z_stream*)handle;
+    if (!strm) return;
+    if (is_deflate) deflateEnd(strm);
+    else inflateEnd(strm);
+    free(strm);
+}
+
 // statvfs — returns fields as i64 array: [bsize, frsize, blocks, bfree, bavail, files, ffree, type]
 int nm_statvfs(const char* path, long long* out) {
     struct statvfs buf;
