@@ -39,12 +39,12 @@ process.emitWarning = (warning, typeOrOptions, code, ctor) => {
 };
 
 const _envB = internalBinding('env');
-const _envOverrides = {};
+const _envOverrides = Object.create(null);
 const _envDeleted = new Set();
 process.env = new Proxy({}, {
   get(_, key) {
-    if (key === Symbol.toStringTag) return 'process.env';
-    const k = String(key); if (_envDeleted.has(k)) return undefined; if (k in _envOverrides) return _envOverrides[k]; return _envB.get(k);
+    if (typeof key === 'symbol') { if (key === Symbol.toStringTag) return 'process.env'; return undefined; }
+    const k = String(key); if (!_envDeleted.has(k)) { if (k in _envOverrides) return _envOverrides[k]; const v = _envB.get(k); if (v !== undefined) return v; } return Object.prototype[key];
   },
   set(_, key, value) { const k = String(key); const v = String(value); _envDeleted.delete(k); _envOverrides[k] = v; if (_envB.set) _envB.set(k, v); return true; },
   has(_, key) { const k = String(key); if (_envDeleted.has(k)) return false; return k in _envOverrides || _envB.get(k) !== undefined; },
@@ -55,19 +55,20 @@ process.env = new Proxy({}, {
     for (const k of _envDeleted) all.delete(k);
     return [...all];
   },
-  getOwnPropertyDescriptor(_, key) { const v = this.get(null, key); if (v !== undefined) return { value: v, writable: true, enumerable: true, configurable: true }; return undefined; },
+  getOwnPropertyDescriptor(_, key) { const k = String(key); if (_envDeleted.has(k)) return undefined; let v; if (k in _envOverrides) v = _envOverrides[k]; else v = _envB.get(k); if (v !== undefined) return { value: v, writable: true, enumerable: true, configurable: true }; return undefined; },
 });
 
 process.config = Object.freeze({ variables: Object.freeze({ asan: 0, v8_enable_i18n_support: 0, node_module_version: 135, node_builtin_shareable_builtins: Object.freeze([]) }), target_defaults: Object.freeze({ default_configuration: 'Release' }) });
 process.features = { inspector: false, debug: false, uv: true, ipv6: true, openssl_is_boringssl: false, quic: false, tls_alpn: true, tls_sni: true, tls_ocsp: true, tls: true, cached_builtins: true, require_module: true, typescript: false };
 if (!process.versions) process.versions = {};
-Object.assign(process.versions, {
-  node: '24.0.0', v8: '13.6.233.5', modules: '135', napi: '10',
-  uv: '1.50.0', zlib: '1.3.1.1-motley-82a5fec', ares: '1.34.4',
-  brotli: '1.1.0', zstd: '1.5.7', nghttp2: '1.64.0', nghttp3: '1.6.0',
-  ngtcp2: '1.9.1', llhttp: '9.3.0', openssl: '3.0.15+quic',
-  unicode: '16.0', icu: '76.1', simdutf: '6.1.1', acorn: '8.14.0',
-  ada: '3.2.0', undici: '7.3.0', simdjson: '3.11.2',
+process.versions = Object.freeze({
+  node: '24.0.0', acorn: '8.14.0', ada: '3.2.0', ares: '1.34.4',
+  brotli: '1.1.0', llhttp: '9.3.0', merve: '0.1.0', modules: '135',
+  napi: '10', nbytes: '0.1.1', ncrypto: '0.0.1', nghttp2: '1.64.0',
+  nghttp3: '1.6.0', ngtcp2: '1.9.1', openssl: '3.0.15+quic',
+  simdjson: '3.11.2', simdutf: '6.1.1', sqlite: '3.47.2',
+  uv: '1.50.0', uvwasi: '0.0.21', v8: process.versions?.v8 || '13.6.233.5',
+  zlib: '1.3.1.1-motley-82a5fec', zstd: '1.5.7',
 });
 process.version = 'v24.0.0'; process.release = { name: 'node' };
 if (!process.cwd) process.cwd = () => _envB.get('PWD') || '/';

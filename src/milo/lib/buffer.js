@@ -35,6 +35,22 @@ function _ERR_INVALID_ARG_TYPE_ONEOF(name, expected, actual) {
   return e;
 }
 
+function _bufFromTypeError(value) {
+  let received;
+  if (value === null) received = '. Received null';
+  else if (value === undefined) received = '. Received undefined';
+  else if (typeof value === 'number') received = `. Received type number (${value})`;
+  else if (typeof value === 'boolean') received = `. Received an instance of Boolean`;
+  else if (typeof value === 'symbol') received = `. Received type symbol (${String(value)})`;
+  else if (typeof value === 'bigint') received = `. Received type bigint (${value}n)`;
+  else if (typeof value === 'function') received = `. Received function ${value.name || ''}`;
+  else if (typeof value === 'object') received = value.constructor?.name ? `. Received an instance of ${value.constructor.name}` : `. Received [Object]`;
+  else received = `. Received type ${typeof value}`;
+  const e = new TypeError('The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object' + received);
+  e.code = 'ERR_INVALID_ARG_TYPE';
+  return e;
+}
+
 function _isValidHexString(str) {
   return str.length > 0 && str.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(str);
 }
@@ -129,6 +145,35 @@ function _checkOffset(offset, byteLength, bufLength) {
   return offset;
 }
 
+function _checkWriteOffset(offset, byteLength, bufLength) {
+  if (offset === undefined) return 0;
+  if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
+  if (Number.isNaN(offset) || (Number.isFinite(offset) && offset % 1 !== 0)) { const e = new RangeError(`The value of "offset" is out of range. It must be an integer. Received ${offset}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+  if (offset < 0 || !Number.isFinite(offset) || offset + byteLength > bufLength) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${Math.max(0, bufLength - byteLength)}`, offset);
+  return offset;
+}
+
+function _checkIntValue(value, min, max) {
+  if (typeof value !== 'number') throw _ERR_INVALID_ARG_TYPE('value', 'number', value);
+  if (value < min || value > max) {
+    let range, received;
+    if (max > 0xffffffff || min < -0xffffffff) {
+      if (min < 0) range = `>= -(2 ** ${Math.log2(-min)}) and < 2 ** ${Math.log2(max + 1)}`;
+      else range = `>= 0 and < 2 ** ${Math.log2(max + 1)}`;
+      received = String(value).replace(/(\d)(?=(\d\d\d)+(?!\d))/g, '$1_');
+    } else {
+      range = `>= ${min} and <= ${max}`;
+      received = String(value);
+    }
+    const e = new RangeError(`The value of "value" is out of range. It must be ${range}. Received ${received}`);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
+  if (value % 1 !== 0) {
+    const e = new RangeError(`The value of "value" is out of range. It must be an integer. Received ${value}`);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
+}
+
 function _base64Decode(str) {
   if (_nativeBase64Decode) return _nativeBase64Decode(str);
   return Uint8Array.from(atob(str), c => c.charCodeAt(0));
@@ -212,20 +257,10 @@ class Buffer extends Uint8Array {
   }
 
   static from(value, encodingOrOffset, length) {
-    if (value === null || value === undefined) {
-      const e = new TypeError('The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received ' + (value === null ? 'null' : 'undefined'));
-      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
-    }
-    if (typeof value === 'number') {
-      const e = new TypeError('The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received type number (' + value + ')');
-      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
-    }
+    if (value === null || value === undefined) throw _bufFromTypeError(value);
+    if (typeof value === 'number') throw _bufFromTypeError(value);
     if (typeof value === 'string') {
-      if (typeof encodingOrOffset === 'number' || (encodingOrOffset !== undefined && typeof encodingOrOffset !== 'string')) {
-        const e = new TypeError(`Unknown encoding: ${encodingOrOffset}`);
-        e.code = 'ERR_UNKNOWN_ENCODING'; throw e;
-      }
-      const enc = (encodingOrOffset || 'utf8').toLowerCase();
+      const enc = (typeof encodingOrOffset === 'string' ? encodingOrOffset : 'utf8').toLowerCase();
       if (!Buffer.isEncoding(enc)) throw _ERR_UNKNOWN_ENCODING(encodingOrOffset || 'utf8');
       if (enc === 'hex') {
         if (_nativeHexDecode) {
@@ -278,7 +313,7 @@ class Buffer extends Uint8Array {
       if (typeof primitive === 'string') return Buffer.from(primitive, encodingOrOffset);
       if (typeof value.length === 'number') return new Buffer(Array.from(value));
     }
-    throw _ERR_INVALID_ARG_TYPE('value', 'string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object', value);
+    throw _bufFromTypeError(value);
   }
 
   static isBuffer(obj) { return obj instanceof Buffer; }
@@ -413,6 +448,10 @@ class Buffer extends Uint8Array {
   }
 
   toString(encoding, start, end) {
+    if (encoding !== undefined && typeof encoding !== 'string') {
+      if (encoding !== null && typeof encoding === 'object' && typeof encoding.toString === 'function') encoding = encoding.toString();
+      else { const e = new TypeError(`Unknown encoding: ${encoding}`); e.code = 'ERR_UNKNOWN_ENCODING'; throw e; }
+    }
     encoding = (encoding || 'utf8').toLowerCase();
     if (!Buffer.isEncoding(encoding)) throw _ERR_UNKNOWN_ENCODING(encoding);
     start = Number(start) || 0;
@@ -473,13 +512,19 @@ class Buffer extends Uint8Array {
   }
   compare(other, targetStart, targetEnd, sourceStart, sourceEnd) {
     if (!(other instanceof Uint8Array)) throw _ERR_INVALID_ARG_TYPE_INSTANCE('target', 'Buffer or Uint8Array', other);
-    sourceStart = sourceStart || 0;
-    sourceEnd = sourceEnd !== undefined ? sourceEnd : this.length;
-    targetStart = targetStart || 0;
+    if (targetStart !== undefined && typeof targetStart !== 'number') throw _ERR_INVALID_ARG_TYPE('targetStart', 'number', targetStart);
+    if (targetEnd !== undefined && targetEnd !== null && typeof targetEnd !== 'number') throw _ERR_INVALID_ARG_TYPE('targetEnd', 'number', targetEnd);
+    if (targetEnd === null) throw _ERR_INVALID_ARG_TYPE('targetEnd', 'number', targetEnd);
+    if (sourceStart !== undefined && typeof sourceStart !== 'number') throw _ERR_INVALID_ARG_TYPE('sourceStart', 'number', sourceStart);
+    if (sourceEnd !== undefined && typeof sourceEnd !== 'number') throw _ERR_INVALID_ARG_TYPE('sourceEnd', 'number', sourceEnd);
+    targetStart = targetStart !== undefined ? targetStart : 0;
     targetEnd = targetEnd !== undefined ? targetEnd : other.length;
-    if (_nativeCompare && sourceStart === 0 && sourceEnd === this.length && targetStart === 0 && targetEnd === other.length) {
-      return _nativeCompare(this, other);
-    }
+    sourceStart = sourceStart !== undefined ? sourceStart : 0;
+    sourceEnd = sourceEnd !== undefined ? sourceEnd : this.length;
+    if (targetStart < 0) throw _ERR_OUT_OF_RANGE('targetStart', `>= 0`, targetStart);
+    if (targetEnd < 0 || targetEnd > other.length) throw _ERR_OUT_OF_RANGE('targetEnd', `>= 0 && <= ${other.length}`, targetEnd);
+    if (sourceStart < 0) throw _ERR_OUT_OF_RANGE('sourceStart', `>= 0`, sourceStart);
+    if (sourceEnd < 0 || sourceEnd > this.length) throw _ERR_OUT_OF_RANGE('sourceEnd', `>= 0 && <= ${this.length}`, sourceEnd);
     const src = this.subarray(sourceStart, sourceEnd);
     const tgt = other.subarray(targetStart, targetEnd);
     if (_nativeCompare) return _nativeCompare(src, tgt);
@@ -589,20 +634,20 @@ class Buffer extends Uint8Array {
   readDoubleBE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getFloat64(offset, false); }
   readDoubleLE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getFloat64(offset, true); }
 
-  writeUInt8(value, offset) { offset = offset >>> 0; if (offset >= this.length) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and < ${this.length}`, offset); this[offset] = value & 0xff; return offset + 1; }
-  writeUInt16BE(value, offset) { offset = offset >>> 0; if (offset + 1 >= this.length) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${this.length - 2}`, offset); this[offset] = (value >> 8) & 0xff; this[offset+1] = value & 0xff; return offset + 2; }
-  writeUInt16LE(value, offset) { offset = offset >>> 0; if (offset + 1 >= this.length) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${this.length - 2}`, offset); this[offset] = value & 0xff; this[offset+1] = (value >> 8) & 0xff; return offset + 2; }
-  writeUInt32BE(value, offset) { offset = offset >>> 0; if (offset + 3 >= this.length) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${this.length - 4}`, offset); this[offset] = (value >>> 24) & 0xff; this[offset+1] = (value >>> 16) & 0xff; this[offset+2] = (value >>> 8) & 0xff; this[offset+3] = value & 0xff; return offset + 4; }
-  writeUInt32LE(value, offset) { offset = offset >>> 0; if (offset + 3 >= this.length) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${this.length - 4}`, offset); this[offset] = value & 0xff; this[offset+1] = (value >>> 8) & 0xff; this[offset+2] = (value >>> 16) & 0xff; this[offset+3] = (value >>> 24) & 0xff; return offset + 4; }
-  writeInt8(value, offset) { offset = offset >>> 0; if (offset >= this.length) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and < ${this.length}`, offset); this[offset] = value < 0 ? value + 256 : value; return offset + 1; }
-  writeInt16BE(value, offset) { return this.writeUInt16BE(value < 0 ? value + 0x10000 : value, offset); }
-  writeInt16LE(value, offset) { return this.writeUInt16LE(value < 0 ? value + 0x10000 : value, offset); }
-  writeInt32BE(value, offset) { return this.writeUInt32BE(value < 0 ? value + 0x100000000 : value, offset); }
-  writeInt32LE(value, offset) { return this.writeUInt32LE(value < 0 ? value + 0x100000000 : value, offset); }
-  writeFloatBE(value, offset) { offset = offset >>> 0; if (offset + 3 >= this.length) { throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${this.length - 4}`, offset); } const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setFloat32(offset, value, false); return offset + 4; }
-  writeFloatLE(value, offset) { offset = offset >>> 0; if (offset + 3 >= this.length) { throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${this.length - 4}`, offset); } const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setFloat32(offset, value, true); return offset + 4; }
-  writeDoubleBE(value, offset) { offset = offset >>> 0; if (offset + 7 >= this.length) { throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${this.length - 8}`, offset); } const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setFloat64(offset, value, false); return offset + 8; }
-  writeDoubleLE(value, offset) { offset = offset >>> 0; if (offset + 7 >= this.length) { throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${this.length - 8}`, offset); } const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setFloat64(offset, value, true); return offset + 8; }
+  writeUInt8(value, offset) { _checkIntValue(value, 0, 0xff); offset = _checkWriteOffset(offset, 1, this.length); this[offset] = value & 0xff; return offset + 1; }
+  writeUInt16BE(value, offset) { _checkIntValue(value, 0, 0xffff); offset = _checkWriteOffset(offset, 2, this.length); this[offset] = (value >> 8) & 0xff; this[offset+1] = value & 0xff; return offset + 2; }
+  writeUInt16LE(value, offset) { _checkIntValue(value, 0, 0xffff); offset = _checkWriteOffset(offset, 2, this.length); this[offset] = value & 0xff; this[offset+1] = (value >> 8) & 0xff; return offset + 2; }
+  writeUInt32BE(value, offset) { _checkIntValue(value, 0, 0xffffffff); offset = _checkWriteOffset(offset, 4, this.length); this[offset] = (value >>> 24) & 0xff; this[offset+1] = (value >>> 16) & 0xff; this[offset+2] = (value >>> 8) & 0xff; this[offset+3] = value & 0xff; return offset + 4; }
+  writeUInt32LE(value, offset) { _checkIntValue(value, 0, 0xffffffff); offset = _checkWriteOffset(offset, 4, this.length); this[offset] = value & 0xff; this[offset+1] = (value >>> 8) & 0xff; this[offset+2] = (value >>> 16) & 0xff; this[offset+3] = (value >>> 24) & 0xff; return offset + 4; }
+  writeInt8(value, offset) { _checkIntValue(value, -0x80, 0x7f); offset = _checkWriteOffset(offset, 1, this.length); this[offset] = value < 0 ? value + 256 : value; return offset + 1; }
+  writeInt16BE(value, offset) { _checkIntValue(value, -0x8000, 0x7fff); offset = _checkWriteOffset(offset, 2, this.length); const v = value < 0 ? value + 0x10000 : value; this[offset] = (v >> 8) & 0xff; this[offset+1] = v & 0xff; return offset + 2; }
+  writeInt16LE(value, offset) { _checkIntValue(value, -0x8000, 0x7fff); offset = _checkWriteOffset(offset, 2, this.length); const v = value < 0 ? value + 0x10000 : value; this[offset] = v & 0xff; this[offset+1] = (v >> 8) & 0xff; return offset + 2; }
+  writeInt32BE(value, offset) { _checkIntValue(value, -0x80000000, 0x7fffffff); offset = _checkWriteOffset(offset, 4, this.length); const v = value < 0 ? value + 0x100000000 : value; this[offset] = (v >>> 24) & 0xff; this[offset+1] = (v >>> 16) & 0xff; this[offset+2] = (v >>> 8) & 0xff; this[offset+3] = v & 0xff; return offset + 4; }
+  writeInt32LE(value, offset) { _checkIntValue(value, -0x80000000, 0x7fffffff); offset = _checkWriteOffset(offset, 4, this.length); const v = value < 0 ? value + 0x100000000 : value; this[offset] = v & 0xff; this[offset+1] = (v >>> 8) & 0xff; this[offset+2] = (v >>> 16) & 0xff; this[offset+3] = (v >>> 24) & 0xff; return offset + 4; }
+  writeFloatBE(value, offset) { offset = _checkWriteOffset(offset, 4, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setFloat32(offset, value, false); return offset + 4; }
+  writeFloatLE(value, offset) { offset = _checkWriteOffset(offset, 4, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setFloat32(offset, value, true); return offset + 4; }
+  writeDoubleBE(value, offset) { offset = _checkWriteOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setFloat64(offset, value, false); return offset + 8; }
+  writeDoubleLE(value, offset) { offset = _checkWriteOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setFloat64(offset, value, true); return offset + 8; }
 
   readUIntBE(offset, byteLength) {
     let val = 0;
@@ -625,20 +670,46 @@ class Buffer extends Uint8Array {
     return val;
   }
   writeUIntBE(value, offset, byteLength) {
+    if (typeof byteLength !== 'number') throw _ERR_INVALID_ARG_TYPE('byteLength', 'number', byteLength);
+    if (Number.isNaN(byteLength) || (Number.isFinite(byteLength) && byteLength % 1 !== 0)) { const e = new RangeError(`The value of "byteLength" is out of range. It must be an integer. Received ${byteLength}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    if (byteLength < 1 || byteLength > 6) throw _ERR_OUT_OF_RANGE('byteLength', '>= 1 and <= 6', byteLength);
+    _checkIntValue(value, 0, Math.pow(2, 8 * byteLength) - 1);
+    if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
+    offset = _checkWriteOffset(offset, byteLength, this.length);
     for (let i = byteLength - 1; i >= 0; i--) { this[offset + i] = value & 0xff; value = Math.floor(value / 256); }
     return offset + byteLength;
   }
   writeUIntLE(value, offset, byteLength) {
+    if (typeof byteLength !== 'number') throw _ERR_INVALID_ARG_TYPE('byteLength', 'number', byteLength);
+    if (Number.isNaN(byteLength) || (Number.isFinite(byteLength) && byteLength % 1 !== 0)) { const e = new RangeError(`The value of "byteLength" is out of range. It must be an integer. Received ${byteLength}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    if (byteLength < 1 || byteLength > 6) throw _ERR_OUT_OF_RANGE('byteLength', '>= 1 and <= 6', byteLength);
+    _checkIntValue(value, 0, Math.pow(2, 8 * byteLength) - 1);
+    if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
+    offset = _checkWriteOffset(offset, byteLength, this.length);
     for (let i = 0; i < byteLength; i++) { this[offset + i] = value & 0xff; value = Math.floor(value / 256); }
     return offset + byteLength;
   }
   writeIntBE(value, offset, byteLength) {
+    if (typeof byteLength !== 'number') throw _ERR_INVALID_ARG_TYPE('byteLength', 'number', byteLength);
+    if (Number.isNaN(byteLength) || (Number.isFinite(byteLength) && byteLength % 1 !== 0)) { const e = new RangeError(`The value of "byteLength" is out of range. It must be an integer. Received ${byteLength}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    if (byteLength < 1 || byteLength > 6) throw _ERR_OUT_OF_RANGE('byteLength', '>= 1 and <= 6', byteLength);
+    _checkIntValue(value, -Math.pow(2, 8 * byteLength - 1), Math.pow(2, 8 * byteLength - 1) - 1);
+    if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
+    offset = _checkWriteOffset(offset, byteLength, this.length);
     if (value < 0) value += Math.pow(2, 8 * byteLength);
-    return this.writeUIntBE(value, offset, byteLength);
+    for (let i = byteLength - 1; i >= 0; i--) { this[offset + i] = value & 0xff; value = Math.floor(value / 256); }
+    return offset + byteLength;
   }
   writeIntLE(value, offset, byteLength) {
+    if (typeof byteLength !== 'number') throw _ERR_INVALID_ARG_TYPE('byteLength', 'number', byteLength);
+    if (Number.isNaN(byteLength) || (Number.isFinite(byteLength) && byteLength % 1 !== 0)) { const e = new RangeError(`The value of "byteLength" is out of range. It must be an integer. Received ${byteLength}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    if (byteLength < 1 || byteLength > 6) throw _ERR_OUT_OF_RANGE('byteLength', '>= 1 and <= 6', byteLength);
+    _checkIntValue(value, -Math.pow(2, 8 * byteLength - 1), Math.pow(2, 8 * byteLength - 1) - 1);
+    if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
+    offset = _checkWriteOffset(offset, byteLength, this.length);
     if (value < 0) value += Math.pow(2, 8 * byteLength);
-    return this.writeUIntLE(value, offset, byteLength);
+    for (let i = 0; i < byteLength; i++) { this[offset + i] = value & 0xff; value = Math.floor(value / 256); }
+    return offset + byteLength;
   }
 
   readBigInt64BE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigInt64(offset, false); }
@@ -769,6 +840,13 @@ class Buffer extends Uint8Array {
 Buffer.kMaxLength = 2 ** 31 - 1;
 Buffer.poolSize = 8192;
 Buffer.prototype.toLocaleString = Buffer.prototype.toString;
+
+// lowercase UInt → Uint aliases (Node compat)
+for (const fn of ['UInt8', 'UInt16LE', 'UInt16BE', 'UInt32LE', 'UInt32BE', 'UIntLE', 'UIntBE', 'BigUInt64LE', 'BigUInt64BE']) {
+  const lower = fn.replace(/UInt/, 'Uint');
+  if (Buffer.prototype[`write${fn}`]) Buffer.prototype[`write${lower}`] = Buffer.prototype[`write${fn}`];
+  if (Buffer.prototype[`read${fn}`]) Buffer.prototype[`read${lower}`] = Buffer.prototype[`read${fn}`];
+}
 
 // low-level write methods expected by some tests
 Buffer.prototype.asciiWrite = function(str, offset, length) {
