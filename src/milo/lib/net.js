@@ -436,6 +436,14 @@ function _pollOnce(timeout) {
 const _fileWatchers = new Map();
 
 function createServer(options, connectionListener) {
+  if (typeof options === 'function') {
+    connectionListener = options;
+    options = undefined;
+  }
+  if (options !== undefined && options !== null && typeof options !== 'object') {
+    const e = new TypeError('The "options" argument must be of type object. Received type ' + typeof options + ' (' + JSON.stringify(options) + ')');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
   return new Server(options, connectionListener);
 }
 

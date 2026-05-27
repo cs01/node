@@ -398,13 +398,13 @@ class Server extends EventEmitter {
         }
         if (socket._httpActive) {
           socket._peerDisconnected = true;
-          // Remove from kqueue so event loop doesn't spin on stale EOF
           try { net.Socket._sockets.delete(socket._fd); } catch {}
           const e = new Error('read ECONNRESET'); e.code = 'ECONNRESET';
-          // Emit error via nextTick to trigger on-finished (ee-first) callbacks.
-          // Socket stays alive so sendFile can attach its own ee-first listener
-          // and detect the abort via the write-error path.
-          process.nextTick(() => socket.emit('error', e));
+          // Use setImmediate so on-finished listeners can attach before error fires
+          setImmediate(() => {
+            socket.emit('error', e);
+            socket.destroy();
+          });
         } else {
           // Idle keep-alive socket: client closed, no active request — clean up
           socket.destroy();

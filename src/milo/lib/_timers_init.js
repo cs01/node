@@ -160,12 +160,14 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     }
 
     let waitMs = 100;
-    if (hasTimers) {
+    if (hasImmediates) {
+      waitMs = 0;
+    } else if (hasTimers) {
       const ms = _tb.msUntilNext();
       if (ms >= 0) waitMs = Math.min(waitMs, ms);
     }
 
-    if (waitMs < 1) waitMs = 1;
+    if (waitMs < 1 && !hasImmediates) waitMs = 1;
 
     const pollStart = _now();
     if (poll) {
