@@ -57,7 +57,7 @@ function inspect(obj, opts) {
   if (obj === null) return _c('null', 'null');
   if (obj === undefined) return _c('undefined', 'undefined');
   if (typeof obj === 'string') return _c('string', "'" + obj + "'");
-  if (typeof obj === 'number') return _c('number', String(obj));
+  if (typeof obj === 'number') return _c('number', Object.is(obj, -0) ? '-0' : String(obj));
   if (typeof obj === 'boolean') return _c('boolean', String(obj));
   if (typeof obj === 'bigint') return _c('bigint', String(obj) + 'n');
   if (typeof obj === 'symbol') return _c('symbol', obj.toString());
@@ -83,6 +83,7 @@ function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
 
   if (Array.isArray(obj)) {
     if (currentDepth >= maxDepth) return '[Array]';
+    if (obj.length === 0) return '[]';
     const items = obj.map(v => _inspectValue(v, maxDepth, currentDepth + 1, seen, colors));
     return '[ ' + items.join(', ') + ' ]';
   }
@@ -91,12 +92,14 @@ function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
   if (obj instanceof Error) return obj.stack || obj.toString();
   if (obj instanceof Map) {
     if (currentDepth >= maxDepth) return '[Map]';
+    if (obj.size === 0) return 'Map(0) {}';
     const entries = [];
     for (const [k, v] of obj) entries.push(_inspectValue(k, maxDepth, currentDepth + 1, seen, colors) + ' => ' + _inspectValue(v, maxDepth, currentDepth + 1, seen, colors));
     return 'Map(' + obj.size + ') { ' + entries.join(', ') + ' }';
   }
   if (obj instanceof Set) {
     if (currentDepth >= maxDepth) return '[Set]';
+    if (obj.size === 0) return 'Set(0) {}';
     const items = [];
     for (const v of obj) items.push(_inspectValue(v, maxDepth, currentDepth + 1, seen, colors));
     return 'Set(' + obj.size + ') { ' + items.join(', ') + ' }';
@@ -113,7 +116,7 @@ function _inspectValue(val, maxDepth, currentDepth, seen, colors) {
   if (val === null) return colors ? _colorize('null', 'null') : 'null';
   if (val === undefined) return colors ? _colorize('undefined', 'undefined') : 'undefined';
   if (typeof val === 'string') { const s = "'" + val + "'"; return colors ? _colorize('string', s) : s; }
-  if (typeof val === 'number') { const s = String(val); return colors ? _colorize('number', s) : s; }
+  if (typeof val === 'number') { const s = Object.is(val, -0) ? '-0' : String(val); return colors ? _colorize('number', s) : s; }
   if (typeof val === 'boolean') { const s = String(val); return colors ? _colorize('boolean', s) : s; }
   if (typeof val === 'bigint') { const s = String(val) + 'n'; return colors ? _colorize('bigint', s) : s; }
   if (typeof val === 'symbol') { const s = val.toString(); return colors ? _colorize('symbol', s) : s; }
@@ -134,8 +137,17 @@ inspect.styles = {
 };
 inspect.custom = Symbol.for('nodejs.util.inspect.custom');
 
+function _formatArg(a) {
+  if (typeof a === 'string') return a;
+  if (typeof a === 'number') return Object.is(a, -0) ? '-0' : String(a);
+  if (typeof a === 'bigint') return String(a) + 'n';
+  if (typeof a === 'symbol') return a.toString();
+  return inspect(a);
+}
+
 function format(fmt, ...args) {
-  if (typeof fmt !== 'string') return [fmt, ...args].map(a => typeof a === 'object' ? inspect(a) : String(a)).join(' ');
+  if (arguments.length === 0) return '';
+  if (typeof fmt !== 'string') return [fmt, ...args].map(a => _formatArg(a)).join(' ');
   let i = 0;
   const str = fmt.replace(/%[sdjifoO%]/g, (m) => {
     if (m === '%%') return '%';
@@ -149,7 +161,7 @@ function format(fmt, ...args) {
     if (m === '%o' || m === '%O') return inspect(a);
     return m;
   });
-  const rest = args.slice(i).map(a => typeof a === 'object' ? inspect(a) : String(a));
+  const rest = args.slice(i).map(a => _formatArg(a));
   return rest.length ? str + ' ' + rest.join(' ') : str;
 }
 

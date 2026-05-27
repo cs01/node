@@ -348,7 +348,9 @@ function fail(actual, expected, message, operator) {
     message = actual; actual = undefined;
   }
   if (message instanceof Error) throw message;
-  throw new AssertionError({ actual, expected, message: message || 'Failed', operator: operator || 'fail', generatedMessage: message === 'Failed' });
+  const genMsg = !message && operator && operator !== 'fail';
+  const msg = message || (genMsg ? _createDefaultMessage({ actual, expected, operator }) : 'Failed');
+  throw new AssertionError({ actual, expected, message: msg, operator: operator || 'fail', generatedMessage: !message });
 }
 
 function ok(value, message) {

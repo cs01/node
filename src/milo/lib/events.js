@@ -22,12 +22,28 @@ EventEmitter.prototype.getMaxListeners = function() { return this._maxListeners;
 
 EventEmitter.prototype.emit = function(type) {
   if (!this._events) this._events = Object.create(null);
+  if (type === 'error') {
+    const monitorHandlers = this._events[EventEmitter.errorMonitor];
+    if (monitorHandlers && monitorHandlers.length > 0) {
+      const args = new Array(arguments.length - 1);
+      for (let j = 1; j < arguments.length; j++) args[j - 1] = arguments[j];
+      const fns = monitorHandlers.slice();
+      for (let j = 0; j < fns.length; j++) fns[j].apply(this, args);
+    }
+  }
   const handlers = this._events[type];
   if (!handlers || handlers.length === 0) {
     if (type === 'error') {
       const err = arguments[1];
       if (err instanceof Error) throw err;
-      const e = new Error('Unhandled error.' + (err ? ' (' + err + ')' : ''));
+      let detail;
+      if (err !== undefined) {
+        detail = typeof err === 'string' ? ` ('${err}')` : ` (${err})`;
+      } else {
+        detail = '';
+      }
+      const e = new Error('Unhandled error.' + detail);
+      e.code = 'ERR_UNHANDLED_ERROR';
       e.context = err;
       throw e;
     }
@@ -43,6 +59,7 @@ EventEmitter.prototype.emit = function(type) {
 EventEmitter.prototype.on = function(type, fn) {
   if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   if (!this._events) this._events = Object.create(null);
+  if (type !== 'newListener') this.emit('newListener', type, fn.listener || fn);
   (this._events[type] || (this._events[type] = [])).push(fn);
   const max = this._maxListeners !== undefined ? this._maxListeners : EventEmitter.defaultMaxListeners;
   if (max > 0 && this._events[type].length > max && !this._events[type]._warned) {
@@ -51,7 +68,6 @@ EventEmitter.prototype.on = function(type, fn) {
     w.name = 'MaxListenersExceededWarning'; w.emitter = this; w.type = type; w.count = this._events[type].length;
     process.emitWarning(w);
   }
-  if (type !== 'newListener') this.emit('newListener', type, fn);
   return this;
 };
 
@@ -60,6 +76,7 @@ EventEmitter.prototype.addListener = EventEmitter.prototype.on;
 EventEmitter.prototype.prependListener = function(type, fn) {
   if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   if (!this._events) this._events = Object.create(null);
+  if (type !== 'newListener') this.emit('newListener', type, fn.listener || fn);
   (this._events[type] || (this._events[type] = [])).unshift(fn);
   return this;
 };
@@ -84,8 +101,11 @@ EventEmitter.prototype.removeListener = function(type, fn) {
   if (!list) return this;
   for (let i = list.length - 1; i >= 0; i--) {
     if (list[i] === fn || list[i].listener === fn) {
+      const original = list[i].listener || list[i];
       list.splice(i, 1);
-      break;
+      if (list.length === 0) delete this._events[type];
+      if (this._events.removeListener) this.emit('removeListener', type, original);
+      return this;
     }
   }
   if (list.length === 0) delete this._events[type];

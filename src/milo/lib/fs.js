@@ -149,15 +149,46 @@ function mkdirSync(path, opts) {
   if (opts && opts.recursive) {
     const parts = sp.split('/');
     let cur = parts[0] === '' ? '/' : '';
+    let firstCreated;
     for (const p of parts) {
       if (!p) { if (!cur) cur = '/'; continue; }
       cur = cur ? cur + '/' + p : p;
-      if (!existsSync(cur)) { const r = b.mkdir(cur, mode); if (r !== 0) throw _fsError('EACCES', 'mkdir', cur, 'permission denied'); }
+      const r = b.mkdir(cur, mode);
+      if (r === 0) {
+        if (!firstCreated) firstCreated = cur;
+      } else {
+        // mkdir failed — check why
+        try {
+          const st = statSync(cur);
+          if (!st.isDirectory()) {
+            // Exists but not a directory
+            throw _fsError('ENOTDIR', 'mkdir', cur, 'not a directory');
+          }
+        } catch(e) {
+          if (e.code === 'ENOTDIR') throw e;
+          throw _fsError('EACCES', 'mkdir', cur, 'permission denied');
+        }
+      }
     }
-    return cur;
+    // Check final path — if it exists but isn't a directory, error
+    try {
+      const st = statSync(sp);
+      if (!st.isDirectory()) throw _fsError('EEXIST', 'mkdir', sp, 'file already exists');
+    } catch(e) {
+      if (e.code) throw e;
+    }
+    return firstCreated || undefined;
   }
   const r = b.mkdir(sp, mode);
-  if (r !== 0) throw _fsError('EEXIST', 'mkdir', sp, 'file already exists');
+  if (r !== 0) {
+    if (existsSync(sp)) throw _fsError('EEXIST', 'mkdir', sp, 'file already exists');
+    // Check if parent isn't a dir
+    const parent = sp.substring(0, sp.lastIndexOf('/'));
+    if (parent && existsSync(parent)) {
+      try { const st = statSync(parent); if (!st.isDirectory()) throw _fsError('ENOTDIR', 'mkdir', sp, 'not a directory'); } catch(e) { if (e.code) throw e; }
+    }
+    throw _fsError('ENOENT', 'mkdir', sp, 'no such file or directory');
+  }
 }
 
 function unlinkSync(path) {

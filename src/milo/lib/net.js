@@ -62,6 +62,10 @@ class Socket extends Duplex {
         const e = new TypeError('The "options.host" property must be of type string. Received type ' + typeof opts.host);
         e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
       }
+      if (opts.hints !== undefined && opts.hints !== 0) {
+        const e = new TypeError(`The argument 'hints' is invalid. Received ${opts.hints}`);
+        e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+      }
       if (opts.path) isPipe = true;
       port = opts.port; host = opts.host || opts.hostname;
     } else if (typeof port === 'string' && !Number.isFinite(+port)) {

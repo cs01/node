@@ -299,8 +299,51 @@
       get [Symbol.toStringTag]() { return 'URL'; }
     };
   }
-  if (typeof TextEncoder === 'undefined') globalThis.TextEncoder = class TextEncoder { encode(s) { const a = []; for (let i = 0; i < s.length; i++) a.push(s.charCodeAt(i) & 0xff); return new Uint8Array(a); } };
-  if (typeof TextDecoder === 'undefined') globalThis.TextDecoder = class TextDecoder { decode(buf) { if (!buf) return ''; const a = new Uint8Array(buf.buffer || buf); let s = ''; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return s; } };
+  if (typeof TextEncoder === 'undefined') globalThis.TextEncoder = class TextEncoder {
+    encode(s) {
+      const a = [];
+      for (let i = 0; i < s.length; i++) {
+        let c = s.charCodeAt(i);
+        if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) { const lo = s.charCodeAt(i + 1); if (lo >= 0xdc00 && lo <= 0xdfff) { c = ((c - 0xd800) << 10) + (lo - 0xdc00) + 0x10000; i++; } }
+        if (c < 0x80) a.push(c);
+        else if (c < 0x800) { a.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f)); }
+        else if (c < 0x10000) { a.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f)); }
+        else { a.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 0x3f), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f)); }
+      }
+      return new Uint8Array(a);
+    }
+  };
+  // V8 without ICU has a broken TextDecoder (Latin-1 only); always override with proper UTF-8
+  globalThis.TextDecoder = class TextDecoder {
+    constructor(label, opts) {
+      this.encoding = (label || 'utf-8').toLowerCase().replace(/[^a-z0-9-]/g, '');
+      if (this.encoding === 'utf8') this.encoding = 'utf-8';
+      this.fatal = !!(opts && opts.fatal);
+      this.ignoreBOM = !!(opts && opts.ignoreBOM);
+    }
+    decode(buf) {
+      if (!buf) return '';
+      const a = new Uint8Array(buf.buffer ? buf.buffer : buf, buf.byteOffset || 0, buf.byteLength != null ? buf.byteLength : buf.length);
+      if (this.encoding !== 'utf-8') {
+        let s = ''; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return s;
+      }
+      let s = '', i = 0;
+      while (i < a.length) {
+        const b = a[i];
+        if (b < 0x80) { s += String.fromCharCode(b); i++; }
+        else if ((b & 0xe0) === 0xc0 && i + 1 < a.length && (a[i+1] & 0xc0) === 0x80) {
+          s += String.fromCharCode(((b & 0x1f) << 6) | (a[i+1] & 0x3f)); i += 2;
+        } else if ((b & 0xf0) === 0xe0 && i + 2 < a.length && (a[i+1] & 0xc0) === 0x80 && (a[i+2] & 0xc0) === 0x80) {
+          s += String.fromCharCode(((b & 0x0f) << 12) | ((a[i+1] & 0x3f) << 6) | (a[i+2] & 0x3f)); i += 3;
+        } else if ((b & 0xf8) === 0xf0 && i + 3 < a.length && (a[i+1] & 0xc0) === 0x80 && (a[i+2] & 0xc0) === 0x80 && (a[i+3] & 0xc0) === 0x80) {
+          const cp = ((b & 0x07) << 18) | ((a[i+1] & 0x3f) << 12) | ((a[i+2] & 0x3f) << 6) | (a[i+3] & 0x3f);
+          if (cp <= 0x10ffff) s += String.fromCodePoint(cp); else s += '�';
+          i += 4;
+        } else { s += '�'; i++; }
+      }
+      return s;
+    }
+  };
   if (typeof queueMicrotask === 'undefined') globalThis.queueMicrotask = (fn) => Promise.resolve().then(fn);
   if (typeof fetch === 'undefined') globalThis.fetch = function fetch(input, init) {
     return new Promise((resolve, reject) => {
@@ -1131,20 +1174,6 @@
   try { const _b = require('buffer'); globalThis.Buffer = _b.Buffer || _b; } catch {}
   // Expose WebCrypto API as globalThis.crypto (Node 19+)
   try { const _c = require('crypto'); if (_c.webcrypto) globalThis.crypto = _c.webcrypto; } catch {}
-  // Polyfill TextDecoder properties missing in V8's minimal implementation
-  if (typeof TextDecoder !== 'undefined' && !('encoding' in TextDecoder.prototype)) {
-    const _OrigTD = TextDecoder;
-    globalThis.TextDecoder = function TextDecoder(label, opts) {
-      const td = new _OrigTD(label, opts);
-      const _encAliases = { 'utf8': 'utf-8', 'utf-8': 'utf-8', 'unicode-1-1-utf-8': 'utf-8', 'unicode11utf8': 'utf-8', 'unicode20utf8': 'utf-8', 'x-unicode20utf8': 'utf-8', 'ascii': 'windows-1252', 'us-ascii': 'windows-1252', 'iso-8859-1': 'windows-1252', 'latin1': 'windows-1252', 'ucs-2': 'utf-16le', 'utf-16': 'utf-16le' };
-      const _raw = (label || 'utf-8').toLowerCase().trim();
-      td.encoding = _encAliases[_raw] || _raw;
-      td.fatal = !!(opts && opts.fatal);
-      td.ignoreBOM = !!(opts && opts.ignoreBOM);
-      return td;
-    };
-    globalThis.TextDecoder.prototype = _OrigTD.prototype;
-  }
 
   // Polyfill URLSearchParams.sort if missing
   if (typeof URLSearchParams !== 'undefined' && !URLSearchParams.prototype.sort) {

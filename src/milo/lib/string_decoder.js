@@ -2,7 +2,6 @@
 'use strict';
 
 function StringDecoder(encoding) {
-  if (!(this instanceof StringDecoder)) return new StringDecoder(encoding);
   this.encoding = (encoding || 'utf8').toLowerCase().replace('-', '');
   this.lastNeed = 0;
   this.lastTotal = 0;

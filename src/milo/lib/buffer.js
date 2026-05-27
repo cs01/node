@@ -74,9 +74,18 @@ function _utf8Decode(buf, start, end) {
   for (let i = start; i < end;) {
     const b = buf[i];
     if (b < 0x80) { s += String.fromCharCode(b); i++; }
-    else if ((b & 0xe0) === 0xc0) { s += String.fromCharCode(((b & 0x1f) << 6) | (buf[i+1] & 0x3f)); i += 2; }
-    else if ((b & 0xf0) === 0xe0) { s += String.fromCharCode(((b & 0x0f) << 12) | ((buf[i+1] & 0x3f) << 6) | (buf[i+2] & 0x3f)); i += 3; }
-    else { const cp = ((b & 0x07) << 18) | ((buf[i+1] & 0x3f) << 12) | ((buf[i+2] & 0x3f) << 6) | (buf[i+3] & 0x3f); s += String.fromCodePoint(cp); i += 4; }
+    else if ((b & 0xe0) === 0xc0) {
+      if (i + 1 >= end || (buf[i+1] & 0xc0) !== 0x80) { s += '�'; i++; continue; }
+      s += String.fromCharCode(((b & 0x1f) << 6) | (buf[i+1] & 0x3f)); i += 2;
+    } else if ((b & 0xf0) === 0xe0) {
+      if (i + 2 >= end || (buf[i+1] & 0xc0) !== 0x80 || (buf[i+2] & 0xc0) !== 0x80) { s += '�'; i++; continue; }
+      s += String.fromCharCode(((b & 0x0f) << 12) | ((buf[i+1] & 0x3f) << 6) | (buf[i+2] & 0x3f)); i += 3;
+    } else if ((b & 0xf8) === 0xf0) {
+      if (i + 3 >= end || (buf[i+1] & 0xc0) !== 0x80 || (buf[i+2] & 0xc0) !== 0x80 || (buf[i+3] & 0xc0) !== 0x80) { s += '�'; i++; continue; }
+      const cp = ((b & 0x07) << 18) | ((buf[i+1] & 0x3f) << 12) | ((buf[i+2] & 0x3f) << 6) | (buf[i+3] & 0x3f);
+      if (cp > 0x10ffff) { s += '�'; i++; continue; }
+      s += String.fromCodePoint(cp); i += 4;
+    } else { s += '�'; i++; }
   }
   return s;
 }
@@ -769,6 +778,12 @@ Buffer.prototype.utf8Write = function(str, offset, length) {
   for (let i = 0; i < len; i++) this[offset + i] = bytes[i];
   return len;
 };
+
+// ES6 class statics are non-enumerable; Node's Buffer statics are enumerable
+for (const k of Object.getOwnPropertyNames(Buffer)) {
+  const d = Object.getOwnPropertyDescriptor(Buffer, k);
+  if (d && !d.enumerable && typeof d.value === 'function') Object.defineProperty(Buffer, k, { ...d, enumerable: true });
+}
 
 // make Buffer callable as a function (deprecated Node.js API, but needed for compat)
 const _BufferClass = Buffer;

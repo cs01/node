@@ -114,6 +114,7 @@ class OutgoingMessage extends EventEmitter {
     if (typeof chunk === 'function') { cb = chunk; chunk = undefined; encoding = undefined; }
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
     if (chunk) this.write(chunk, encoding);
+    if (!this._headersSent && this._implicitHeader) this._implicitHeader();
     this.finished = true;
     this.writableEnded = true;
     if (this.socket) {
@@ -214,13 +215,17 @@ class ServerResponse extends OutgoingMessage {
   _flushHeaders() {
     if (this._headersSent) return;
     this._headersSent = true;
-    if (!this._headers['content-length'] && !this._headers['transfer-encoding']) {
+    const noBody = this.statusCode === 204 || this.statusCode === 304 || (this.statusCode >= 100 && this.statusCode < 200);
+    if (!noBody && !this._headers['content-length'] && !this._headers['transfer-encoding']) {
       this._headers['transfer-encoding'] = 'chunked';
       this._chunked = true;
     }
     const statusMsg = STATUS_CODES[this.statusCode] || 'Unknown';
     let head = `HTTP/1.1 ${this.statusCode} ${statusMsg}\r\n`;
-    for (const [k,v] of Object.entries(this._headers)) head += `${k}: ${v}\r\n`;
+    for (const [k,v] of Object.entries(this._headers)) {
+      if (Array.isArray(v)) { for (const item of v) head += `${k}: ${item}\r\n`; }
+      else head += `${k}: ${v}\r\n`;
+    }
     head += '\r\n';
     this._socket.write(head);
   }
@@ -277,19 +282,30 @@ class Server extends EventEmitter {
           process.nextTick(() => this.emit('close'));
         }
       });
-      let buf = '';
+      let bufChunks = [];
+      let bufLen = 0;
       let headersParsed = false;
       let currentReq = null;
       let bodyReceived = 0;
       let contentLength = -1;
 
       socket.on('data', (chunk) => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         if (!headersParsed) {
-          buf += chunk.toString();
-          const headerEnd = buf.indexOf('\r\n\r\n');
+          bufChunks.push(buf);
+          bufLen += buf.length;
+          const combined = bufChunks.length === 1 ? bufChunks[0] : Buffer.concat(bufChunks, bufLen);
+          // Binary-safe search for \r\n\r\n
+          let headerEnd = -1;
+          for (let i = 0; i <= combined.length - 4; i++) {
+            if (combined[i] === 0x0d && combined[i+1] === 0x0a && combined[i+2] === 0x0d && combined[i+3] === 0x0a) {
+              headerEnd = i; break;
+            }
+          }
           if (headerEnd === -1) return;
-          const headerPart = buf.substring(0, headerEnd);
-          const bodyPart = buf.substring(headerEnd + 4);
+          const headerPart = combined.slice(0, headerEnd).toString();
+          const bodyPart = combined.slice(headerEnd + 4);
+          bufChunks = null;
           const lines = headerPart.split('\r\n');
           const [method, url, version] = lines[0].split(' ');
           const req = new IncomingMessage();
@@ -312,21 +328,19 @@ class Server extends EventEmitter {
           contentLength = parseInt(req.headers['content-length']) || 0;
 
           if (bodyPart.length > 0) {
-            req.push(Buffer.from(bodyPart));
+            req.push(bodyPart);
             bodyReceived += bodyPart.length;
           }
 
           if (bodyReceived >= contentLength) {
             req.push(null);
             req.complete = true;
-            req.readable = false;
           }
 
           if (req.headers['upgrade'] && this.listenerCount('upgrade') > 0) {
             req.push(null);
             req.complete = true;
-            req.readable = false;
-            this.emit('upgrade', req, socket, Buffer.from(bodyPart));
+            this.emit('upgrade', req, socket, bodyPart);
           } else {
             socket._httpActive = true;
             const res = new ServerResponse(socket);
@@ -350,7 +364,6 @@ class Server extends EventEmitter {
           if (contentLength >= 0 && bodyReceived >= contentLength) {
             currentReq.push(null);
             currentReq.complete = true;
-            currentReq.readable = false;
           }
         }
       });
@@ -359,7 +372,6 @@ class Server extends EventEmitter {
         if (currentReq && !currentReq.complete) {
           currentReq.push(null);
           currentReq.complete = true;
-          currentReq.readable = false;
         }
       });
     });
@@ -432,7 +444,7 @@ class ClientRequest extends EventEmitter {
   _implicitHeader() { this._flushHeaders(); }
   _flushHeaders() { this.headersSent = true; }
   flushHeaders() { this._flushHeaders(); }
-  setHeader(k, v) { this._headers[k.toLowerCase()] = v; return this; }
+  setHeader(k, v) { this._headers[k.toLowerCase()] = Array.isArray(v) ? v.map(String) : v; return this; }
   getHeader(k) { return this._headers[k.toLowerCase()]; }
   removeHeader(k) { delete this._headers[k.toLowerCase()]; }
   hasHeader(k) { return k.toLowerCase() in this._headers; }
@@ -472,7 +484,12 @@ class ClientRequest extends EventEmitter {
       // Build HTTP request
       const body = this._body.length > 0 ? Buffer.concat(this._body) : null;
       if (!this._headers['host']) this._headers['host'] = port === 80 ? host : `${host}:${port}`;
-      if (body && !this._headers['content-length']) this._headers['content-length'] = String(body.length);
+      if (body) {
+        if (!this._headers['content-length']) this._headers['content-length'] = String(body.length);
+      } else if (!this._headers['content-length'] && !this._headers['transfer-encoding']) {
+        const m = this.method.toUpperCase();
+        if (m === 'POST' || m === 'PUT' || m === 'PATCH') this._headers['content-length'] = '0';
+      }
       if (!this._headers['connection']) this._headers['connection'] = 'close';
 
       let reqStr = `${this.method} ${this.path} HTTP/1.1\r\n`;
@@ -520,10 +537,9 @@ class ClientRequest extends EventEmitter {
         for (let i = 1; i < lines.length; i++) {
           const idx = lines[i].indexOf(':');
           if (idx > 0) {
-            const key = lines[i].substring(0, idx).trim().toLowerCase();
+            const rawKey = lines[i].substring(0, idx).trim();
             const val = lines[i].substring(idx + 1).trim();
-            res.headers[key] = val;
-            res.rawHeaders.push(lines[i].substring(0, idx).trim(), val);
+            res._addHeaderLine(rawKey, val, res.headers);
           }
         }
         headersParsed = true;

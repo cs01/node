@@ -129,6 +129,7 @@ const dns = {
   }),
   setServers: () => {},
   getServers: () => [],
+  ADDRCONFIG: 0, V4MAPPED: 0, ALL: 0,
   NODATA, FORMERR, SERVFAIL, NOTFOUND, NOTIMP, REFUSED, BADQUERY, BADNAME, BADFAMILY,
   promises,
 };

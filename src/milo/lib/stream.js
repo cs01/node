@@ -133,7 +133,7 @@ class Readable extends Stream {
     if (state.buffer.length === 0) {
       if (state.ended) {
         state.reading = false;
-        if (!state.endEmitted) { state.endEmitted = true; process.nextTick(() => this.emit('end')); }
+        if (!state.endEmitted) { state.endEmitted = true; process.nextTick(() => { this.readable = false; this.emit('end'); }); }
         return null;
       }
       state.reading = true;
@@ -141,7 +141,7 @@ class Readable extends Stream {
       this._read(state.highWaterMark);
       state.reading = false;
       if (state.buffer.length === 0) {
-        if (state.ended && !state.endEmitted) { state.endEmitted = true; process.nextTick(() => this.emit('end')); }
+        if (state.ended && !state.endEmitted) { state.endEmitted = true; process.nextTick(() => { this.readable = false; this.emit('end'); }); }
         return null;
       }
     }
@@ -190,7 +190,7 @@ class Readable extends Stream {
       state.ended = true;
       if (state.flowing || state.buffer.length === 0) {
         process.nextTick(() => {
-          if (!state.endEmitted && !state._destroyed) { state.endEmitted = true; this.emit('end'); }
+          if (!state.endEmitted && !state._destroyed) { state.endEmitted = true; this.readable = false; this.emit('end'); }
           if (this.allowHalfOpen === false && this._writableState && !this._writableState.ended) this.end();
           if (this._writableState && this._writableState.autoDestroy && this._writableState.finished) process.nextTick(() => { if (!this.destroyed) this.destroy(); });
         });
@@ -309,7 +309,7 @@ class Readable extends Stream {
         this.emit('data', chunk);
       }
     }
-    if (state.ended && state.buffer.length === 0 && !state.endEmitted && !state._destroyed) { state.endEmitted = true; this.emit('end'); }
+    if (state.ended && state.buffer.length === 0 && !state.endEmitted && !state._destroyed) { state.endEmitted = true; this.readable = false; this.emit('end'); }
   }
   pause() { if (this._readableState.flowing !== false) { this._readableState.flowing = false; this.emit('pause'); } return this; }
   isPaused() { return this._readableState.flowing === false; }
@@ -332,6 +332,7 @@ class Readable extends Stream {
   destroy(err, cb) {
     if (this._readableState._destroyed) { if (cb) cb(); return this; }
     this._readableState._destroyed = true;
+    this.readable = false;
     if (err) this._readableState.errored = err;
     const onDestroy = (err2) => {
       const s = this._readableState;
