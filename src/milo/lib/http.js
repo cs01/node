@@ -370,72 +370,65 @@ class Server extends EventEmitter {
           process.nextTick(() => this.emit('close'));
         }
       });
-      let bufChunks = [];
-      let bufLen = 0;
-      let headersParsed = false;
-      let currentReq = null;
+      // Rolling parse buffer + per-request state. Reset after each request so
+      // subsequent requests on a kept-alive (or pipelined) connection parse
+      // fresh — previously headersParsed never reset and request #2 was dropped.
+      let buffer = Buffer.alloc(0);
+      let currentReq = null;   // request whose body is still being read
+      let contentLength = 0;
       let bodyReceived = 0;
-      let contentLength = -1;
 
       const httpDataHandler = (chunk) => {
         const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        if (!headersParsed) {
-          bufChunks.push(buf);
-          bufLen += buf.length;
-          const combined = bufChunks.length === 1 ? bufChunks[0] : Buffer.concat(bufChunks, bufLen);
-          // Binary-safe search for \r\n\r\n
-          let headerEnd = -1;
-          for (let i = 0; i <= combined.length - 4; i++) {
-            if (combined[i] === 0x0d && combined[i+1] === 0x0a && combined[i+2] === 0x0d && combined[i+3] === 0x0a) {
-              headerEnd = i; break;
+        buffer = buffer.length === 0 ? buf : Buffer.concat([buffer, buf]);
+
+        for (;;) {
+          // Phase 1: parse request line + headers (no request in flight).
+          if (!currentReq) {
+            let headerEnd = -1;
+            for (let i = 0; i <= buffer.length - 4; i++) {
+              if (buffer[i] === 0x0d && buffer[i+1] === 0x0a && buffer[i+2] === 0x0d && buffer[i+3] === 0x0a) {
+                headerEnd = i; break;
+              }
             }
-          }
-          if (headerEnd === -1) return;
-          const headerPart = combined.slice(0, headerEnd).toString();
-          const bodyPart = combined.slice(headerEnd + 4);
-          bufChunks = null;
-          const lines = headerPart.split('\r\n');
-          const [method, url, version] = lines[0].split(' ');
-          const req = new IncomingMessage();
-          req.method = method;
-          req.url = url;
-          req.httpVersion = (version || '').replace('HTTP/', '');
-          req.socket = socket;
-          req.connection = socket;
-          for (let i = 1; i < lines.length; i++) {
-            const idx = lines[i].indexOf(':');
-            if (idx > 0) {
-              const key = lines[i].substring(0, idx).trim().toLowerCase();
-              const val = lines[i].substring(idx + 1).trim();
-              if (key === 'set-cookie') {
-                if (req.headers[key]) req.headers[key].push(val);
-                else req.headers[key] = [val];
-              } else if (req.headers[key]) { req.headers[key] += ', ' + val; }
-              else { req.headers[key] = val; }
-              req.rawHeaders.push(lines[i].substring(0, idx).trim(), val);
+            if (headerEnd === -1) break; // need more bytes for full headers
+            const headerPart = buffer.slice(0, headerEnd).toString();
+            buffer = buffer.slice(headerEnd + 4);
+            const lines = headerPart.split('\r\n');
+            const [method, url, version] = lines[0].split(' ');
+            const req = new IncomingMessage();
+            req.method = method;
+            req.url = url;
+            req.httpVersion = (version || '').replace('HTTP/', '');
+            req.socket = socket;
+            req.connection = socket;
+            for (let i = 1; i < lines.length; i++) {
+              const idx = lines[i].indexOf(':');
+              if (idx > 0) {
+                const key = lines[i].substring(0, idx).trim().toLowerCase();
+                const val = lines[i].substring(idx + 1).trim();
+                if (key === 'set-cookie') {
+                  if (req.headers[key]) req.headers[key].push(val);
+                  else req.headers[key] = [val];
+                } else if (req.headers[key]) { req.headers[key] += ', ' + val; }
+                else { req.headers[key] = val; }
+                req.rawHeaders.push(lines[i].substring(0, idx).trim(), val);
+              }
             }
-          }
-          headersParsed = true;
-          currentReq = req;
-          contentLength = parseInt(req.headers['content-length']) || 0;
+            currentReq = req;
+            contentLength = parseInt(req.headers['content-length']) || 0;
+            bodyReceived = 0;
 
-          if (bodyPart.length > 0) {
-            req.push(bodyPart);
-            bodyReceived += bodyPart.length;
-          }
+            if (req.headers['upgrade'] && this.listenerCount('upgrade') > 0) {
+              req.push(null);
+              req.complete = true;
+              // Release socket from HTTP parsing so upgrade handler (e.g. ws) owns it
+              socket.removeListener('data', httpDataHandler);
+              this.emit('upgrade', req, socket, buffer);
+              currentReq = null;
+              return;
+            }
 
-          if (bodyReceived >= contentLength) {
-            req.push(null);
-            req.complete = true;
-          }
-
-          if (req.headers['upgrade'] && this.listenerCount('upgrade') > 0) {
-            req.push(null);
-            req.complete = true;
-            // Release socket from HTTP parsing so upgrade handler (e.g. ws) owns it
-            socket.removeListener('data', httpDataHandler);
-            this.emit('upgrade', req, socket, bodyPart);
-          } else {
             socket._httpActive = true;
             const res = new ServerResponse(socket);
             res.on('finish', () => {
@@ -445,20 +438,29 @@ class Server extends EventEmitter {
             try {
               this.emit('request', req, res);
             } catch (e) {
-              if (!res.headersSent) {
-                res.statusCode = 500;
-                res.end();
-              }
+              if (!res.headersSent) { res.statusCode = 500; res.end(); }
               this.emit('clientError', e, socket);
             }
           }
-        } else if (currentReq && !currentReq.complete) {
-          currentReq.push(chunk);
-          bodyReceived += chunk.length;
-          if (contentLength >= 0 && bodyReceived >= contentLength) {
+
+          // Phase 2: feed body bytes to the in-flight request.
+          if (currentReq && !currentReq.complete) {
+            if (contentLength > 0) {
+              const take = Math.min(contentLength - bodyReceived, buffer.length);
+              if (take > 0) {
+                currentReq.push(buffer.slice(0, take));
+                buffer = buffer.slice(take);
+                bodyReceived += take;
+              }
+              if (bodyReceived < contentLength) break; // await more body
+            }
             currentReq.push(null);
             currentReq.complete = true;
           }
+
+          // Request fully received — reset and parse the next one if buffered.
+          currentReq = null;
+          if (buffer.length === 0) break;
         }
       };
       socket.on('data', httpDataHandler);
