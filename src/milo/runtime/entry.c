@@ -11,6 +11,7 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <string.h>
+#include <signal.h>
 
 extern int milo_node_main(int argc, char** argv);
 extern char **environ;
@@ -752,5 +753,9 @@ int nm_statvfs(const char* path, long long* out) {
 }
 
 int main(int argc, char** argv) {
+    // Match Node/libuv: ignore SIGPIPE so a write to a closed pipe or socket
+    // returns EPIPE instead of killing the process by signal. Without this,
+    // IPC/net/stream teardown races terminate the process with signal 13.
+    signal(SIGPIPE, SIG_IGN);
     return milo_node_main(argc, argv);
 }
