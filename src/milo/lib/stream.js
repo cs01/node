@@ -224,7 +224,7 @@ class Readable extends Stream {
     const state = this._readableState;
     this._didPush = true;
     if (state._destroyed) return false;
-    if (chunk === undefined) return state.length <= state.highWaterMark;
+    if (chunk === undefined && !state.objectMode) return state.length <= state.highWaterMark;
     if (chunk === null) {
       state.ended = true;
       if (state.readableListening && !state._readableEmitScheduled) {
