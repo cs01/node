@@ -10,6 +10,13 @@ const EVFILT_WRITE = tcp.EVFILT_WRITE; // -2
 const EV_EOF = tcp.EV_EOF;             // 0x8000
 const EVFILT_VNODE = -4;
 
+// darwin errno → Node error code, for connect() failures surfaced via SO_ERROR
+const _CONNECT_ERRNO = {
+  13: 'EACCES', 47: 'EAFNOSUPPORT', 48: 'EADDRINUSE', 49: 'EADDRNOTAVAIL',
+  51: 'ENETUNREACH', 54: 'ECONNRESET', 60: 'ETIMEDOUT', 61: 'ECONNREFUSED',
+  64: 'EHOSTDOWN', 65: 'EHOSTUNREACH',
+};
+
 let pollInited = false;
 function ensurePoll() {
   if (!pollInited) {
@@ -116,9 +123,31 @@ class Socket extends Duplex {
     return this;
   }
 
-  _onConnected() {
+  _onConnected(ev) {
     this._connecting = false;
     tcp.pollRemove(this._fd, EVFILT_WRITE);
+    // A failed non-blocking connect also makes the socket write-ready. On
+    // macOS it surfaces as EV_EOF on the write event with the errno in
+    // ev.data (getsockopt(SO_ERROR) is unreliable — kqueue consumes the
+    // pending error). Fall back to SO_ERROR, then to ECONNREFUSED.
+    // EV_EOF on a connecting socket's write event means the connect failed.
+    // The specific errno is unreliable on macOS (kqueue consumes SO_ERROR and
+    // leaves fflags=0), so prefer SO_ERROR when nonzero, else default to the
+    // dominant case, ECONNREFUSED.
+    let soErr = 0;
+    if (ev && (ev.flags & EV_EOF)) {
+      soErr = (tcp.soError ? tcp.soError(this._fd) : 0) || 61;
+    } else if (tcp.soError) {
+      soErr = tcp.soError(this._fd);
+    }
+    if (soErr > 0) {
+      const code = _CONNECT_ERRNO[soErr] || ('UNKNOWN');
+      const e = new Error(`connect ${code} ${this.remoteAddress}:${this.remotePort}`);
+      e.code = code; e.errno = -soErr; e.syscall = 'connect';
+      e.address = this.remoteAddress; e.port = this.remotePort;
+      this.destroy(e);
+      return;
+    }
     this._startReading();
     this.emit('connect');
   }
@@ -408,7 +437,7 @@ function _pollOnce(timeout) {
     if (!sock) continue;
 
     if (sock._connecting && filter === EVFILT_WRITE) {
-      sock._onConnected();
+      sock._onConnected(ev);
       continue;
     }
 

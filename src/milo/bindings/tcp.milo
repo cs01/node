@@ -10,6 +10,7 @@ extern fn accept(fd: i32, addr: *u8, addrlen: *i32): i32
 extern fn connect(fd: i32, addr: *u8, addrlen: i32): i32
 extern fn close(fd: i32): i32
 extern fn setsockopt(fd: i32, level: i32, optname: i32, optval: *u8, optlen: i32): i32
+extern fn getsockopt(fd: i32, level: i32, optname: i32, optval: *u8, optlen: *u8): i32
 extern fn fcntl(fd: i32, cmd: i32, arg: i32): i32
 extern fn strlen(s: *u8): i64
 extern fn memset(s: *u8, c: i32, n: i64): *u8
@@ -120,6 +121,15 @@ fn kevent_get_fflags(buf: *u8): i32 {
     unsafe {
         let ffp = (buf as i64 + 12) as *i32
         return ffp[0]
+    }
+}
+
+// kevent.data (offset 16, intptr_t). For a failed non-blocking connect macOS
+// sets EV_EOF on the WRITE event and stores the connect errno here.
+fn kevent_get_data(buf: *u8): i64 {
+    unsafe {
+        let dp = (buf as i64 + 16) as *i64
+        return dp[0]
     }
 }
 
@@ -474,6 +484,7 @@ fn pollWait(info: *u8, _ud: *u8): void {
             ctx.objectSet(obj, "filter" as *u8, iso.int32(filter))
             ctx.objectSet(obj, "flags" as *u8, iso.int32(flags))
             ctx.objectSet(obj, "fflags" as *u8, iso.int32(fflags))
+            ctx.objectSet(obj, "data" as *u8, iso.int32(kevent_get_data(ev_ptr) as i32))
             ctx.objectSetIndex(arr, i as u32, obj)
         }
         free(events)
@@ -538,6 +549,25 @@ fn tcpSetNoDelay(info: *u8, _ud: *u8): void {
         var val: [i32; 1] = [on]
         setsockopt(fd, 6, 1, val as *u8, 4)
         ci.retI32(0)
+    }
+}
+
+// soError(fd) → pending socket error (errno), 0 if none. Used after async
+// connect completes to distinguish success from ECONNREFUSED/ETIMEDOUT/etc.
+// (a failed connect also makes the socket write-ready). SOL_SOCKET=0xffff,
+// SO_ERROR=0x1007 on darwin.
+fn tcpSoError(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let fd = ci.i32Arg(0, -1)
+        var val: [i32; 1] = [0]
+        var len: [i32; 1] = [4]
+        let r = getsockopt(fd, 0xffff, 0x1007, val as *u8, len as *u8)
+        if r != 0 {
+            ci.retI32(-1)
+        } else {
+            ci.retI32(val[0])
+        }
     }
 }
 
@@ -992,6 +1022,7 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "pollRemove" as *u8, pollRemove as *u8)
         c.setMethod(exp, "pollWait" as *u8, pollWait as *u8)
         c.setMethod(exp, "setNoDelay" as *u8, tcpSetNoDelay as *u8)
+        c.setMethod(exp, "soError" as *u8, tcpSoError as *u8)
         c.setMethod(exp, "setKeepAlive" as *u8, tcpSetKeepAlive as *u8)
         c.setMethod(exp, "setLinger" as *u8, tcpSetLinger as *u8)
         c.setMethod(exp, "watchFile" as *u8, tcpWatchFile as *u8)
