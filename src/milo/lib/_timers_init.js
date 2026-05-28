@@ -36,8 +36,7 @@ class Timeout {
 function _safeCall(fn, args, thisArg) {
   try { fn.call(thisArg, ...args); }
   catch (e) {
-    const handlers = process.listeners && process.listeners('uncaughtException');
-    if (handlers && handlers.length > 0) process.emit('uncaughtException', e);
+    if (process._fatalException) process._fatalException(e);
     else throw e;
   }
 }

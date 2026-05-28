@@ -135,8 +135,7 @@ process._tickCallback = function() {
     const entry = process._nextTickQueue.shift();
     try { entry[0](...entry[1]); }
     catch (e) {
-      const handlers = process.listeners && process.listeners('uncaughtException');
-      if (handlers && handlers.length > 0) process.emit('uncaughtException', e);
+      if (process._fatalException) process._fatalException(e);
       else throw e;
     }
   }
@@ -372,6 +371,31 @@ process.setUncaughtExceptionCaptureCallback = (fn) => {
   _uncaughtExceptionCallback = fn;
 };
 process.hasUncaughtExceptionCaptureCallback = () => _uncaughtExceptionCallback !== null;
+
+// Single funnel for exceptions that escape an async callback. Mirrors Node:
+// a capture callback or 'uncaughtException' listener handles it and execution
+// continues; otherwise the error is printed and the process exits non-zero.
+// Without this, escaped errors were swallowed and the process exited 0.
+process._fatalException = function(er) {
+  if (_uncaughtExceptionCallback !== null) {
+    try { _uncaughtExceptionCallback(er); return true; }
+    catch (er2) { er = er2; }
+  } else {
+    const handlers = process.listeners ? process.listeners('uncaughtException') : [];
+    if (handlers && handlers.length > 0) {
+      try { process.emit('uncaughtException', er, 'uncaughtException'); return true; }
+      catch (er2) { er = er2; } // a handler itself threw → now fatal
+    }
+  }
+  try {
+    const msg = er && er.stack ? er.stack : String(er);
+    if (process.stderr && process.stderr.write) process.stderr.write(msg + '\n');
+    else console.error(msg);
+  } catch {}
+  if (!process.exitCode) process.exitCode = 1;
+  process.exit(process.exitCode || 1);
+  return false;
+};
 
 if (!process.memoryUsage) {
   const _pmb = internalBinding('process_methods');

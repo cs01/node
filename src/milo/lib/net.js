@@ -374,9 +374,8 @@ Server._servers = new Map();
 
 function _emitSocketError(sock, e) {
   if (typeof sock.listenerCount === 'function' && sock.listenerCount('error') > 0) { sock.emit('error', e); return; }
-  const handlers = process.listeners && process.listeners('uncaughtException');
-  if (handlers && handlers.length > 0) process.emit('uncaughtException', e);
-  else { console.error(e); if (typeof sock.destroy === 'function') sock.destroy(); }
+  if (process._fatalException) { process._fatalException(e); return; }
+  console.error(e); if (typeof sock.destroy === 'function') sock.destroy();
 }
 
 // --- I/O pump called from event loop ---
