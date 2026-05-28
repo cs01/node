@@ -772,9 +772,13 @@ const Agent_class = class Agent {
     this.options = opts;
   }
   getName(options) {
+    if (!options) options = {};
     let name = options.host || 'localhost';
-    if (options.port) name += ':' + options.port;
-    if (options.localAddress) name += ':' + options.localAddress;
+    name += ':' + (options.port || '');
+    name += ':' + (options.localAddress || '');
+    const family = options.family;
+    if (options.socketPath) name += ':' + options.socketPath;
+    else if (family === 4 || family === 6) name += ':' + family;
     return name;
   }
   createConnection(options, cb) {
@@ -802,6 +806,31 @@ const _Server = new Proxy(Server, {
   apply(target, thisArg, args) { return new target(...args); },
 });
 
+function validateHeaderName(name) {
+  if (typeof name !== 'string' || name.length === 0) {
+    const e = new TypeError('Header name must be a valid HTTP token ["' + name + '"]');
+    e.code = 'ERR_INVALID_HTTP_TOKEN'; throw e;
+  }
+  if (!/^[\x21-\x7E]+$/.test(name) || /[():@,;=\[\]{}\\<>\/?"{}]/.test(name)) {
+    const e = new TypeError('Header name must be a valid HTTP token ["' + name + '"]');
+    e.code = 'ERR_INVALID_HTTP_TOKEN'; throw e;
+  }
+}
+function validateHeaderValue(name, value) {
+  if (value === undefined) {
+    const e = new TypeError('Invalid value "undefined" for header "' + name + '"');
+    e.code = 'ERR_HTTP_INVALID_HEADER_VALUE'; throw e;
+  }
+  const sval = String(value);
+  for (let i = 0; i < sval.length; i++) {
+    const c = sval.charCodeAt(i);
+    if (c > 0x7E || (c < 0x20 && c !== 0x09)) {
+      const e = new TypeError('Invalid character in header content ["' + name + '"]');
+      e.code = 'ERR_INVALID_CHAR'; throw e;
+    }
+  }
+}
+
 module.exports = {
   createServer: (opts, handler) => new Server(opts, handler),
   request, get,
@@ -810,4 +839,6 @@ module.exports = {
   globalAgent: new Agent_class(),
   METHODS, STATUS_CODES,
   maxHeaderSize: 16384,
+  validateHeaderName,
+  validateHeaderValue,
 };

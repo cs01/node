@@ -120,6 +120,14 @@ class Socket extends EventEmitter {
 
   connect(port, address, cb) {
     if (typeof address === 'function') { cb = address; address = undefined; }
+    if (port == null || port === 0 || port >= 65536 || (typeof port === 'number' && !Number.isInteger(port))) {
+      const e = new RangeError('Port should be > 0 and < 65536. Received ' + (port === undefined ? 'undefined' : port));
+      e.code = 'ERR_SOCKET_BAD_PORT'; throw e;
+    }
+    if (this._connected) {
+      const e = new Error('Already connected');
+      e.code = 'ERR_SOCKET_DGRAM_IS_CONNECTED'; throw e;
+    }
     this._remotePort = port;
     this._remoteAddress = address || '127.0.0.1';
     this._connected = true;
@@ -139,9 +147,21 @@ class Socket extends EventEmitter {
   }
 
   disconnect() {
+    if (!this._connected) {
+      const e = new Error('Not connected');
+      e.code = 'ERR_SOCKET_DGRAM_NOT_CONNECTED'; throw e;
+    }
     this._remotePort = undefined;
     this._remoteAddress = undefined;
     this._connected = false;
+  }
+
+  remoteAddress() {
+    if (!this._connected) {
+      const e = new Error('Not connected');
+      e.code = 'ERR_SOCKET_DGRAM_NOT_CONNECTED'; throw e;
+    }
+    return { address: this._remoteAddress, family: 'IPv4', port: this._remotePort };
   }
 
   close(cb) {
@@ -160,7 +180,7 @@ class Socket extends EventEmitter {
   }
 
   address() {
-    if (this._fd < 0) return { address: '0.0.0.0', port: 0, family: 'udp4' };
+    if (this._fd < 0 || !this._bound) throw new Error('getsockname EBADF');
     const info = tcp.getSockName(this._fd);
     return { address: info.address, port: info.port, family: 'IPv4' };
   }
@@ -177,7 +197,6 @@ class Socket extends EventEmitter {
   setSendBufferSize() {}
   getRecvBufferSize() { return 65536; }
   getSendBufferSize() { return 65536; }
-  remoteAddress() { return {}; }
 }
 
 function createSocket(options, listener) {

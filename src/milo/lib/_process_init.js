@@ -210,6 +210,40 @@ if (!process.kill) {
     if (sig < 0 || sig > 31) { const e = new Error('kill EINVAL'); e.code = 'EINVAL'; throw e; }
   };
 }
+// Validate and wrap process.exitCode as a property
+let _exitCode = process.exitCode || 0;
+function _validateExitCode(code) {
+  if (code === null || code === undefined) return 0;
+  if (typeof code === 'number') {
+    if (!Number.isInteger(code) || code < 0 || code > 255 || Number.isNaN(code) || !Number.isFinite(code)) {
+      const v = Number.isNaN(code) ? 'NaN' : !Number.isFinite(code) ? String(code) : String(code);
+      const e = new RangeError('The "code" argument is out of range. It must be an integer. Received ' + v);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+    return code;
+  }
+  if (typeof code === 'string') {
+    const trimmed = code.trim();
+    const n = Number(code);
+    if (trimmed.length > 0 && Number.isInteger(n) && n >= 0 && n <= 255) return n;
+    const v = "'" + code + "'";
+    const e = new TypeError('The "code" argument must be of type number. Received type string (' + v + ')');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  let v;
+  if (typeof code === 'boolean') v = 'type boolean (' + code + ')';
+  else if (typeof code === 'bigint') v = 'type bigint (' + code + 'n)';
+  else if (typeof code === 'object') v = Array.isArray(code) ? 'an instance of Array' : 'an instance of ' + ((code.constructor && code.constructor.name) || 'Object');
+  else v = 'type ' + typeof code + ' (' + String(code) + ')';
+  const e = new TypeError('The "code" argument must be of type number. Received ' + v);
+  e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+}
+Object.defineProperty(process, 'exitCode', {
+  get() { return _exitCode; },
+  set(v) { _exitCode = _validateExitCode(v); },
+  configurable: false, enumerable: true
+});
+
 // Wrap process.exit to emit 'exit' event before native exit
 const _nativeExit = process.exit;
 process.exit = function(code) {
