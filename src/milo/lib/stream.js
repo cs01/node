@@ -759,10 +759,40 @@ class Writable extends Stream {
   }
 
   _flushBuffered() {
-    while (this._writableState.buffered.length > 0 && this._writableState.corked === 0 && !this._writableState.writing) {
-      const entry = this._writableState.buffered.shift();
-      this._writableState.bufferedRequestCount--;
-      this._writableState.writing = true;
+    const state = this._writableState;
+    if (state.buffered.length === 0 || state.corked > 0 || state.writing) return;
+    if (this._writev && state.buffered.length > 1) {
+      const entries = state.buffered.splice(0);
+      state.bufferedRequestCount = 0;
+      state.writing = true;
+      const chunks = entries.map(e => ({ chunk: e.chunk, encoding: e.encoding }));
+      let totalLen = 0;
+      for (const e of entries) totalLen += state.objectMode ? 1 : (e.chunk.length || 0);
+      let called = false;
+      this._writev(chunks, (err) => {
+        if (called) { const e = new Error('Callback called multiple times'); e.code = 'ERR_MULTIPLE_CALLBACK'; process.nextTick(() => this.emit('error', e)); return; }
+        called = true;
+        state.writing = false;
+        state.length -= totalLen;
+        if (err) {
+          state.errored = err;
+          for (const e of entries) { if (e.cb) e.cb(err); }
+          process.nextTick(() => this.emit('error', err));
+        } else {
+          for (const e of entries) { if (e.cb) e.cb(null); }
+        }
+        this._flushBuffered();
+        if (!state.writing && !err && state.needDrain) {
+          const hwm = state.highWaterMark != null ? state.highWaterMark : _defaultHWM;
+          if (state.length < hwm || state.length === 0) { state.needDrain = false; this.emit('drain'); }
+        }
+      });
+      return;
+    }
+    while (state.buffered.length > 0 && state.corked === 0 && !state.writing) {
+      const entry = state.buffered.shift();
+      state.bufferedRequestCount--;
+      state.writing = true;
       this._doWrite(entry.chunk, entry.encoding, entry.cb);
       break;
     }

@@ -1335,8 +1335,13 @@
       if (desc && desc.enumerable) Object.defineProperty(globalThis, key, { ...desc, enumerable: false });
     }
   }
+  // sessionStorage (Web Storage API stub)
+  if (typeof globalThis.sessionStorage === 'undefined') {
+    const _store = new Map();
+    globalThis.sessionStorage = { getItem(k) { return _store.get(String(k)) ?? null; }, setItem(k, v) { _store.set(String(k), String(v)); }, removeItem(k) { _store.delete(String(k)); }, clear() { _store.clear(); }, get length() { return _store.size; }, key(i) { return [..._store.keys()][i] ?? null; } };
+  }
   // crypto and navigator must be enumerable (Node.js behavior)
-  for (const k of ['crypto', 'navigator']) {
+  for (const k of ['crypto', 'navigator', 'sessionStorage']) {
     const d = Object.getOwnPropertyDescriptor(globalThis, k);
     if (d && !d.enumerable && d.configurable) Object.defineProperty(globalThis, k, { ...d, enumerable: true });
   }
