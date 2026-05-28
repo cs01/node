@@ -8,7 +8,14 @@ const b = internalBinding('spawn');
 const _SPAWN_DEPTH = parseInt(process.env._MILO_SPAWN_DEPTH || '0', 10);
 const _MAX_SPAWN_DEPTH = 8;
 
+function _validateFile(file) {
+  if (typeof file !== 'string') {
+    const e = new TypeError(`The "file" argument must be of type string. Received ${_fmtReceived(file)}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+}
 function normalizeArgs(cmd, args, opts) {
+  _validateFile(cmd);
   if (typeof args === 'object' && !Array.isArray(args)) { opts = args; args = []; }
   const a = (args || []).map(arg => typeof arg === 'string' ? arg : String(arg));
   return { args: a, opts: opts || {} };
@@ -42,8 +49,104 @@ function _injectDepth(opts) {
   return env;
 }
 
+function _fmtReceived(v) {
+  if (v === null) return 'null';
+  if (typeof v === 'symbol') return 'type symbol (' + v.toString() + ')';
+  if (typeof v === 'object') return 'an instance of ' + ((v.constructor && v.constructor.name) || 'Object');
+  if (typeof v === 'string') return "type string ('" + v + "')";
+  return 'type ' + typeof v + ' (' + v + ')';
+}
+function _validateSpawnOpts(opts) {
+  if (opts.cwd != null && typeof opts.cwd !== 'string' && !(opts.cwd instanceof URL)) {
+    const e = new TypeError(`The "options.cwd" property must be of type string or an instance of URL. Received ${_fmtReceived(opts.cwd)}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (opts.detached != null && typeof opts.detached !== 'boolean') {
+    const e = new TypeError(`The "options.detached" property must be of type boolean. Received ${_fmtReceived(opts.detached)}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (opts.uid != null) {
+    if (typeof opts.uid !== 'number') {
+      const e = new TypeError(`The "options.uid" property must be of type number. Received ${_fmtReceived(opts.uid)}`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (!Number.isInteger(opts.uid) || opts.uid < 0) {
+      const e = new RangeError(`The value of "options.uid" is out of range. It must be a positive integer. Received ${opts.uid}`);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+  }
+  if (opts.gid != null) {
+    if (typeof opts.gid !== 'number') {
+      const e = new TypeError(`The "options.gid" property must be of type number. Received ${_fmtReceived(opts.gid)}`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (!Number.isInteger(opts.gid) || opts.gid < 0) {
+      const e = new RangeError(`The value of "options.gid" is out of range. It must be a positive integer. Received ${opts.gid}`);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+  }
+  if (opts.maxBuffer != null) {
+    if (typeof opts.maxBuffer !== 'number') {
+      const e = new TypeError(`The "options.maxBuffer" property must be of type number. Received ${_fmtReceived(opts.maxBuffer)}`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (opts.maxBuffer < 0) {
+      const e = new RangeError(`The value of "options.maxBuffer" is out of range. It must be a positive number. Received ${opts.maxBuffer}`);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+  }
+  if (opts.shell != null && typeof opts.shell !== 'boolean' && typeof opts.shell !== 'string') {
+    const e = new TypeError(`The "options.shell" property must be of type boolean or string. Received ${_fmtReceived(opts.shell)}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (opts.argv0 != null && typeof opts.argv0 !== 'string') {
+    const e = new TypeError(`The "options.argv0" property must be of type string. Received ${_fmtReceived(opts.argv0)}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (opts.windowsHide != null && typeof opts.windowsHide !== 'boolean') {
+    const e = new TypeError(`The "options.windowsHide" property must be of type boolean. Received ${_fmtReceived(opts.windowsHide)}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (opts.windowsVerbatimArguments != null && typeof opts.windowsVerbatimArguments !== 'boolean') {
+    const e = new TypeError(`The "options.windowsVerbatimArguments" property must be of type boolean. Received ${_fmtReceived(opts.windowsVerbatimArguments)}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (opts.timeout != null) {
+    if (typeof opts.timeout !== 'number') {
+      const e = new TypeError(`The "options.timeout" property must be of type number. Received ${_fmtReceived(opts.timeout)}`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (!Number.isInteger(opts.timeout) || opts.timeout < 0) {
+      const e = new RangeError(`The value of "options.timeout" is out of range. It must be a non-negative integer. Received ${opts.timeout}`);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+  }
+  if (opts.killSignal != null) {
+    if (typeof opts.killSignal !== 'string' && typeof opts.killSignal !== 'number') {
+      const e = new TypeError(`The "options.killSignal" property must be one of type string or number. Received ${_fmtReceived(opts.killSignal)}`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (typeof opts.killSignal === 'string') {
+      const os = require('os');
+      const sigs = os.constants && os.constants.signals;
+      if (sigs && !Object.prototype.hasOwnProperty.call(sigs, opts.killSignal) && !Object.prototype.hasOwnProperty.call(sigs, opts.killSignal.toUpperCase())) {
+        const e = new TypeError(`Unknown signal: ${opts.killSignal}`);
+        e.code = 'ERR_UNKNOWN_SIGNAL'; throw e;
+      }
+    } else if (typeof opts.killSignal === 'number') {
+      const os = require('os');
+      const sigs = os.constants && os.constants.signals;
+      const validNums = sigs ? new Set(Object.values(sigs)) : new Set();
+      if (!validNums.has(opts.killSignal)) {
+        const e = new TypeError(`Unknown signal: ${opts.killSignal}`);
+        e.code = 'ERR_UNKNOWN_SIGNAL'; throw e;
+      }
+    }
+  }
+}
 function spawnSync(file, args, options) {
   const { args: a, opts } = normalizeArgs(file, args, options);
+  _validateSpawnOpts(opts);
   if (_SPAWN_DEPTH >= _MAX_SPAWN_DEPTH) {
     return { status: 1, signal: null, stdout: '', stderr: 'spawn depth exceeded\n', error: new Error('spawn depth limit exceeded') };
   }
@@ -123,6 +226,7 @@ function execFileSync(file, args, options) {
 // True async spawn — pipes registered with kqueue for non-blocking I/O
 function spawn(file, args, options) {
   const { args: a, opts } = normalizeArgs(file, args, options);
+  _validateSpawnOpts(opts);
   const [stdinMode, stdoutMode, stderrMode] = parseStdio(opts);
   const child = new EventEmitter();
   const { Readable, Writable } = require('stream');
@@ -306,6 +410,10 @@ function execFile(file, args, options, cb) {
 }
 
 function fork(modulePath, args, options) {
+  if (typeof modulePath !== 'string') {
+    const e = new TypeError(`The "modulePath" argument must be of type string or an instance of URL. Received ${_fmtReceived(modulePath)}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
   if (Array.isArray(args)) { options = options || {}; }
   else if (args && typeof args === 'object' && !Array.isArray(args)) { options = args; args = []; }
   else { args = args || []; options = options || {}; }
