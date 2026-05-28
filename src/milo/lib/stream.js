@@ -581,6 +581,29 @@ Readable.prototype.drop = function(limit) {
   return dest;
 };
 
+Readable.prototype.compose = function(stream) {
+  if (typeof stream === 'function') {
+    const fn = stream;
+    const transform = new Transform({
+      objectMode: true,
+      transform(chunk, enc, cb) { cb(null, chunk); }
+    });
+    this.pipe(transform);
+    const result = fn(transform);
+    if (result && typeof result[Symbol.asyncIterator] === 'function') {
+      return Readable.from(result);
+    }
+    return result;
+  }
+  this.pipe(stream);
+  return stream;
+};
+
+Readable.prototype.asIndexedPairs = function(options) {
+  let index = 0;
+  return this.map((val) => [index++, val], options);
+};
+
 Readable.from = function(iterable, opts) {
   const r = new Readable({ objectMode: true, highWaterMark: 16, ...opts });
   r._read = () => {};

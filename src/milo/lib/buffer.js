@@ -131,17 +131,29 @@ function _hexVal(c) {
   return -1;
 }
 
+function _validateByteLength(byteLength) {
+  if (typeof byteLength !== 'number') throw _ERR_INVALID_ARG_TYPE('byteLength', 'number', byteLength);
+  if (!Number.isFinite(byteLength) && !Number.isNaN(byteLength)) throw _ERR_OUT_OF_RANGE('byteLength', '>= 1 and <= 6', byteLength);
+  if (Number.isNaN(byteLength) || byteLength % 1 !== 0) throw _ERR_OUT_OF_RANGE('byteLength', 'an integer', byteLength);
+  if (byteLength < 1 || byteLength > 6) throw _ERR_OUT_OF_RANGE('byteLength', '>= 1 and <= 6', byteLength);
+}
+
 function _checkOffset(offset, byteLength, bufLength) {
   if (offset === undefined) offset = 0;
   if (typeof offset !== 'number') {
     const e = new TypeError('The "offset" argument must be of type number. Received type ' + typeof offset);
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
+  if (!Number.isFinite(offset) && !Number.isNaN(offset)) {
+    throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${Math.max(0, bufLength - byteLength)}`, offset);
+  }
   if (Number.isNaN(offset) || offset % 1 !== 0) {
-    if (!Number.isFinite(offset)) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${Math.max(0, bufLength - byteLength)}`, offset);
     throw _ERR_OUT_OF_RANGE('offset', 'an integer', offset);
   }
-  if (offset < 0 || offset + byteLength > bufLength) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${Math.max(0, bufLength - byteLength)}`, offset);
+  if (offset < 0 || offset + byteLength > bufLength) {
+    if (bufLength < byteLength) throw _ERR_BUFFER_OUT_OF_BOUNDS();
+    throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${Math.max(0, bufLength - byteLength)}`, offset);
+  }
   return offset;
 }
 
@@ -149,7 +161,10 @@ function _checkWriteOffset(offset, byteLength, bufLength) {
   if (offset === undefined) return 0;
   if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
   if (Number.isNaN(offset) || (Number.isFinite(offset) && offset % 1 !== 0)) { const e = new RangeError(`The value of "offset" is out of range. It must be an integer. Received ${offset}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
-  if (offset < 0 || !Number.isFinite(offset) || offset + byteLength > bufLength) throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${Math.max(0, bufLength - byteLength)}`, offset);
+  if (offset < 0 || !Number.isFinite(offset) || offset + byteLength > bufLength) {
+    if (bufLength < byteLength) throw _ERR_BUFFER_OUT_OF_BOUNDS();
+    throw _ERR_OUT_OF_RANGE('offset', `>= 0 and <= ${Math.max(0, bufLength - byteLength)}`, offset);
+  }
   return offset;
 }
 
@@ -650,21 +665,33 @@ class Buffer extends Uint8Array {
   writeDoubleLE(value, offset) { offset = _checkWriteOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setFloat64(offset, value, true); return offset + 8; }
 
   readUIntBE(offset, byteLength) {
+    _validateByteLength(byteLength);
+    if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
+    offset = _checkOffset(offset, byteLength, this.length);
     let val = 0;
     for (let i = 0; i < byteLength; i++) val = val * 256 + this[offset + i];
     return val;
   }
   readUIntLE(offset, byteLength) {
+    _validateByteLength(byteLength);
+    if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
+    offset = _checkOffset(offset, byteLength, this.length);
     let val = 0; let mul = 1;
     for (let i = 0; i < byteLength; i++) { val += this[offset + i] * mul; mul *= 256; }
     return val;
   }
   readIntBE(offset, byteLength) {
+    _validateByteLength(byteLength);
+    if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
+    offset = _checkOffset(offset, byteLength, this.length);
     let val = this.readUIntBE(offset, byteLength);
     if (val >= Math.pow(2, 8 * byteLength - 1)) val -= Math.pow(2, 8 * byteLength);
     return val;
   }
   readIntLE(offset, byteLength) {
+    _validateByteLength(byteLength);
+    if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
+    offset = _checkOffset(offset, byteLength, this.length);
     let val = this.readUIntLE(offset, byteLength);
     if (val >= Math.pow(2, 8 * byteLength - 1)) val -= Math.pow(2, 8 * byteLength);
     return val;
