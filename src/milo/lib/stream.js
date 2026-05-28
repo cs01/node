@@ -1033,6 +1033,10 @@ Object.getOwnPropertyNames(Writable.prototype).forEach(method => {
 class Transform extends Duplex {
   constructor(opts) {
     super(opts);
+    // Couple readable backpressure to the writable side (Node's algorithm):
+    // hold the write callback until the readable side is read, so a full
+    // readable buffer makes write() return false instead of accepting forever.
+    this._transformState = { transforming: false, writechunk: null, writeencoding: null, writecb: null, needTransform: false };
     if (opts && opts.transform) this._transform = opts.transform;
     if (opts && typeof opts.flush === 'function') this._flush = opts.flush;
     if (opts && typeof opts.final === 'function') this._final = opts.final;
@@ -1048,15 +1052,51 @@ class Transform extends Duplex {
     });
   }
 
-  _read() {}
-
   _transform(chunk, encoding, cb) { throw _ERR_METHOD_NOT_IMPLEMENTED('_transform()'); }
 
+  _afterTransform(err, data) {
+    const ts = this._transformState;
+    ts.transforming = false;
+    const cb = ts.writecb;
+    if (cb === null) {
+      const e = new Error('Callback called multiple times');
+      e.code = 'ERR_MULTIPLE_CALLBACK';
+      this.emit('error', e);
+      return;
+    }
+    ts.writechunk = null;
+    ts.writecb = null;
+    if (data != null) this.push(data);
+    cb(err);
+    const rs = this._readableState;
+    rs.reading = false;
+    if (rs.needReadable || rs.length < rs.highWaterMark) {
+      this._read(rs.highWaterMark);
+    }
+  }
+
+  _read(n) {
+    const ts = this._transformState;
+    if (ts.writechunk !== null && !ts.transforming) {
+      ts.needTransform = false; // consuming the pending chunk; clear the read-demand flag
+      ts.transforming = true;
+      this._transform(ts.writechunk, ts.writeencoding, (err, data) => this._afterTransform(err, data));
+    } else {
+      ts.needTransform = true;
+    }
+  }
+
   _write(chunk, encoding, cb) {
-    this._transform(chunk, encoding, (err, data) => {
-      if (data != null) this.push(data);
-      cb(err);
-    });
+    const ts = this._transformState;
+    ts.writecb = cb;
+    ts.writechunk = chunk;
+    ts.writeencoding = encoding;
+    if (!ts.transforming) {
+      const rs = this._readableState;
+      if (ts.needTransform || rs.needReadable || rs.length < rs.highWaterMark) {
+        this._read(rs.highWaterMark);
+      }
+    }
   }
 }
 
