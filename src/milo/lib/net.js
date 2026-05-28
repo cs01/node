@@ -167,7 +167,6 @@ class Socket extends Duplex {
       try { tcp.pollRemove(fd, EVFILT_WRITE); } catch {}
       tcp.close(fd);
       this._fd = -1;
-      // defer removal from _sockets until 'close' fires so __hasIO keeps loop alive
       if (globalThis.__pendingCloseRef) globalThis.__pendingCloseRef();
       this.once('close', () => { Socket._sockets.delete(fd); if (globalThis.__pendingCloseUnref) globalThis.__pendingCloseUnref(); });
     }
@@ -358,7 +357,6 @@ class Server extends EventEmitter {
       try { tcp.pollRemove(fd, EVFILT_READ); } catch {}
       tcp.close(fd);
       this._fd = -1;
-      // defer removal so __hasIO keeps loop alive until 'close' fires
       if (globalThis.__pendingCloseRef) globalThis.__pendingCloseRef();
       this.once('close', () => { Server._servers.delete(fd); if (globalThis.__pendingCloseUnref) globalThis.__pendingCloseUnref(); });
     }

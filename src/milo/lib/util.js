@@ -246,15 +246,24 @@ function deprecate(fn, msg, code) {
   return wrapped;
 }
 
+const _promisifyCache = new WeakMap();
 function promisify(fn) {
   if (typeof fn !== 'function') { const e = new TypeError('The "original" argument must be of type Function'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
-  if (fn[promisify.custom]) return fn[promisify.custom];
+  if (fn[promisify.custom]) {
+    const custom = fn[promisify.custom];
+    if (typeof custom !== 'function') { const e = new TypeError('The "util.promisify.custom" argument must be of type Function'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    Object.defineProperty(custom, promisify.custom, { value: custom, enumerable: false, configurable: true, writable: true });
+    return custom;
+  }
+  if (_promisifyCache.has(fn)) return _promisifyCache.get(fn);
   const promisified = function(...args) {
     return new Promise((resolve, reject) => {
       fn.call(this, ...args, (err, ...vals) => err ? reject(err) : resolve(vals.length > 1 ? vals : vals[0]));
     });
   };
   Object.defineProperty(promisified, 'name', { value: fn.name });
+  Object.defineProperty(promisified, promisify.custom, { value: promisified, enumerable: false });
+  _promisifyCache.set(fn, promisified);
   return promisified;
 }
 promisify.custom = Symbol.for('nodejs.util.promisify.custom');

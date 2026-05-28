@@ -213,7 +213,47 @@ const win32 = {
   },
   isAbsolute(p) { validateString(p, 'path'); return p.length > 0 && (p.charCodeAt(0) === 47 || p.charCodeAt(0) === 92 || /^[a-zA-Z]:[\\/]/.test(p)); },
   join(...args) { if (args.length === 0) return '.'; for (const a of args) validateString(a, 'path'); const joined = args.filter(a => a !== '').map(a => a.replace(/\\/g, '/')).join('/'); if (!joined) return '.'; return normalize(joined).replace(/\//g, '\\'); },
-  dirname(p) { validateString(p, 'path'); const n = p.replace(/\\/g, '/'); const d = dirname(n); return d.replace(/\//g, '\\'); },
+  dirname(p) {
+    validateString(p, 'path');
+    if (p.length === 0) return '.';
+    const BSLASH = 92, FSLASH = 47, COLON = 58;
+    const isSep = c => c === BSLASH || c === FSLASH;
+    let rootEnd = -1, offset = 0;
+    const code = p.charCodeAt(0);
+    if (p.length === 1) return isSep(code) ? p : '.';
+    // UNC path \\server\share
+    if (isSep(code)) {
+      rootEnd = offset = 1;
+      if (isSep(p.charCodeAt(1))) {
+        let j = 2, last = j;
+        while (j < p.length && !isSep(p.charCodeAt(j))) j++;
+        if (j < p.length && j !== last) {
+          last = j;
+          while (j < p.length && isSep(p.charCodeAt(j))) j++;
+          if (j < p.length && j !== last) {
+            last = j;
+            while (j < p.length && !isSep(p.charCodeAt(j))) j++;
+            if (j === p.length) return p;
+            if (j !== last) rootEnd = offset = j + 1;
+          }
+        }
+      }
+    } else if (p.charCodeAt(1) === COLON && ((code >= 65 && code <= 90) || (code >= 97 && code <= 122))) {
+      // drive letter e.g. C:
+      rootEnd = offset = 2;
+      if (p.length > 2 && isSep(p.charCodeAt(2))) rootEnd = offset = 3;
+    }
+    let end = -1, matchedSlash = true;
+    for (let i = p.length - 1; i >= offset; i--) {
+      if (isSep(p.charCodeAt(i))) { if (!matchedSlash) { end = i; break; } }
+      else matchedSlash = false;
+    }
+    if (end === -1) {
+      if (rootEnd === -1) return '.';
+      end = rootEnd;
+    }
+    return p.slice(0, end);
+  },
   basename(p, ext) {
     validateString(p, 'path');
     if (ext !== undefined) validateString(ext, 'ext');

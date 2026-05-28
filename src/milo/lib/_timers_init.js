@@ -19,8 +19,8 @@ class Timeout {
     _tb.clear(this._id);
     _timerCallbacks.delete(this._id);
     const wrapped = this._repeat
-      ? () => this._fn(...this._args)
-      : () => { _timerCallbacks.delete(this._id); this._fn(...this._args); };
+      ? () => _safeCall(this._fn, this._args, this)
+      : () => { _timerCallbacks.delete(this._id); _safeCall(this._fn, this._args, this); };
     this._id = _tb.schedule(wrapped, Math.max(0, this._delay || 0), this._repeat ? 1 : 0);
     _timerCallbacks.set(this._id, wrapped);
     return this;
@@ -33,8 +33,8 @@ class Timeout {
   [Symbol.dispose]() { globalThis.clearTimeout(this); }
 }
 
-function _safeCall(fn, args) {
-  try { fn(...args); }
+function _safeCall(fn, args, thisArg) {
+  try { fn.call(thisArg, ...args); }
   catch (e) {
     const handlers = process.listeners && process.listeners('uncaughtException');
     if (handlers && handlers.length > 0) process.emit('uncaughtException', e);
@@ -69,7 +69,7 @@ globalThis.setTimeout = function setTimeout(fn, delay, ...args) {
   _validateTimerCb(fn);
   _warnTimerDelay(delay);
   const t = new Timeout(0, fn, delay, args, false);
-  const wrapped = () => { _timerCallbacks.delete(t._id); t._destroyed = true; _safeCall(fn, args); };
+  const wrapped = () => { _timerCallbacks.delete(t._id); t._destroyed = true; _safeCall(fn, args, t); };
   t._id = _tb.schedule(wrapped, Math.max(0, delay || 0), 0);
   _timerCallbacks.set(t._id, wrapped);
   return t;
@@ -87,7 +87,7 @@ globalThis.setInterval = function setInterval(fn, delay, ...args) {
   _validateTimerCb(fn);
   _warnTimerDelay(delay);
   const t = new Timeout(0, fn, delay, args, true);
-  const wrapped = () => _safeCall(fn, args);
+  const wrapped = () => _safeCall(fn, args, t);
   t._id = _tb.schedule(wrapped, Math.max(0, delay || 0), 1);
   _timerCallbacks.set(t._id, wrapped);
   return t;
@@ -110,8 +110,9 @@ globalThis.setImmediate = function setImmediate(fn, ...args) {
   _validateTimerCb(fn);
   const id = ++_immediateId;
   _activeImmediates.add(id);
-  _immediateQueue.push({ id, fn, args });
-  return new Timeout(id, fn, 0, args, false);
+  const t = new Timeout(id, fn, 0, args, false);
+  _immediateQueue.push({ id, fn, args, timeout: t });
+  return t;
 };
 globalThis.clearImmediate = function clearImmediate(t) {
   const id = t && typeof t === 'object' ? t._id : t;
@@ -123,7 +124,7 @@ function _drainImmediates() {
   for (const item of batch) {
     if (_activeImmediates.has(item.id)) {
       _activeImmediates.delete(item.id);
-      _safeCall(item.fn, item.args);
+      _safeCall(item.fn, item.args, item.timeout);
     }
   }
 }

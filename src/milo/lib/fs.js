@@ -134,10 +134,13 @@ function readFileSync(path, opts) {
   return Buffer.from(r);
 }
 
-function _fsError(code, syscall, path, msg) {
+function _fsError(code, syscall, path, msg, dest) {
   const pathStr = path != null ? ` '${path}'` : '';
-  const e = new Error(`${code}: ${msg}, ${syscall}${pathStr}`);
-  e.code = code; e.syscall = syscall; if (path != null) e.path = String(path);
+  const destStr = dest != null ? ` -> '${dest}'` : '';
+  const e = new Error(`${code}: ${msg}, ${syscall}${pathStr}${destStr}`);
+  e.code = code; e.syscall = syscall;
+  if (path != null) e.path = String(path);
+  if (dest != null) e.dest = String(dest);
   return e;
 }
 
@@ -384,6 +387,13 @@ function stringToFlags(flags) {
 
 function openSync(path, flags, mode) {
   _validatePath(path, 'path');
+  if (mode != null && typeof mode === 'string') {
+    const e = new TypeError(`The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '${mode}'`);
+    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+  }
+  if (mode != null && typeof mode !== 'number' && typeof mode !== 'undefined') {
+    throw _ERR_INVALID_ARG_TYPE('mode', 'integer', mode);
+  }
   const sp = _toPath(path);
   const f = typeof flags === 'string' ? (FLAG_MAP[flags] ?? 0) : (flags || 0);
   const fd = b.open(sp, f, mode || 0o666);
@@ -594,9 +604,14 @@ function accessSync(path, mode) {
   if (!existsSync(sp)) throw _fsError('ENOENT', 'access', sp, 'no such file or directory');
 }
 
-function copyFileSync(src, dest) {
+function copyFileSync(src, dest, mode) {
   _validatePath(src, 'src');
   _validatePath(dest, 'dest');
+  if (mode != null && typeof mode !== 'number') throw _ERR_INVALID_ARG_TYPE('mode', 'integer', mode);
+  const COPYFILE_EXCL = 1;
+  if ((mode & COPYFILE_EXCL) && existsSync(dest)) {
+    throw _fsError('EEXIST', 'copyfile', _toPath(src), 'file already exists', _toPath(dest));
+  }
   const data = readFileSync(src);
   writeFileSync(dest, data);
 }
@@ -781,7 +796,7 @@ function copyFile(src, dest, flags, cb) {
   if (typeof flags === 'function') { cb = flags; flags = 0; }
   _validatePath(src, 'src');
   _validatePath(dest, 'dest');
-  _validateCb(cb); _async(copyFileSync, [src, dest], (err) => cb(err));
+  _validateCb(cb); _async(copyFileSync, [src, dest, flags], (err) => cb(err));
 }
 function realpath(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
@@ -841,8 +856,16 @@ function fchmod(fd, mode, cb) { _validateFd(fd); mode = _validateMode(mode, 'mod
 
 function open(path, flags, mode, cb) {
   if (typeof flags === 'function') { cb = flags; flags = 'r'; mode = 0o666; }
-  if (typeof mode === 'function') { cb = mode; mode = 0o666; }
+  else if (typeof mode === 'function') { cb = mode; mode = 0o666; }
   _validatePath(path, 'path');
+  if (mode != null && typeof mode === 'string') {
+    const e = new TypeError(`The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '${mode}'`);
+    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+  }
+  if (mode != null && typeof mode !== 'number') {
+    throw _ERR_INVALID_ARG_TYPE('mode', 'integer', mode);
+  }
+  _validateCb(cb);
   _async(openSync, [path, flags, mode], cb);
 }
 
@@ -965,12 +988,33 @@ function symlink(target, path, type, cb) {
 }
 function write(fd, buffer, offset, length, position, cb) {
   _validateFd(fd);
+  if (typeof buffer === 'string') {
+    if (typeof offset === 'function') { cb = offset; offset = undefined; }
+    else if (typeof length === 'function') { cb = length; length = undefined; }
+    _validateCb(cb);
+    const n = writeSync(fd, buffer, offset, length);
+    process.nextTick(() => cb(null, n, buffer));
+    return;
+  }
   if (offset != null && typeof offset === 'object') {
     cb = length; ({ offset = 0, length = buffer.length - offset, position = null } = offset);
   }
   if (typeof offset === 'function') { cb = offset; offset = 0; length = buffer.length; position = null; }
-  if (typeof length === 'function') { cb = length; length = buffer.length - offset; position = null; }
+  if (typeof length === 'function') { cb = length; length = buffer.length - (offset || 0); position = null; }
   if (typeof position === 'function') { cb = position; position = null; }
+  _validateCb(cb);
+  if (offset != null && (typeof offset !== 'number' || Number.isNaN(offset) || !Number.isInteger(offset))) {
+    const e = new RangeError(`The value of "offset" is out of range. It must be an integer. Received ${typeof offset === 'number' ? offset : typeof offset}`);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
+  if (offset != null && offset < 0) {
+    const e = new RangeError(`The value of "offset" is out of range. It must be >= 0. Received ${offset}`);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
+  if (length != null && length < 0) {
+    const e = new RangeError(`The value of "length" is out of range. It must be >= 0. Received ${length}`);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
   try {
     const n = writeSync(fd, buffer, offset, length, position);
     process.nextTick(() => cb(null, n, buffer));
@@ -1146,7 +1190,7 @@ const promises = {
   link: _promisify((existing, newPath) => linkSync(existing, newPath)),
   rename: _promisify((o, n) => renameSync(o, n)),
   chmod: _promisify((p, m) => chmodSync(p, m)),
-  copyFile: _promisify((src, dst) => copyFileSync(src, dst)),
+  copyFile: _promisify((src, dst, mode) => copyFileSync(src, dst, mode)),
   mkdtemp: _promisify((prefix) => mkdtempSync(prefix)),
   readlink: _promisify((p) => readlinkSync(p)),
   realpath: _promisify((p) => realpathSync(p)),
@@ -1164,21 +1208,23 @@ const promises = {
   lutimes: (p, atime, mtime) => { try { _validatePath(p, 'path'); } catch(e) { return Promise.reject(e); } return Promise.resolve(); },
   utimes: (p, atime, mtime) => { try { _validatePath(p, 'path'); } catch(e) { return Promise.reject(e); } return Promise.resolve(); },
   open: (p, flags, mode) => {
-    const fd = openSync(p, flags || 'r', mode);
-    const handle = {
-      fd,
-      close() { closeSync(fd); return Promise.resolve(); },
-      read(buf, off, len, pos) { return Promise.resolve({ bytesRead: readSync(fd, buf, off, len, pos), buffer: buf }); },
-      write(buf, off, len, pos) { return Promise.resolve({ bytesWritten: writeSync(fd, buf, off, len, pos), buffer: buf }); },
-      stat() { return Promise.resolve(fstatSync(fd)); },
-      readFile(opts) { return Promise.resolve(readFileSync('/dev/fd/' + fd, opts)); },
-      writeFile(data) { writeSync(fd, data); return Promise.resolve(); },
-      chmod(m) { fchmodSync(fd, m); return Promise.resolve(); },
-      datasync() { fdatasyncSync(fd); return Promise.resolve(); },
-      sync() { fsyncSync(fd); return Promise.resolve(); },
-      truncate(len) { ftruncateSync(fd, len); return Promise.resolve(); },
-    };
-    return Promise.resolve(handle);
+    try {
+      const fd = openSync(p, flags || 'r', mode);
+      const handle = {
+        fd,
+        close() { closeSync(fd); return Promise.resolve(); },
+        read(buf, off, len, pos) { return Promise.resolve({ bytesRead: readSync(fd, buf, off, len, pos), buffer: buf }); },
+        write(buf, off, len, pos) { return Promise.resolve({ bytesWritten: writeSync(fd, buf, off, len, pos), buffer: buf }); },
+        stat() { return Promise.resolve(fstatSync(fd)); },
+        readFile(opts) { return Promise.resolve(readFileSync('/dev/fd/' + fd, opts)); },
+        writeFile(data) { writeSync(fd, data); return Promise.resolve(); },
+        chmod(m) { fchmodSync(fd, m); return Promise.resolve(); },
+        datasync() { fdatasyncSync(fd); return Promise.resolve(); },
+        sync() { fsyncSync(fd); return Promise.resolve(); },
+        truncate(len) { ftruncateSync(fd, len); return Promise.resolve(); },
+      };
+      return Promise.resolve(handle);
+    } catch (e) { return Promise.reject(e); }
   },
   get constants() { return internalBinding('constants').fs; },
 };
