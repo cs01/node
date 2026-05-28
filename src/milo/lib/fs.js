@@ -189,6 +189,10 @@ function appendFileSync(path, data, options) {
 }
 
 function Stats(dev, mode, nlink, uid, gid, rdev, blksize, ino, size, blocks, atimeMs, mtimeMs, ctimeMs, birthtimeMs) {
+  if (!new.target) {
+    process.emitWarning('fs.Stats constructor is deprecated.', 'DeprecationWarning', 'DEP0180');
+    return new Stats(dev, mode, nlink, uid, gid, rdev, blksize, ino, size, blocks, atimeMs, mtimeMs, ctimeMs, birthtimeMs);
+  }
   this.dev = dev || 0; this.mode = mode || 0; this.nlink = nlink || 0;
   this.uid = uid || 0; this.gid = gid || 0; this.rdev = rdev || 0;
   this.blksize = blksize || 4096; this.ino = ino || 0; this.size = size || 0;
@@ -230,8 +234,15 @@ function statSync(path, options) {
   return _wrapStats(s);
 }
 
+let _existsSyncDepWarn = true;
 function existsSync(path) {
-  // null bytes in path means file can't exist
+  if (typeof path !== 'string' && !Buffer.isBuffer(path) && !(path instanceof URL)) {
+    if (_existsSyncDepWarn) {
+      process.emitWarning('Passing invalid argument types to fs.existsSync is deprecated', 'DeprecationWarning', 'DEP0187');
+      _existsSyncDepWarn = false;
+    }
+    return false;
+  }
   if (typeof path === 'string' && path.indexOf('\0') !== -1) return false;
   try { return !!b.exists(_toPath(path)); } catch { return false; }
 }

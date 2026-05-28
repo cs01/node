@@ -508,15 +508,21 @@ extern "C" v8c_value v8c_external(v8c_isolate* iso, void* data) {
 
 extern "C" int v8c_to_int32(v8c_isolate* iso, v8c_value val, int32_t* out) {
     auto local = unwrap(ISO(iso), val);
-    if (local.IsEmpty() || !local->IsInt32()) return -1;
-    *out = local.As<v8::Int32>()->Value();
+    if (local.IsEmpty() || !local->IsNumber()) return -1;
+    auto ctx = ISO(iso)->GetCurrentContext();
+    v8::Maybe<int32_t> maybe = local->Int32Value(ctx);
+    if (maybe.IsNothing()) return -1;
+    *out = maybe.FromJust();
     return 0;
 }
 
 extern "C" int v8c_to_uint32(v8c_isolate* iso, v8c_value val, uint32_t* out) {
     auto local = unwrap(ISO(iso), val);
-    if (local.IsEmpty() || !local->IsUint32()) return -1;
-    *out = local.As<v8::Uint32>()->Value();
+    if (local.IsEmpty() || !local->IsNumber()) return -1;
+    auto ctx = ISO(iso)->GetCurrentContext();
+    v8::Maybe<uint32_t> maybe = local->Uint32Value(ctx);
+    if (maybe.IsNothing()) return -1;
+    *out = maybe.FromJust();
     return 0;
 }
 
