@@ -246,15 +246,36 @@ promisify.custom = Symbol.for('nodejs.util.promisify.custom');
 
 function callbackify(fn) {
   if (typeof fn !== 'function') {
-    const e = new TypeError('The "original" argument must be of type function. Received ' + (fn === null ? 'null' : typeof fn));
+    let received;
+    if (fn === null) received = 'null';
+    else if (fn === undefined) received = 'undefined';
+    else if (typeof fn === 'string') received = "type string ('" + fn + "')";
+    else if (typeof fn === 'number') received = 'type number (' + fn + ')';
+    else if (typeof fn === 'boolean') received = 'type boolean (' + fn + ')';
+    else if (typeof fn === 'symbol') received = 'type symbol (' + fn.toString() + ')';
+    else if (typeof fn === 'object') received = 'an instance of ' + (fn.constructor ? fn.constructor.name : 'Object');
+    else received = 'type ' + typeof fn;
+    const e = new TypeError('The "original" argument must be of type function. Received ' + received);
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
   const callbackified = function(...args) {
     const cb = args.pop();
-    if (typeof cb !== 'function') throw new TypeError('The last argument must be of type function');
-    fn(...args).then(
-      (r) => process.nextTick(cb, null, r),
-      (e) => { if (!e) { const wrapped = new Error('Promise was rejected with falsy value'); wrapped.reason = e; wrapped.code = 'ERR_FALSY_VALUE_REJECTION'; e = wrapped; } process.nextTick(cb, e); }
+    if (typeof cb !== 'function') {
+      let _rcv;
+      if (cb === null) _rcv = 'null';
+      else if (cb === undefined) _rcv = 'undefined';
+      else if (typeof cb === 'string') _rcv = "type string ('" + cb + "')";
+      else if (typeof cb === 'number') _rcv = 'type number (' + cb + ')';
+      else if (typeof cb === 'boolean') _rcv = 'type boolean (' + cb + ')';
+      else if (typeof cb === 'symbol') _rcv = 'type symbol (' + cb.toString() + ')';
+      else if (typeof cb === 'object') _rcv = 'an instance of ' + (cb.constructor ? cb.constructor.name : 'Object');
+      else _rcv = 'type ' + typeof cb;
+      const _e = new TypeError('The last argument must be of type function. Received ' + _rcv);
+      _e.code = 'ERR_INVALID_ARG_TYPE'; throw _e;
+    }
+    fn.apply(this, args).then(
+      (r) => process.nextTick(cb.bind(this), null, r),
+      (e) => { if (!e) { const wrapped = new Error('Promise was rejected with falsy value'); wrapped.reason = e; wrapped.code = 'ERR_FALSY_VALUE_REJECTION'; e = wrapped; } process.nextTick(cb.bind(this), e); }
     );
   };
   Object.defineProperty(callbackified, 'length', { value: fn.length + 1 });
