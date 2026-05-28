@@ -652,6 +652,8 @@ class Writable extends Stream {
     }
   }
 
+  pipe() { this.emit('error', new Error('Cannot pipe, not readable')); }
+
   _write(chunk, encoding, cb) { cb(_ERR_METHOD_NOT_IMPLEMENTED('_write()')); }
 
   write(chunk, encoding, cb) {
@@ -945,7 +947,7 @@ class Duplex extends Readable {
   }
 }
 Object.getOwnPropertyNames(Writable.prototype).forEach(method => {
-  if (method === 'constructor' || method === 'destroyed' || method === 'destroy') return;
+  if (method === 'constructor' || method === 'destroyed' || method === 'destroy' || method === 'pipe') return;
   if (!Object.getOwnPropertyDescriptor(Duplex.prototype, method)) {
     const desc = Object.getOwnPropertyDescriptor(Writable.prototype, method);
     if (desc) Object.defineProperty(Duplex.prototype, method, desc);

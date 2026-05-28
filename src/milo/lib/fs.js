@@ -580,7 +580,12 @@ function createReadStream(path, opts) {
   });
   rs.path = path;
   rs.fd = fd;
+  rs.close = function(cb) { rs.destroy(); if (cb) process.nextTick(cb); };
+  if (opts && opts.start != null) rs.start = opts.start;
+  if (opts && opts.end != null) rs.end = opts.end;
+  Object.defineProperty(rs, 'pending', { get() { return false; } });
   process.nextTick(() => rs.emit('open', fd));
+  process.nextTick(() => rs.emit('ready'));
   return rs;
 }
 
@@ -601,16 +606,26 @@ function createWriteStream(path, opts) {
     closeSync(fd);
     if (globalThis.__unref) globalThis.__unref();
   }
+  let bytesWritten = 0;
   const ws = new Writable({
     write(chunk, encoding, cb) {
-      try { writeSync(fd, chunk); cb(); } catch (e) { cb(e); }
+      try {
+        if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
+        const n = writeSync(fd, chunk);
+        bytesWritten += n;
+        cb();
+      } catch (e) { cb(e); }
     },
     final(cb) { closeStream(); cb(); },
     destroy(_err, cb) { closeStream(); cb(_err); },
   });
   ws.path = path;
   ws.fd = fd;
+  ws.close = function(cb) { ws.destroy(); if (cb) process.nextTick(cb); };
+  Object.defineProperty(ws, 'bytesWritten', { get() { return bytesWritten; } });
+  Object.defineProperty(ws, 'pending', { get() { return false; } });
   process.nextTick(() => ws.emit('open', fd));
+  process.nextTick(() => ws.emit('ready'));
   return ws;
 }
 
@@ -771,20 +786,50 @@ function close(fd, cb) {
 }
 
 function read(fd, buffer, offset, length, position, cb) {
-  if (typeof position === 'function') { cb = position; position = null; }
   _validateFd(fd);
-  // options object form: read(fd, {buffer, offset, length, position}, cb)
-  if (buffer != null && typeof buffer === 'object' && !Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
-    if (typeof offset === 'function') { cb = offset; }
-    const opts = buffer;
-    buffer = opts.buffer;
-    offset = opts.offset || 0;
-    length = opts.length;
-    position = opts.position || null;
+  // read(fd, cb) — no buffer, allocate default
+  if (typeof buffer === 'function') {
+    cb = buffer;
+    buffer = Buffer.alloc(16384);
+    offset = 0;
+    length = buffer.length;
+    position = null;
+  } else if (typeof offset === 'function') {
+    cb = offset;
+    // read(fd, options, cb)
+    if (buffer != null && typeof buffer === 'object' && !Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
+      const opts = buffer;
+      buffer = opts.buffer || Buffer.alloc(16384);
+      offset = opts.offset || 0;
+      length = opts.length != null ? opts.length : buffer.length;
+      position = opts.position != null ? opts.position : null;
+    } else {
+      offset = 0;
+      length = buffer ? buffer.length : 0;
+      position = null;
+    }
+  } else if (typeof length === 'function') {
+    cb = length;
+    length = buffer ? buffer.length - (offset || 0) : 0;
+    position = null;
+  } else if (typeof position === 'function') {
+    cb = position;
+    position = null;
+  } else {
+    // read(fd, buffer, options, cb) or read(fd, buffer, offset, length, position, cb)
+    if (offset != null && typeof offset === 'object' && !Buffer.isBuffer(offset)) {
+      cb = length;
+      const opts = offset;
+      offset = opts.offset || 0;
+      length = opts.length != null ? opts.length : buffer.length;
+      position = opts.position != null ? opts.position : null;
+    }
   }
   if (typeof cb !== 'function') throw _ERR_INVALID_ARG_TYPE('cb', 'function', cb);
   if (!Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
-    throw _ERR_INVALID_ARG_TYPE('buffer', 'Buffer, TypedArray, or DataView', buffer);
+    buffer = Buffer.alloc(16384);
+    offset = 0;
+    length = buffer.length;
   }
   try {
     const n = readSync(fd, buffer, offset, length, position);
@@ -1035,10 +1080,16 @@ const promises = {
   get constants() { return internalBinding('constants').fs; },
 };
 
-function _validateUid(uid) { if (typeof uid !== 'number' || uid !== (uid | 0)) throw _ERR_INVALID_ARG_TYPE('uid', 'integer', uid); }
-function _validateGid(gid) { if (typeof gid !== 'number' || gid !== (gid | 0)) throw _ERR_INVALID_ARG_TYPE('gid', 'integer', gid); }
-function fchown(fd, uid, gid, cb) { _validateUid(uid); _validateGid(gid); const _f = internalBinding('fs'); if (_f.fchown) _f.fchown(fd, uid, gid); if (cb) process.nextTick(cb, null); }
-function fchownSync(fd, uid, gid) { _validateUid(uid); _validateGid(gid); const _f = internalBinding('fs'); if (_f.fchown) _f.fchown(fd, uid, gid); }
+function _validateUid(uid) {
+  if (typeof uid !== 'number') throw _ERR_INVALID_ARG_TYPE('uid', 'integer', uid);
+  if (!Number.isInteger(uid)) { const e = new RangeError(`The value of "uid" is out of range. It must be an integer. Received ${uid}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+}
+function _validateGid(gid) {
+  if (typeof gid !== 'number') throw _ERR_INVALID_ARG_TYPE('gid', 'integer', gid);
+  if (!Number.isInteger(gid)) { const e = new RangeError(`The value of "gid" is out of range. It must be an integer. Received ${gid}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+}
+function fchown(fd, uid, gid, cb) { _validateFd(fd); _validateUid(uid); _validateGid(gid); _validateCb(cb); const _f = internalBinding('fs'); if (_f.fchown) _f.fchown(fd, uid, gid); process.nextTick(cb, null); }
+function fchownSync(fd, uid, gid) { _validateFd(fd); _validateUid(uid); _validateGid(gid); const _f = internalBinding('fs'); if (_f.fchown) _f.fchown(fd, uid, gid); }
 function chown(p, uid, gid, cb) { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); const sp = _toPath(p); const _f = internalBinding('fs'); if (_f.chown) _f.chown(sp, uid, gid); if (cb) process.nextTick(cb, null); }
 function lchown(p, uid, gid, cb) { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); const sp = _toPath(p); const _f = internalBinding('fs'); if (_f.lchown) _f.lchown(sp, uid, gid); else if (_f.chown) _f.chown(sp, uid, gid); if (cb) process.nextTick(cb, null); }
 function utimes(p, atime, mtime, cb) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); _f.utimes(sp, Math.floor(atime), Math.floor(mtime)); if (cb) process.nextTick(cb, null); }

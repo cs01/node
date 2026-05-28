@@ -47,6 +47,25 @@ EventEmitter.prototype.emit = function(type) {
   if (!handlers || handlers.length === 0) {
     if (type === 'error') {
       const err = arguments[1];
+      if (this.domain) {
+        let er;
+        if (!err) {
+          er = new Error('Unhandled error.' + (err !== undefined ? ` (${err})` : ''));
+          er.domainEmitter = this;
+          er.domainThrown = false;
+          er.domain = this.domain;
+          er.context = err;
+        } else {
+          er = err;
+          if (typeof er === 'object') {
+            er.domainEmitter = this;
+            er.domainThrown = false;
+            er.domain = this.domain;
+          }
+        }
+        this.domain.emit('error', er);
+        return false;
+      }
       if (err instanceof Error) throw err;
       let detail;
       if (err !== undefined) {
