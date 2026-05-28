@@ -628,7 +628,78 @@ function fork(modulePath, args, options) {
   return child;
 }
 
+// Matches test/common's invalidArgTypeHelper so thrown messages line up exactly.
+function _invalidArgTypeHelper(input) {
+  if (input == null) return ` Received ${input}`;
+  if (typeof input === 'function') return ` Received function ${input.name}`;
+  const { inspect } = require('util');
+  if (typeof input === 'object') {
+    if (input.constructor && input.constructor.name) return ` Received an instance of ${input.constructor.name}`;
+    return ` Received ${inspect(input, { depth: -1 })}`;
+  }
+  let inspected = inspect(input, { colors: false });
+  if (inspected.length > 28) inspected = `${inspected.slice(0, 25)}...`;
+  return ` Received type ${typeof input} (${inspected})`;
+}
+
+// Low-level ChildProcess class (public API surface). spawn()/fork() above are
+// the high-level factories; this exposes the constructor + validating .spawn().
+class ChildProcess extends EventEmitter {
+  constructor() {
+    super();
+    this.pid = undefined;
+    this.killed = false;
+    this.exitCode = null;
+    this.signalCode = null;
+    this.spawnfile = undefined;
+    this.spawnargs = undefined;
+    this.stdin = null; this.stdout = null; this.stderr = null;
+    this.stdio = [null, null, null];
+    this.connected = false;
+  }
+
+  // Validation order (options → envPairs → file → args) matches Node: the
+  // envPairs check must precede file so an absent file doesn't mask it.
+  spawn(options) {
+    if (options === null || typeof options !== 'object') {
+      const e = new TypeError(`The "options" argument must be of type object.${_invalidArgTypeHelper(options)}`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (options.envPairs !== undefined && !Array.isArray(options.envPairs)) {
+      const e = new TypeError(`The "options.envPairs" property must be an instance of Array.${_invalidArgTypeHelper(options.envPairs)}`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (typeof options.file !== 'string') {
+      const e = new TypeError(`The "options.file" property must be of type string.${_invalidArgTypeHelper(options.file)}`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (options.args !== undefined && !Array.isArray(options.args)) {
+      const e = new TypeError(`The "options.args" property must be an instance of Array.${_invalidArgTypeHelper(options.args)}`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    this.spawnfile = options.file;
+    const args = options.args || [];
+    this.spawnargs = args;
+    const [stdinMode, stdoutMode, stderrMode] = parseStdio({ stdio: options.stdio });
+    const result = b.spawnAsync(options.file, args, stdinMode, stdoutMode, stderrMode);
+    this.pid = (result && result !== -1) ? result.pid : 0;
+    return this;
+  }
+
+  kill(signal) {
+    if (this.killed) return false;
+    if (typeof signal === 'string' && !Object.prototype.hasOwnProperty.call(_SIGNAL_NUM, signal)) {
+      const e = new TypeError(`Unknown signal: ${signal}`); e.code = 'ERR_UNKNOWN_SIGNAL'; throw e;
+    }
+    const sig = _signalToNum(signal);
+    if (this.pid > 0) b.killPid(this.pid, sig);
+    this.killed = true;
+    return true;
+  }
+}
+
 module.exports = {
+  ChildProcess,
   spawnSync,
   execSync,
   execFileSync,
