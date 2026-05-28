@@ -112,11 +112,26 @@ function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
     return 'Set(' + obj.size + ') { ' + items.join(', ') + ' }';
   }
 
-  if (currentDepth >= maxDepth) return '[Object]';
+  // Compute tag prefix for non-plain objects
+  let prefix = '';
+  const proto = Object.getPrototypeOf(obj);
+  const isNullProto = proto === null || (proto !== null && Object.getPrototypeOf(proto) === null && !proto.hasOwnProperty);
+  if (isNullProto) {
+    const ctorName = obj.constructor && obj.constructor.name;
+    prefix = ctorName ? `[${ctorName}: null prototype] ` : '[Object: null prototype] ';
+  } else if (obj.constructor && obj.constructor.name && obj.constructor.name !== 'Object') {
+    prefix = obj.constructor.name + ' ';
+  }
+
+  if (currentDepth >= maxDepth) return prefix ? `[${prefix.trim()}]` : '[Object]';
   const keys = Object.keys(obj);
-  if (keys.length === 0) return '{}';
+  const symKeys = Object.getOwnPropertySymbols(obj);
+  if (keys.length === 0 && symKeys.length === 0) return prefix + '{}';
   const pairs = keys.map(k => k + ': ' + _inspectValue(obj[k], maxDepth, currentDepth + 1, seen, colors));
-  return '{ ' + pairs.join(', ') + ' }';
+  for (const s of symKeys) {
+    pairs.push('[' + s.toString() + ']: ' + _inspectValue(obj[s], maxDepth, currentDepth + 1, seen, colors));
+  }
+  return prefix + '{ ' + pairs.join(', ') + ' }';
 }
 
 function _inspectValue(val, maxDepth, currentDepth, seen, colors) {

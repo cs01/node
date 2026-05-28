@@ -520,7 +520,7 @@ class Buffer extends Uint8Array {
 
   toJSON() { return { type: 'Buffer', data: Array.from(this) }; }
   equals(other) {
-    if (!(other instanceof Uint8Array)) { const e = new TypeError('The "otherBuffer" argument must be an instance of Buffer or Uint8Array. Received type ' + typeof other); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (!(other instanceof Uint8Array)) { const v = typeof other === 'string' ? "('" + other + "')" : '(' + String(other) + ')'; const e = new TypeError('The "otherBuffer" argument must be an instance of Buffer or Uint8Array. Received type ' + typeof other + ' ' + v); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
     if (this.length !== other.length) return false;
     if (_nativeCompare) return _nativeCompare(this, other) === 0;
     return Buffer.compare(this, other) === 0;

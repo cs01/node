@@ -104,8 +104,19 @@ module.exports = {
     if (d.length > 1 && d.endsWith('/')) d = d.slice(0, -1);
     return d;
   }),
-  setPriority: (pid, priority) => { if (priority === undefined) { priority = pid; pid = 0; } return b.setPriority(pid, priority); },
-  getPriority: (pid) => b.getPriority(pid || 0),
+  setPriority: (pid, priority) => {
+    if (priority === undefined) { priority = pid; pid = 0; }
+    if (typeof pid !== 'number') { const e = new TypeError('The "pid" argument must be of type number. Received type ' + typeof pid); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (!Number.isInteger(pid) || pid < 0 || pid > 0xFFFFFFFF) { const e = new RangeError('The value of "pid" is out of range. It must be >= 0 && <= 4294967295. Received ' + pid); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    if (typeof priority !== 'number') { const e = new TypeError('The "priority" argument must be of type number. Received type ' + typeof priority); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (!Number.isInteger(priority) || priority < -20 || priority > 19) { const e = new RangeError('The value of "priority" is out of range. It must be >= -20 && <= 19. Received ' + priority); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    return b.setPriority(pid, priority);
+  },
+  getPriority: (pid) => {
+    if (pid !== undefined && typeof pid !== 'number') { const e = new TypeError('The "pid" argument must be of type number. Received type ' + typeof pid); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (pid !== undefined && (!Number.isInteger(pid) || pid < 0 || pid > 0xFFFFFFFF)) { const e = new RangeError('The value of "pid" is out of range. It must be >= 0 && <= 4294967295. Received ' + pid); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    return b.getPriority(pid || 0);
+  },
   devNull: '/dev/null',
   constants,
 };

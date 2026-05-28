@@ -50,7 +50,8 @@ class Channel {
   }
 
   publish(message) {
-    for (const fn of this._subscribers) fn(message, this.name);
+    const subs = this._subscribers.slice();
+    for (const fn of subs) fn(message, this.name);
   }
 }
 
@@ -73,12 +74,31 @@ function subscribe(name, fn) { channel(name).subscribe(fn); }
 function unsubscribe(name, fn) { return channel(name).unsubscribe(fn); }
 
 class TracingChannel {
-  constructor(name) {
-    this.start = channel(`tracing:${name}:start`);
-    this.end = channel(`tracing:${name}:end`);
-    this.asyncStart = channel(`tracing:${name}:asyncStart`);
-    this.asyncEnd = channel(`tracing:${name}:asyncEnd`);
-    this.error = channel(`tracing:${name}:error`);
+  constructor(nameOrChannels) {
+    if (typeof nameOrChannels === 'string') {
+      this.start = channel(`tracing:${nameOrChannels}:start`);
+      this.end = channel(`tracing:${nameOrChannels}:end`);
+      this.asyncStart = channel(`tracing:${nameOrChannels}:asyncStart`);
+      this.asyncEnd = channel(`tracing:${nameOrChannels}:asyncEnd`);
+      this.error = channel(`tracing:${nameOrChannels}:error`);
+    } else if (typeof nameOrChannels === 'object' && nameOrChannels !== null) {
+      const required = ['start', 'end', 'asyncStart', 'asyncEnd', 'error'];
+      for (const k of required) {
+        const val = nameOrChannels[k];
+        if (val !== undefined && !(val instanceof Channel)) {
+          const e = new TypeError(`The "nameOrChannels.${k}" property must be an instance of Channel. Received type ${typeof val} (${JSON.stringify(val)})`);
+          e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+        }
+      }
+      for (const k of required) {
+        // Node throws TypeError when accessing properties on undefined channel
+        if (nameOrChannels[k] === undefined) Object.keys(nameOrChannels[k]);
+        this[k] = nameOrChannels[k];
+      }
+    } else {
+      const e = new TypeError('The "nameOrChannels" argument must be of type string or an instance of TracingChannel or Object. Received type ' + typeof nameOrChannels + ' (' + nameOrChannels + ')');
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
   }
   get hasSubscribers() { return this.start.hasSubscribers || this.end.hasSubscribers || this.asyncStart.hasSubscribers || this.asyncEnd.hasSubscribers || this.error.hasSubscribers; }
   subscribe(handlers) { for (const [k, fn] of Object.entries(handlers)) { if (this[k]) this[k].subscribe(fn); } }

@@ -67,12 +67,16 @@ class Console {
   }
 
   count(label) {
-    label = label || 'default';
+    if (typeof label === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
+    label = label === undefined ? 'default' : String(label);
     const c = (this._counts.get(label) || 0) + 1;
     this._counts.set(label, c);
     this.log(`${label}: ${c}`);
   }
-  countReset(label) { this._counts.set(label || 'default', 0); }
+  countReset(label) {
+    if (typeof label === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
+    this._counts.set(label === undefined ? 'default' : String(label), 0);
+  }
 
   trace(...args) {
     const err = new Error();
