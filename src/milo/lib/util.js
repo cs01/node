@@ -152,6 +152,21 @@ function _formatArg(a) {
   return inspect(a);
 }
 
+function _addNumSep(s) {
+  const neg = s.startsWith('-');
+  const body = neg ? s.slice(1) : s;
+  const parts = [];
+  for (let i = body.length; i > 0; i -= 3) parts.unshift(body.slice(Math.max(0, i - 3), i));
+  return (neg ? '-' : '') + parts.join('_');
+}
+function _formatNum(n) {
+  if (Object.is(n, -0)) return '-0';
+  const s = String(n);
+  if (!inspect.defaultOptions.numericSeparator) return s;
+  if (!Number.isFinite(n) || Math.abs(n) < 1e6 || s.includes('e') || s.includes('.')) return s;
+  return _addNumSep(s);
+}
+
 function format(fmt, ...args) {
   if (arguments.length === 0) return '';
   if (typeof fmt !== 'string') return [fmt, ...args].map(a => _formatArg(a)).join(' ');
@@ -160,10 +175,18 @@ function format(fmt, ...args) {
     if (m === '%%') return '%';
     if (i >= args.length) return m;
     const a = args[i++];
-    if (m === '%s') return String(a);
-    if (m === '%d') { const n = Number(a); return Object.is(n, -0) ? '-0' : String(n); }
-    if (m === '%i') return parseInt(a, 10).toString();
-    if (m === '%f') return parseFloat(a).toString();
+    if (m === '%s') {
+      if (typeof a === 'bigint') return inspect.defaultOptions.numericSeparator ? _addNumSep(String(a)) + 'n' : `${a}n`;
+      if (typeof a === 'number') { if (Object.is(a, -0)) return '-0'; return inspect.defaultOptions.numericSeparator ? _formatNum(a) : String(a); }
+      if (typeof a === 'object' && a !== null) {
+        if (typeof a.toString === 'function' && a.toString !== Object.prototype.toString && a.toString !== Array.prototype.toString) return String(a);
+        return inspect(a, { depth: 1, colors: false });
+      }
+      return String(a);
+    }
+    if (m === '%d') { if (typeof a === 'symbol') return 'NaN'; if (typeof a === 'bigint') return inspect.defaultOptions.numericSeparator ? _addNumSep(String(a)) + 'n' : `${a}n`; const n = Number(a); return Object.is(n, -0) ? '-0' : _formatNum(n); }
+    if (m === '%i') { if (typeof a === 'symbol') return 'NaN'; if (typeof a === 'bigint') return inspect.defaultOptions.numericSeparator ? _addNumSep(String(a)) + 'n' : `${a}n`; if (typeof a === 'number' && Object.is(a, -0)) return '-0'; const n = parseInt(a, 10); return _formatNum(n); }
+    if (m === '%f') { if (typeof a === 'symbol') return 'NaN'; if (typeof a === 'number') return Object.is(a, -0) ? '-0' : String(a); const n = parseFloat(a); return Object.is(n, -0) ? '-0' : String(n); }
     if (m === '%j') { try { return JSON.stringify(a); } catch { return '[Circular]'; } }
     if (m === '%o' || m === '%O') return inspect(a);
     return m;
@@ -172,7 +195,12 @@ function format(fmt, ...args) {
   return rest.length ? str + ' ' + rest.join(' ') : str;
 }
 
-function formatWithOptions(_opts, fmt, ...args) { return format(fmt, ...args); }
+function formatWithOptions(opts, fmt, ...args) {
+  const saved = {};
+  if (opts && typeof opts === 'object') { for (const k in opts) { saved[k] = inspect.defaultOptions[k]; inspect.defaultOptions[k] = opts[k]; } }
+  try { return format(fmt, ...args); }
+  finally { for (const k in saved) { if (saved[k] === undefined) delete inspect.defaultOptions[k]; else inspect.defaultOptions[k] = saved[k]; } }
+}
 
 function inherits(ctor, superCtor) {
   if (ctor === undefined || ctor === null || typeof ctor !== 'function') {

@@ -50,7 +50,9 @@ EventEmitter.prototype.emit = function(type) {
       if (err instanceof Error) throw err;
       let detail;
       if (err !== undefined) {
-        detail = typeof err === 'string' ? ` ('${err}')` : ` (${err})`;
+        let rep;
+        try { const { inspect } = require('util'); rep = inspect(err); } catch { rep = String(err); }
+        detail = typeof err === 'string' ? ` ('${err}')` : ` (${rep})`;
       } else {
         detail = '';
       }
