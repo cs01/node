@@ -706,7 +706,7 @@ class Writable extends Stream {
   _doWrite(chunk, encoding, cb) {
     let called = false;
     this._write(chunk, encoding, (err) => {
-      if (called) { const e = new Error('Callback called multiple times'); e.code = 'ERR_MULTIPLE_CALLBACK'; this.emit('error', e); return; }
+      if (called) { const e = new Error('Callback called multiple times'); e.code = 'ERR_MULTIPLE_CALLBACK'; process.nextTick(() => this.emit('error', e)); return; }
       called = true;
       const state = this._writableState;
       state.writing = false;
@@ -810,7 +810,7 @@ class Writable extends Stream {
         prefinish();
         let called = false;
         this._final((err) => {
-          if (called) { const e = new Error('Callback called multiple times'); e.code = 'ERR_MULTIPLE_CALLBACK'; this.emit('error', e); return; }
+          if (called) { const e = new Error('Callback called multiple times'); e.code = 'ERR_MULTIPLE_CALLBACK'; process.nextTick(() => this.emit('error', e)); return; }
           called = true;
           finish(err);
         });
