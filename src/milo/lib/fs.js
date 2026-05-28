@@ -393,19 +393,33 @@ function fstatSync(fd) {
 }
 
 function readSync(fd, buffer, offset, length, position) {
-  if (!Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
-    const e = new TypeError('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received ' +
-      (buffer == null ? String(buffer) : 'an instance of ' + (buffer.constructor && buffer.constructor.name || 'Object')));
+  _validateFd(fd);
+  if (!Buffer.isBuffer(buffer) && !ArrayBuffer.isView(buffer)) {
+    const e = new TypeError('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received type ' + typeof buffer + ' (' + buffer + ')');
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
   if (offset != null && typeof offset === 'object' && !Array.isArray(offset) && !(offset instanceof String)) {
     ({ offset = 0, length = buffer.length, position = null } = offset);
-  } else if (offset != null && (typeof offset !== 'number' || !Number.isInteger(offset))) {
-    throw _ERR_INVALID_ARG_TYPE('options', 'Object', offset);
   }
-  offset = offset || 0;
-  length = length || buffer.length - offset;
-  if (position != null) b.fdSeek(fd, position, 0);
+  if (offset == null) offset = 0;
+  if (!Number.isInteger(offset)) { const e = new RangeError('The value of "offset" is out of range. It must be an integer. Received ' + offset); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+  if (offset < 0) { const e = new RangeError('The value of "offset" is out of range. It must be >= 0. Received ' + offset); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+  length = length != null ? length : buffer.length - offset;
+  if (!Number.isInteger(length)) { const e = new RangeError('The value of "length" is out of range. It must be an integer. Received ' + length); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+  if (length < 0) { const e = new RangeError('The value of "length" is out of range. It must be >= 0. Received ' + length); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+  if (length > buffer.length - offset) { const e = new RangeError('The value of "length" is out of range. It must be <= ' + (buffer.length - offset) + '. Received ' + length); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+  if (position != null) {
+    if (typeof position === 'bigint') {
+      if (position < 0n || position >= 2n ** 63n) { const e = new RangeError('The value of "position" is out of range. It must be >= 0n && < 2n ** 63n. Received ' + position + 'n'); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    } else if (typeof position !== 'number') {
+      throw _ERR_INVALID_ARG_TYPE('position', 'integer or null', position);
+    } else if (!Number.isInteger(position)) {
+      const e = new RangeError('The value of "position" is out of range. It must be an integer. Received ' + position); e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    } else if (position >= 2 ** 53) {
+      const e = new RangeError('The value of "position" is out of range. It must be >= 0 && < 2 ** 53. Received ' + position); e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+    b.fdSeek(fd, Number(position), 0);
+  }
   const result = b.fdRead(fd, length);
   if (typeof result === 'number') return 0;
   const bytes = new Uint8Array(result.buffer || result);
@@ -419,7 +433,8 @@ function writeSync(fd, data, offset, length, position) {
     throw _ERR_INVALID_ARG_TYPE('buffer', ['string', 'Buffer', 'TypedArray', 'DataView'], data);
   }
   offset = offset || 0;
-  length = length || data.length - offset;
+  length = length != null ? length : data.length - offset;
+  if (length === 0) return 0;
   if (position != null) b.fdSeek(fd, position, 0);
   const slice = data.slice(offset, offset + length);
   return b.fdWrite(fd, slice, slice.length);
@@ -867,7 +882,7 @@ function read(fd, buffer, offset, length, position, cb) {
     cb = length;
     length = buffer ? buffer.length - (offset || 0) : 0;
     position = null;
-  } else if (typeof position === 'function') {
+  } else if (cb === undefined && typeof position === 'function') {
     cb = position;
     position = null;
   } else {
@@ -881,10 +896,30 @@ function read(fd, buffer, offset, length, position, cb) {
     }
   }
   if (typeof cb !== 'function') throw _ERR_INVALID_ARG_TYPE('cb', 'function', cb);
-  if (!Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
-    buffer = Buffer.alloc(16384);
-    offset = 0;
-    length = buffer.length;
+  if (!Buffer.isBuffer(buffer) && !ArrayBuffer.isView(buffer)) {
+    const e = new TypeError('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received type ' + typeof buffer + ' (' + buffer + ')');
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (offset != null) {
+    if (!Number.isInteger(offset)) { const e = new RangeError('The value of "offset" is out of range. It must be an integer. Received ' + (typeof offset === 'bigint' ? offset.toString() : offset)); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    if (offset < 0) { const e = new RangeError('The value of "offset" is out of range. It must be >= 0. Received ' + offset); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+  }
+  if (length != null) {
+    if (!Number.isInteger(length)) { const e = new RangeError('The value of "length" is out of range. It must be an integer. Received ' + length); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    if (length < 0) { const e = new RangeError('The value of "length" is out of range. It must be >= 0. Received ' + length); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+  }
+  if (position != null) {
+    if (typeof position === 'bigint') {
+      if (position < 0n || position >= 2n ** 63n) { const e = new RangeError('The value of "position" is out of range. It must be >= 0n && < 2n ** 63n. Received ' + position + 'n'); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+    } else if (typeof position !== 'number') {
+      throw _ERR_INVALID_ARG_TYPE('position', 'integer or null', position);
+    } else if (!Number.isInteger(position)) {
+      const e = new RangeError('The value of "position" is out of range. It must be an integer. Received ' + position);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    } else if (position >= 2 ** 53) {
+      const e = new RangeError('The value of "position" is out of range. It must be >= 0 && < 2 ** 53. Received ' + position);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
   }
   try {
     const n = readSync(fd, buffer, offset, length, position);

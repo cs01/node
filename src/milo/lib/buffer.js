@@ -983,9 +983,9 @@ function isUtf8(input) {
 
 let _inspectMaxBytes = 50;
 const _exports = {
-  Buffer, SlowBuffer, kMaxLength: 2 ** 31 - 1, kStringMaxLength: 2 ** 28 - 16,
+  Buffer, SlowBuffer, kMaxLength: 2 ** 31 - 1, kStringMaxLength: 2 ** 29 - 24,
   isAscii, isUtf8,
-  constants: { MAX_LENGTH: 2 ** 31 - 1, MAX_STRING_LENGTH: 2 ** 28 - 16 },
+  constants: { MAX_LENGTH: 2 ** 31 - 1, MAX_STRING_LENGTH: 2 ** 29 - 24 },
   atob: globalThis.atob, btoa: globalThis.btoa,
   File: globalThis.File, Blob: globalThis.Blob,
 };

@@ -108,13 +108,24 @@ class OutgoingMessage extends EventEmitter {
   }
   write(chunk, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = null; }
-    if (!this._headersSent && this._implicitHeader) this._implicitHeader();
+    if (chunk === null) { const e = new TypeError('May not write null values to stream'); e.code = 'ERR_STREAM_NULL_VALUES'; throw e; }
+    if (typeof chunk !== 'string' && !Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) {
+      const e = new TypeError('The "chunk" argument must be of type string or an instance of Buffer or Uint8Array. Received ' + (chunk === undefined ? 'undefined' : 'type ' + typeof chunk + ' (' + chunk + ')'));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (!this._header && !this._headersSent) {
+      if (!this._implicitHeader) { const e = new Error('The _implicitHeader() method is not implemented'); e.code = 'ERR_METHOD_NOT_IMPLEMENTED'; throw e; }
+      this._implicitHeader();
+    }
     const data = typeof chunk === 'string' ? Buffer.from(chunk, encoding || 'utf8') : chunk;
+    if (!this._hasBody) { if (cb) process.nextTick(cb); return true; }
     if (this.socket) {
       return this.socket.write(data, encoding, cb);
     }
-    this._outputData.push(data);
-    this._outputSize += data.length;
+    if (this._outputData) {
+      this._outputData.push(data);
+      this._outputSize += data.length;
+    }
     if (cb) process.nextTick(cb);
     return true;
   }
@@ -145,7 +156,7 @@ class OutgoingMessage extends EventEmitter {
     return this;
   }
   setHeader(k, v) {
-    if (this._headersSent) { const e = new Error('Cannot set headers after they are sent to the client'); e.code = 'ERR_HTTP_HEADERS_SENT'; throw e; }
+    if (this._headersSent || this._header) { const e = new Error('Cannot set headers after they are sent to the client'); e.code = 'ERR_HTTP_HEADERS_SENT'; throw e; }
     if (typeof k !== 'string' || !/^[\t\x20-\x7e]+$/.test(k) || /[^!#$%&'*+\-.0-9A-Z^_`a-z|~]/.test(k)) {
       const e = new TypeError(`Header name must be a valid HTTP token ["${k}"]`);
       e.code = 'ERR_INVALID_HTTP_TOKEN';
@@ -155,6 +166,10 @@ class OutgoingMessage extends EventEmitter {
       const e = new TypeError(`Invalid value "${v}" for header "${k}"`);
       e.code = 'ERR_HTTP_INVALID_HEADER_VALUE';
       throw e;
+    }
+    if (typeof v === 'string' && /[^\t\x20-\x7e\x80-\xff]/.test(v)) {
+      const e = new TypeError(`Invalid character in header content ["${k}"]`);
+      e.code = 'ERR_INVALID_CHAR'; throw e;
     }
     const lower = k.toLowerCase();
     if (lower === 'set-cookie') {
@@ -214,7 +229,22 @@ class OutgoingMessage extends EventEmitter {
   flushHeaders() {}
   cork() {}
   uncork() {}
-  addTrailers() {}
+  addTrailers(headers) {
+    if (this.finished) { const e = new Error('Cannot set trailing headers after they are sent to the client'); e.code = 'ERR_HTTP_HEADERS_SENT'; throw e; }
+    const keys = Object.keys(headers);
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (typeof k !== 'string' || /[^!#$%&'*+\-.0-9A-Z^_`a-z|~]/.test(k)) {
+        const e = new TypeError(`Trailer name must be a valid HTTP token ["${k}"]`);
+        e.code = 'ERR_INVALID_HTTP_TOKEN'; throw e;
+      }
+      const v = headers[k];
+      if (typeof v === 'string' && /[^\t\x20-\x7e\x80-\xff]/.test(v)) {
+        const e = new TypeError(`Invalid character in trailer content ["${k}"]`);
+        e.code = 'ERR_INVALID_CHAR'; throw e;
+      }
+    }
+  }
 }
 
 class ServerResponse extends OutgoingMessage {

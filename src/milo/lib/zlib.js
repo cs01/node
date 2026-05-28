@@ -115,6 +115,7 @@ class ZlibTransform extends Transform {
           const e = new TypeError(`The "options.level" property must be of type number. Received type ${typeof opts.level} (${typeof opts.level === 'string' ? "'" + opts.level + "'" : opts.level})`);
           e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
         }
+        if (Number.isNaN(opts.level)) { opts.level = -1; }
         if (!Number.isFinite(opts.level)) {
           const e = new RangeError(`The value of "options.level" is out of range. It must be a finite number. Received ${opts.level}`);
           e.code = 'ERR_OUT_OF_RANGE'; throw e;
@@ -140,6 +141,7 @@ class ZlibTransform extends Transform {
           const e = new TypeError(`The "options.strategy" property must be of type number. Received type ${typeof opts.strategy} (${typeof opts.strategy === 'string' ? "'" + opts.strategy + "'" : opts.strategy})`);
           e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
         }
+        if (Number.isNaN(opts.strategy)) { opts.strategy = 0; }
         if (!Number.isFinite(opts.strategy) || opts.strategy < 0 || opts.strategy > 4) {
           const msg = !Number.isFinite(opts.strategy) ? 'It must be a finite number' : 'It must be >= 0 and <= 4';
           const e = new RangeError(`The value of "options.strategy" is out of range. ${msg}. Received ${opts.strategy}`);
@@ -164,9 +166,10 @@ class ZlibTransform extends Transform {
           const e = new RangeError(`The value of "options.windowBits" is out of range. It must be a finite number. Received ${opts.windowBits}`);
           e.code = 'ERR_OUT_OF_RANGE'; throw e;
         }
-        if (opts.windowBits < 8 || opts.windowBits > 15) {
-          const e = new RangeError(`The value of "options.windowBits" is out of range. It must be >= 8 and <= 15. Received ${opts.windowBits}`);
-          e.code = 'ERR_OUT_OF_RANGE'; throw e;
+        const minWB = _isCompressMode(mode) ? 9 : 8;
+        if (opts.windowBits < minWB || opts.windowBits > 15) {
+          if (opts.windowBits === 0 && !_isCompressMode(mode)) { /* 0 = use stream header */ }
+          else { const e = new RangeError(`The value of "options.windowBits" is out of range. It must be >= ${minWB} and <= 15. Received ${opts.windowBits}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
         }
       }
     }
@@ -175,10 +178,10 @@ class ZlibTransform extends Transform {
     this._opts = opts || {};
     this._isCompress = _isCompressMode(mode);
     const wb = _windowBitsForMode(mode, this._opts);
-    const level = this._opts.level != null ? this._opts.level : -1;
+    this._level = this._opts.level != null ? this._opts.level : -1;
     const memLevel = this._opts.memLevel || 8;
-    const strategy = this._opts.strategy || 0;
-    this._streamHandle = b.streamCreate(this._isCompress ? 1 : 0, level, wb, memLevel, strategy);
+    this._strategy = this._opts.strategy || 0;
+    this._streamHandle = b.streamCreate(this._isCompress ? 1 : 0, this._level, wb, memLevel, this._strategy);
     this._handle = {};
   }
   _destroy(err, cb) {

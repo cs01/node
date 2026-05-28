@@ -1079,6 +1079,10 @@ function pipeline(...streams) {
 function finished(stream, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = {}; }
   opts = opts || {};
+  if (!stream || (typeof stream !== 'object' && typeof stream !== 'function') || typeof stream.on !== 'function') {
+    const e = new TypeError('The "stream" argument must be an instance of Stream. Received ' + (stream === null ? 'null' : typeof stream === 'object' ? 'an instance of ' + (stream.constructor?.name || 'Object') : 'type ' + typeof stream));
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
   let called = false;
   const done = (err) => { if (called) return; called = true; cleanup(); cb(err || null); };
   const onFinish = () => done();
