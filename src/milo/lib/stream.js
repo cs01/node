@@ -794,7 +794,7 @@ class Writable extends Stream {
         return;
       }
       if (s.buffered.length > 0 || s.writing) {
-        process.nextTick(waitDrain);
+        setImmediate(waitDrain);
       } else if (this._final) {
         prefinish();
         let called = false;
