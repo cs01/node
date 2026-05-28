@@ -43,20 +43,31 @@ function _safeCall(fn, args) {
 }
 
 let _negativeTimerWarned = false;
+let _overflowTimerWarned = false;
+const TIMEOUT_MAX = 2 ** 31 - 1;
 function _validateTimerCb(fn) {
   if (typeof fn !== 'function') {
     const e = new TypeError('The "callback" argument must be of type function. Received ' + (fn === null ? 'null' : typeof fn === 'object' ? 'an instance of ' + ((fn.constructor && fn.constructor.name) || 'Object') : 'type ' + typeof fn + " ('" + fn + "')"));
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
 }
-globalThis.setTimeout = function setTimeout(fn, delay, ...args) {
-  _validateTimerCb(fn);
-  if (typeof delay === 'number' && delay < 0 && !_negativeTimerWarned) {
+function _warnTimerDelay(delay) {
+  if (typeof delay !== 'number') return;
+  if (delay < 0 && !_negativeTimerWarned) {
     _negativeTimerWarned = true;
-    const w = new Error(`${delay} is a negative number.\nTimers in Node.js can not span more than 2147483647 ms (approximately 24.8 days).`);
+    const w = new Error(`${delay} is a negative number.\nTimers in Node.js can not span more than ${TIMEOUT_MAX} ms (approximately 24.8 days).`);
     w.name = 'TimeoutNegativeWarning';
     process.emitWarning(w);
   }
+  if (delay > TIMEOUT_MAX) {
+    const w = new Error(`${delay} does not fit into a 32-bit signed integer.\nTimer duration was truncated to ${TIMEOUT_MAX}.`);
+    w.name = 'TimeoutOverflowWarning';
+    process.emitWarning(w);
+  }
+}
+globalThis.setTimeout = function setTimeout(fn, delay, ...args) {
+  _validateTimerCb(fn);
+  _warnTimerDelay(delay);
   const t = new Timeout(0, fn, delay, args, false);
   const wrapped = () => { _timerCallbacks.delete(t._id); t._destroyed = true; _safeCall(fn, args); };
   t._id = _tb.schedule(wrapped, Math.max(0, delay || 0), 0);
@@ -74,6 +85,7 @@ globalThis.clearTimeout = function clearTimeout(t) {
 
 globalThis.setInterval = function setInterval(fn, delay, ...args) {
   _validateTimerCb(fn);
+  _warnTimerDelay(delay);
   const t = new Timeout(0, fn, delay, args, true);
   const wrapped = () => _safeCall(fn, args);
   t._id = _tb.schedule(wrapped, Math.max(0, delay || 0), 1);
