@@ -86,7 +86,13 @@ function resolve(hostname, rrtype, cb) {
 
 const NODATA = 'ENODATA', FORMERR = 'EFORMERR', SERVFAIL = 'ESERVFAIL',
       NOTFOUND = 'ENOTFOUND', NOTIMP = 'ENOTIMP', REFUSED = 'EREFUSED',
-      BADQUERY = 'EBADQUERY', BADNAME = 'EBADNAME', BADFAMILY = 'EBADFAMILY';
+      BADQUERY = 'EBADQUERY', BADNAME = 'EBADNAME', BADFAMILY = 'EBADFAMILY',
+      BADRESP = 'EBADRESP', CONNREFUSED = 'ECONNREFUSED', TIMEOUT = 'ETIMEOUT',
+      EOF = 'EOF', FILE = 'EFILE', NOMEM = 'ENOMEM', DESTRUCTION = 'EDESTRUCTION',
+      BADSTR = 'EBADSTR', BADFLAGS = 'EBADFLAGS', NONAME = 'ENONAME',
+      BADHINTS = 'EBADHINTS', NOTINITIALIZED = 'ENOTINITIALIZED',
+      LOADIPHLPAPI = 'ELOADIPHLPAPI', ADDRGETNETWORKPARAMS = 'EADDRGETNETWORKPARAMS',
+      CANCELLED = 'ECANCELLED';
 
 function _promisify(fn) {
   return (...args) => new Promise((resolve, reject) => {
@@ -121,6 +127,10 @@ const promises = {
   resolveNs: _promisify((h, cb) => dns.resolveNs(h, cb)),
   resolveCname: _promisify((h, cb) => dns.resolveCname(h, cb)),
   resolvePtr: _promisify((h, cb) => dns.resolvePtr(h, cb)),
+  lookupService: _promisify((addr, port, cb) => dns.lookupService(addr, port, cb)),
+  NODATA, FORMERR, SERVFAIL, NOTFOUND, NOTIMP, REFUSED, BADQUERY, BADNAME, BADFAMILY,
+  BADRESP, CONNREFUSED, TIMEOUT, EOF, FILE, NOMEM, DESTRUCTION, BADSTR, BADFLAGS,
+  NONAME, BADHINTS, NOTINITIALIZED, LOADIPHLPAPI, ADDRGETNETWORKPARAMS, CANCELLED,
   Resolver: class PromiseResolver {
     constructor(options) { this._r = new Resolver(options); }
     cancel() { this._r.cancel(); }
@@ -245,6 +255,28 @@ const dns = {
   },
   ADDRCONFIG: 0, V4MAPPED: 0, ALL: 0,
   NODATA, FORMERR, SERVFAIL, NOTFOUND, NOTIMP, REFUSED, BADQUERY, BADNAME, BADFAMILY,
+  BADRESP, CONNREFUSED, TIMEOUT, EOF, FILE, NOMEM, DESTRUCTION, BADSTR, BADFLAGS,
+  NONAME, BADHINTS, NOTINITIALIZED, LOADIPHLPAPI, ADDRGETNETWORKPARAMS, CANCELLED,
+  lookupService: (address, port, cb) => {
+    if (typeof address !== 'string') {
+      const e = new TypeError('The "address" argument must be of type string. Received ' + (address === undefined ? 'undefined' : typeof address));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (arguments.length < 3) {
+      const e = new TypeError('The "address", "port", and "callback" arguments must be specified');
+      e.code = 'ERR_MISSING_ARGS'; throw e;
+    }
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535) {
+      const e = new RangeError('The value of "port" is out of range');
+      e.code = 'ERR_SOCKET_BAD_PORT'; throw e;
+    }
+    if (!/^[\d.]+$/.test(address) && !/^[a-fA-F0-9:]+$/.test(address)) {
+      const e = new TypeError("The argument 'address' is invalid. Received '" + address + "'");
+      e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+    }
+    const result = b.reverseLookup ? b.reverseLookup(address) : address;
+    process.nextTick(cb, null, result, String(port));
+  },
   promises,
 };
 module.exports = dns;
