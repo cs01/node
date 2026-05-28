@@ -170,16 +170,15 @@ class Socket extends EventEmitter {
       const e = new RangeError('Port should be > 0 and < 65536. Received ' + (port === undefined ? 'undefined' : port));
       e.code = 'ERR_SOCKET_BAD_PORT'; throw e;
     }
-    if (this._connected) {
+    if (this._connected || this._connectPending) {
       const e = new Error('Already connected');
       e.code = 'ERR_SOCKET_DGRAM_IS_CONNECTED'; throw e;
     }
-    this._remotePort = port;
-    this._remoteAddress = address || '127.0.0.1';
-    this._connected = true;
+    this._connectPending = true;
     if (!this._bound) {
       this._fd = tcp.udpSocket();
       if (this._fd < 0) {
+        this._connectPending = false;
         const err = new Error('socket() failed');
         if (cb) cb(err); else this.emit('error', err);
         return;
@@ -188,8 +187,14 @@ class Socket extends EventEmitter {
       this._bound = true;
       this._startReceiving();
     }
-    if (cb) process.nextTick(cb);
-    process.nextTick(() => this.emit('connect'));
+    process.nextTick(() => {
+      this._connectPending = false;
+      this._remotePort = port;
+      this._remoteAddress = address || '127.0.0.1';
+      this._connected = true;
+      if (cb) cb();
+      this.emit('connect');
+    });
   }
 
   disconnect() {
@@ -282,10 +287,7 @@ class Socket extends EventEmitter {
 
 function createSocket(options, listener) {
   if (typeof options === 'string') options = { type: options };
-  else if (options === null || typeof options !== 'object') {
-    const e = new TypeError('The "options" argument must be of type string or an instance of Object');
-    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
-  }
+  else if (options == null || typeof options !== 'object') options = {};
   if (options.signal !== undefined && (options.signal === null || typeof options.signal !== 'object' || !('aborted' in options.signal))) {
     const e = new TypeError('The "options.signal" property must be an instance of AbortSignal. Received ' + (options.signal === null ? 'null' : typeof options.signal === 'object' ? 'an instance of ' + (options.signal.constructor?.name || 'Object') : 'type ' + typeof options.signal + ' (' + options.signal + ')'));
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;

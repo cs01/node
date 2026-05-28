@@ -35,8 +35,19 @@ function _getEncoding(opts) {
 function _validatePath(p, name) {
   if (typeof p !== 'string' && !Buffer.isBuffer(p)) {
     if (p instanceof URL) {
-      // URL with null bytes in pathname or encoded as %00
+      if (p.protocol !== 'file:') {
+        const err = new TypeError('The URL must be of scheme file');
+        err.code = 'ERR_INVALID_URL_SCHEME'; throw err;
+      }
+      if (p.hostname) {
+        const err = new TypeError('File URL host must be "localhost" or empty on darwin');
+        err.code = 'ERR_INVALID_FILE_URL_HOST'; throw err;
+      }
       const pathname = p.pathname;
+      if (/%2[fF]/.test(p.href)) {
+        const err = new TypeError('File URL path must not include encoded / characters');
+        err.code = 'ERR_INVALID_FILE_URL_PATH'; throw err;
+      }
       if (pathname.indexOf('\0') !== -1 || pathname.indexOf('%00') !== -1) {
         const err = new TypeError(`The "${name || 'path'}" argument must be of type string without null bytes. Received ${JSON.stringify(pathname)}`);
         err.code = 'ERR_INVALID_ARG_VALUE';
@@ -781,7 +792,7 @@ function fsyncSync(fd) { _validateFd(fd); b.fsync(fd); }
 function fdatasyncSync(fd) { _validateFd(fd); b.fdatasync(fd); }
 function _validateLen(len) {
   if (len !== undefined && typeof len !== 'number') {
-    const recv = len === null ? 'null' : typeof len === 'object' ? 'an instance of ' + (len.constructor?.name || 'Object') : typeof len === 'string' ? "type string ('" + len + "')" : 'type ' + typeof len;
+    const recv = len === null ? 'null' : typeof len === 'object' ? 'an instance of ' + (len.constructor?.name || 'Object') : typeof len === 'string' ? "type string ('" + len + "')" : 'type ' + typeof len + ' (' + len + ')';
     const e = new TypeError('The "len" argument must be of type number. Received ' + recv);
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
@@ -797,7 +808,8 @@ function fsync(fd, cb) { _validateFd(fd); _validateCb(cb); _async(fsyncSync, [fd
 function fdatasync(fd, cb) { _validateFd(fd); _validateCb(cb); _async(fdatasyncSync, [fd], (err) => cb(err)); }
 function ftruncate(fd, len, cb) {
   if (typeof len === 'function') { cb = len; len = 0; }
-  _async(ftruncateSync, [fd, len], (err) => cb(err));
+  _validateFd(fd); _validateLen(len);
+  _async(ftruncateSync, [fd, len], (err) => { if (cb) cb(err); });
 }
 function fchmod(fd, mode, cb) { _validateFd(fd); mode = _validateMode(mode, 'mode'); _validateCb(cb); _async(fchmodSync, [fd, mode], (err) => cb(err)); }
 
