@@ -8,6 +8,15 @@ const b = internalBinding('spawn');
 const _SPAWN_DEPTH = parseInt(process.env._MILO_SPAWN_DEPTH || '0', 10);
 const _MAX_SPAWN_DEPTH = 8;
 
+// Signal name → number (darwin values, matching the kernel's wait-status codes).
+const _SIGNAL_NUM = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGEMT: 7, SIGFPE: 8, SIGKILL: 9, SIGBUS: 10, SIGSEGV: 11, SIGSYS: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGURG: 16, SIGSTOP: 17, SIGTSTP: 18, SIGCONT: 19, SIGCHLD: 20, SIGTTIN: 21, SIGTTOU: 22, SIGIO: 23, SIGXCPU: 24, SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGINFO: 29, SIGUSR1: 30, SIGUSR2: 31 };
+const _SIGNAL_NAME = {};
+for (const name of Object.keys(_SIGNAL_NUM)) _SIGNAL_NAME[_SIGNAL_NUM[name]] = name;
+
+function _signalToNum(signal) {
+  return typeof signal === 'string' ? (_SIGNAL_NUM[signal] || 15) : (signal || 15);
+}
+
 function _validateFile(file) {
   if (typeof file !== 'string') {
     const e = new TypeError(`The "file" argument must be of type string. Received ${_fmtReceived(file)}`);
@@ -325,7 +334,7 @@ function spawn(file, args, options) {
 
   child.kill = function(signal) {
     if (child.killed) return false;
-    const sig = typeof signal === 'string' ? { SIGTERM: 15, SIGKILL: 9, SIGINT: 2, SIGHUP: 1 }[signal] || 15 : (signal || 15);
+    const sig = _signalToNum(signal);
     b.killPid(child.pid, sig);
     child.killed = true;
     return true;
@@ -336,13 +345,16 @@ function spawn(file, args, options) {
     // All pipes closed — poll for exit status
     const _poll = () => {
       const status = b.waitpidNH(child.pid);
-      if (status === -1) {
+      if (status === undefined) {
         setTimeout(_poll, 10);
         return;
       }
-      child.exitCode = status;
-      child.emit('exit', status, null);
-      child.emit('close', status, null);
+      const signal = status.signal == null ? null : (_SIGNAL_NAME[status.signal] || null);
+      const code = signal == null ? status.code : null;
+      child.exitCode = code;
+      child.signalCode = signal;
+      child.emit('exit', code, signal);
+      child.emit('close', code, signal);
     };
     _poll();
   }
@@ -586,7 +598,7 @@ function fork(modulePath, args, options) {
 
   child.kill = function(signal) {
     if (child.killed) return false;
-    const sig = typeof signal === 'string' ? { SIGTERM: 15, SIGKILL: 9, SIGINT: 2, SIGHUP: 1 }[signal] || 15 : (signal || 15);
+    const sig = _signalToNum(signal);
     spawnBinding.killPid(child.pid, sig);
     child.killed = true;
     return true;
@@ -596,11 +608,14 @@ function fork(modulePath, args, options) {
     if (pipesOpen > 0) return;
     const _poll = () => {
       const status = spawnBinding.waitpidNH(child.pid);
-      if (status === -1) { setTimeout(_poll, 10); return; }
-      child.exitCode = status;
+      if (status === undefined) { setTimeout(_poll, 10); return; }
+      const signal = status.signal == null ? null : (_SIGNAL_NAME[status.signal] || null);
+      const code = signal == null ? status.code : null;
+      child.exitCode = code;
+      child.signalCode = signal;
       if (child.connected) child.disconnect();
-      child.emit('exit', status, null);
-      child.emit('close', status, null);
+      child.emit('exit', code, signal);
+      child.emit('close', code, signal);
     };
     _poll();
   }

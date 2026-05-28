@@ -25,6 +25,7 @@ extern fn v8c_string_utf8_len(iso: *u8, data: *u8, len: i32): i32
 extern fn v8c_object_new(iso: *u8): i32
 extern fn v8c_array_new(iso: *u8, length: i32): i32
 extern fn v8c_undefined(iso: *u8): i32
+extern fn v8c_null(iso: *u8): i32
 extern fn v8c_true(iso: *u8): i32
 extern fn v8c_false(iso: *u8): i32
 extern fn v8c_bigint_i64(iso: *u8, val: i64): i32
@@ -196,6 +197,10 @@ impl Isolate {
 
     fn undefined(self: Isolate): Value {
         unsafe { return Value { slot: v8c_undefined(self.ptr) } }
+    }
+
+    fn nullVal(self: Isolate): Value {
+        unsafe { return Value { slot: v8c_null(self.ptr) } }
     }
 
     fn trueVal(self: Isolate): Value {

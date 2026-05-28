@@ -433,12 +433,16 @@ fn closeFdBinding(info: *u8, _ud: *u8): void {
     if fd >= 0 { unsafe { close(fd) } }
 }
 
-// waitpidNH(pid) → -1 if still running, else exit status
+// waitpidNH(pid) → undefined if still running, else { code, signal }.
+// Decodes the POSIX wait status so signal-killed children report
+// code=null/signal=<num> instead of masquerading as a clean exit(0).
 fn waitpidNHBinding(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
     let pid = ci.i32Arg(0, -1)
     if pid <= 0 {
-        ci.retI32(-1)
+        ci.retUndefined()
         return
     }
     unsafe {
@@ -446,11 +450,22 @@ fn waitpidNHBinding(info: *u8, _ud: *u8): void {
         // WNOHANG = 1
         let ret = waitpid(pid, status as *i32, 1)
         if ret <= 0 {
-            ci.retI32(-1)
-        } else {
-            let exitCode = (status[0] >> 8) & 255
-            ci.retI32(exitCode)
+            ci.retUndefined()
+            return
         }
+        let raw = status[0]
+        let low7 = raw & 0x7f
+        let result = iso.object()
+        // WIFEXITED: low 7 bits are zero. WIFSIGNALED: low7 nonzero and
+        // not 0x7f (0x7f marks a WIFSTOPPED status, which we don't report).
+        if low7 == 0 {
+            ctx.objectSet(result, "code" as *u8, iso.int32((raw >> 8) & 255))
+            ctx.objectSet(result, "signal" as *u8, iso.nullVal())
+        } else {
+            ctx.objectSet(result, "code" as *u8, iso.nullVal())
+            ctx.objectSet(result, "signal" as *u8, iso.int32(low7))
+        }
+        ci.ret(result)
     }
 }
 
