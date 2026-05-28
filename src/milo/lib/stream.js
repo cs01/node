@@ -31,76 +31,70 @@ function Stream() { EventEmitter.call(this); }
 Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
 Object.setPrototypeOf(Stream, EventEmitter);
 Stream.prototype.pipe = function pipe(dest, opts) {
-  if (this._readableState && this._readableState.pipes) {
-    this._readableState.pipes.push(dest);
-  }
-  if (!this._pipeListeners) this._pipeListeners = [];
   const src = this;
+  if (src._readableState && src._readableState.pipes) src._readableState.pipes.push(dest);
+  if (!src._pipeListeners) src._pipeListeners = [];
+
   const ondata = (chunk) => {
     if (dest.writable !== false) {
       const canContinue = dest.write(chunk);
       if (canContinue === false && src.pause) src.pause();
     }
   };
-  this.on('data', ondata);
-  const onend = () => { if (!opts || opts.end !== false) dest.end(); };
-  this.on('end', onend);
   const ondrain = () => { if (src.resume) src.resume(); };
+  // cleanup() removes every listener this pipe added — works for legacy base
+  // Stream (no _readableState, where unpipe is a no-op) and modern streams.
+  // Idempotent removeListener makes double-invocation (end + unpipe) safe.
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    src.removeListener('data', ondata);
+    src.removeListener('end', onend);
+    src.removeListener('close', onsrcclose);
+    src.removeListener('end', cleanup);
+    src.removeListener('close', cleanup);
+    dest.removeListener('drain', ondrain);
+    dest.removeListener('close', ondestclose);
+    dest.removeListener('finish', onfinish);
+    dest.removeListener('error', onerror);
+    if (src._pipeListeners) { const i = src._pipeListeners.findIndex(e => e.dest === dest); if (i >= 0) src._pipeListeners.splice(i, 1); }
+    if (src._readableState && src._readableState.pipes) { const i = src._readableState.pipes.indexOf(dest); if (i >= 0) src._readableState.pipes.splice(i, 1); }
+  };
+  let ended = false;
+  const onend = () => { if (ended) return; ended = true; if (!opts || opts.end !== false) dest.end(); };
+  const onsrcclose = () => { if (ended) return; ended = true; if ((!opts || opts.end !== false) && typeof dest.destroy === 'function') dest.destroy(); };
+  const ondestclose = () => cleanup();
+  const onfinish = () => cleanup();
+  const onerror = () => cleanup();
+
+  src.on('data', ondata);
   dest.on('drain', ondrain);
-  const onclose = () => { src.unpipe(dest); };
-  dest.on('close', onclose);
-  const onfinish = () => { src.unpipe(dest); };
+  src.on('end', onend);
+  src.on('close', onsrcclose);
+  src.on('end', cleanup);
+  src.on('close', cleanup);
+  dest.on('close', ondestclose);
   dest.on('finish', onfinish);
-  const onerror = (err) => { src.unpipe(dest); };
   dest.on('error', onerror);
-  this._pipeListeners.push({ dest, ondata, onend, ondrain, onclose, onfinish, onerror });
-  dest.emit('pipe', this);
-  if (this.resume) this.resume();
+
+  src._pipeListeners.push({ dest, ondata, onend, ondrain, onclose: ondestclose, onfinish, onerror, _cleanup: cleanup });
+  dest.emit('pipe', src);
+  if (src.resume) src.resume();
   return dest;
 };
 
 Stream.prototype.unpipe = function unpipe(dest) {
-  if (this._readableState && this._readableState.pipes) {
-    if (!dest) {
-      const pipes = this._readableState.pipes.slice();
-      this._readableState.pipes = [];
-      if (this._pipeListeners) {
-        for (const entry of this._pipeListeners) {
-          this.removeListener('data', entry.ondata);
-          this.removeListener('end', entry.onend);
-          entry.dest.removeListener('drain', entry.ondrain);
-          if (entry.onclose) entry.dest.removeListener('close', entry.onclose);
-          if (entry.onfinish) entry.dest.removeListener('finish', entry.onfinish);
-          if (entry.onerror) entry.dest.removeListener('error', entry.onerror);
-        }
-        this._pipeListeners = [];
-      }
+  if (!this._pipeListeners || this._pipeListeners.length === 0) return this;
+  const entries = !dest ? this._pipeListeners.slice() : this._pipeListeners.filter(e => e.dest === dest);
+  for (const entry of entries) {
+    if (entry._cleanup) entry._cleanup(); // removes listeners + splices from _pipeListeners/pipes
+    entry.dest.emit('unpipe', this);
+  }
+  if (this._readableState) {
+    if (!this._readableState.pipes || this._readableState.pipes.length === 0) {
       this._readableState.flowing = false;
       this.emit('pause');
-      for (const d of pipes) d.emit('unpipe', this);
-    } else {
-      const idx = this._readableState.pipes.indexOf(dest);
-      if (idx >= 0) {
-        this._readableState.pipes.splice(idx, 1);
-        if (this._pipeListeners) {
-          const li = this._pipeListeners.findIndex(e => e.dest === dest);
-          if (li >= 0) {
-            const entry = this._pipeListeners[li];
-            this.removeListener('data', entry.ondata);
-            this.removeListener('end', entry.onend);
-            dest.removeListener('drain', entry.ondrain);
-            if (entry.onclose) dest.removeListener('close', entry.onclose);
-            if (entry.onfinish) dest.removeListener('finish', entry.onfinish);
-            if (entry.onerror) dest.removeListener('error', entry.onerror);
-            this._pipeListeners.splice(li, 1);
-          }
-        }
-        if (this._readableState.pipes.length === 0) {
-          this._readableState.flowing = false;
-          this.emit('pause');
-        }
-        dest.emit('unpipe', this);
-      }
     }
   }
   return this;
