@@ -265,6 +265,9 @@ class AssertionError extends Error {
     this.operator = options.operator;
     this.generatedMessage = 'generatedMessage' in options ? options.generatedMessage : !options.message;
     this.code = 'ERR_ASSERTION';
+    if (options.stackStartFn && Error.captureStackTrace) {
+      Error.captureStackTrace(this, options.stackStartFn);
+    }
   }
 }
 
@@ -740,7 +743,8 @@ function throws(fn, expected, message) {
     } else {
       msg = 'Missing expected exception.';
     }
-    fail(undefined, expected, msg, 'throws');
+    const e = new AssertionError({ actual: undefined, expected, message: msg, operator: 'throws', stackStartFn: throws });
+    throw e;
   }
 }
 
@@ -846,7 +850,22 @@ async function doesNotReject(fn, expected, message) {
   }
 }
 
-function ifError(err) { if (err !== null && err !== undefined) throw err; }
+function ifError(err) {
+  if (err !== null && err !== undefined) {
+    let msg = 'ifError got unwanted exception: ';
+    if (typeof err === 'object' && typeof err.message === 'string') {
+      if (err.message.length === 0 && err.constructor) msg += err.constructor.name;
+      else msg += err.message;
+    } else if (typeof err === 'object') {
+      const { inspect } = require('util');
+      msg += inspect(err);
+    } else {
+      msg += String(err);
+    }
+    const newErr = new AssertionError({ actual: err, expected: null, operator: 'ifError', message: msg, stackStartFn: ifError });
+    throw newErr;
+  }
+}
 
 function match(string, regexp, message, ...extra) {
   if (typeof string !== 'string') {

@@ -193,12 +193,15 @@ function _wrapStats(s) {
   return st;
 }
 
-function statSync(path) {
+function statSync(path, options) {
   _validatePath(path, 'path');
   const p = _toPath(path);
   if (p.length > 1024) throw _fsError('ENAMETOOLONG', 'stat', p, 'name too long');
   const s = b.stat(p);
-  if (s === -1) throw _fsError('ENOENT', 'stat', p, 'no such file or directory');
+  if (s === -1) {
+    if (options && options.throwIfNoEntry === false) return undefined;
+    throw _fsError('ENOENT', 'stat', p, 'no such file or directory');
+  }
   return _wrapStats(s);
 }
 
@@ -303,12 +306,15 @@ function statfs(path, opts, cb) {
 }
 function lchmod(path, mode, cb) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); _validateCb(cb); _async(lchmodSync, [path, mode], (err) => cb(err)); }
 function symlinkSync(target, path) { _validatePath(target, 'target'); _validatePath(path, 'path'); b.symlink(_toPath(target), _toPath(path)); }
-function lstatSync(path) {
+function lstatSync(path, options) {
   _validatePath(path, 'path');
   const sp = _toPath(path);
   if (sp.length > 1024) throw _fsError('ENAMETOOLONG', 'lstat', sp, 'name too long');
   const result = b.lstat(sp);
-  if (typeof result === 'number') throw _fsError('ENOENT', 'lstat', sp, 'no such file or directory');
+  if (typeof result === 'number') {
+    if (options && options.throwIfNoEntry === false) return undefined;
+    throw _fsError('ENOENT', 'lstat', sp, 'no such file or directory');
+  }
   return _wrapStats(result);
 }
 function readlinkSync(path) { _validatePath(path, 'path'); const sp = _toPath(path); return b.readlink ? b.readlink(sp) : sp; }
@@ -683,7 +689,7 @@ function writeFile(path, data, opts, cb) {
 function stat(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
   _validatePath(path, 'path');
-  _async(statSync, [path], cb);
+  _async(statSync, [path, opts], cb);
 }
 
 function lstat(path, opts, cb) {

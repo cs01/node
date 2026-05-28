@@ -111,5 +111,9 @@ globalThis.console = {
     for (const row of rowStrs) _con.write('| ' + row.map((c, i) => pad(c || '', widths[i])).join(' | ') + ' |\n');
   },
   dirxml(...args) { process.stdout.write(_groupIndent + _fmtArgs(args) + '\n'); },
-  Console: require('console').Console,
 };
+// Attach Console class and set prototype for instanceof checks
+// require('console') is called AFTER globalThis.console is set so it picks up the right object
+const { Console: _Console } = require('console');
+globalThis.console.Console = _Console;
+Object.setPrototypeOf(globalThis.console, _Console.prototype);

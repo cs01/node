@@ -3,6 +3,13 @@
 
 const { inspect } = require('util');
 
+function _invalidArgTypeHelper(value) {
+  if (value == null) return ' Received ' + value;
+  if (typeof value === 'function') return ' Received function ' + (value.name || '');
+  if (typeof value === 'object') return ' Received an instance of ' + (value.constructor && value.constructor.name || 'Object');
+  return ' Received type ' + typeof value + ' (' + inspect(value, { colors: false }) + ')';
+}
+
 class Console {
   constructor(stdout, stderr, opts) {
     if (typeof stdout === 'object' && stdout !== null && !stdout.write) {
@@ -10,13 +17,45 @@ class Console {
       stdout = opts.stdout;
       stderr = opts.stderr;
     }
+    if (typeof opts === 'boolean') {
+      // Console(stdout, stderr, ignoreErrors)
+      opts = { ignoreErrors: opts };
+    }
+    if (!stdout || typeof stdout.write !== 'function') {
+      const e = new TypeError('Console expects a writable stream instance for stdout');
+      e.code = 'ERR_CONSOLE_WRITABLE_STREAM'; throw e;
+    }
+    if (stderr && typeof stderr.write !== 'function') {
+      const e = new TypeError('Console expects a writable stream instance for stderr');
+      e.code = 'ERR_CONSOLE_WRITABLE_STREAM'; throw e;
+    }
+    if (opts && opts.inspectOptions !== undefined) {
+      if (opts.inspectOptions === null || typeof opts.inspectOptions !== 'object') {
+        const e = new TypeError('The "options.inspectOptions" property must be of type object.' + _invalidArgTypeHelper(opts.inspectOptions));
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
+    }
     this._stdout = stdout;
     this._stderr = stderr || stdout;
     this._times = new Map();
     this._counts = new Map();
     this._groupIndent = '';
+    this._ignoreErrors = opts ? opts.ignoreErrors !== false : true;
     this._colorMode = opts && opts.colorMode;
     this._inspectOptions = opts && opts.inspectOptions;
+    // Bind methods so they work when detached (e.g., [1,2,3].forEach(c.log))
+    const proto = Object.getPrototypeOf(this);
+    const keys = new Set();
+    let p = proto;
+    while (p && p !== Object.prototype) {
+      for (const k of Object.getOwnPropertyNames(p)) {
+        if (k !== 'constructor' && !keys.has(k) && typeof p[k] === 'function') {
+          keys.add(k);
+          this[k] = p[k].bind(this);
+        }
+      }
+      p = Object.getPrototypeOf(p);
+    }
   }
 
   _fmt(...args) {
@@ -27,10 +66,15 @@ class Console {
 
   log(...args) {
     const msg = this._groupIndent + this._fmt(...args) + '\n';
-    try {
+    if (this._ignoreErrors === false) {
       if (this._stdout && this._stdout.write) this._stdout.write(msg);
       else internalBinding('_console').write(msg);
-    } catch {}
+    } else {
+      try {
+        if (this._stdout && this._stdout.write) this._stdout.write(msg);
+        else internalBinding('_console').write(msg);
+      } catch {}
+    }
   }
 
   info(...args) { this.log(...args); }
@@ -39,10 +83,15 @@ class Console {
 
   error(...args) {
     const msg = this._groupIndent + this._fmt(...args) + '\n';
-    try {
+    if (this._ignoreErrors === false) {
       if (this._stderr && this._stderr.write) this._stderr.write(msg);
       else internalBinding('_console').writeError(msg);
-    } catch {}
+    } else {
+      try {
+        if (this._stderr && this._stderr.write) this._stderr.write(msg);
+        else internalBinding('_console').writeError(msg);
+      } catch {}
+    }
   }
 
   warn(...args) { this.error(...args); }
@@ -98,5 +147,19 @@ class Console {
   dirxml(...args) { this.log(...args); }
 }
 
-module.exports = new Console(null, null);
-module.exports.Console = Console;
+// Wrap so Console() works without new (ES6 classes throw otherwise)
+function ConsoleWrapper(stdout, stderr, opts) {
+  if (new.target) return Reflect.construct(Console, [stdout, stderr, opts], new.target);
+  return new Console(stdout, stderr, opts);
+}
+ConsoleWrapper.prototype = Console.prototype;
+Console.prototype.constructor = ConsoleWrapper;
+Object.defineProperty(ConsoleWrapper, Symbol.hasInstance, {
+  value: (instance) => instance instanceof Console
+});
+
+// Always return globalThis.console so require('console') === globalThis.console
+const _gc = globalThis.console;
+if (_gc && !(_gc instanceof Console)) Object.setPrototypeOf(_gc, Console.prototype);
+if (_gc) { _gc.Console = ConsoleWrapper; module.exports = _gc; }
+else { module.exports = new Console(null, null); module.exports.Console = ConsoleWrapper; }

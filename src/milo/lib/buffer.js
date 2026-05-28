@@ -320,6 +320,9 @@ class Buffer extends Uint8Array {
     if (Array.isArray(value) || value instanceof Uint8Array) return new Buffer(value);
     if (Buffer.isBuffer(value)) { const c = new Buffer(value.length); c.set(value); return c; }
     if (value && typeof value === 'object' && value.type === 'Buffer' && Array.isArray(value.data)) return new Buffer(value.data);
+    if (value && typeof value === 'object' && (value.buffer instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && value.buffer instanceof SharedArrayBuffer))) {
+      return Buffer.from(value.buffer, value.byteOffset || 0, value.byteLength !== undefined ? value.byteLength : value.buffer.byteLength);
+    }
     // String objects and objects with Symbol.toPrimitive/valueOf that return a string
     if (value && typeof value === 'object') {
       let primitive;

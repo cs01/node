@@ -63,6 +63,16 @@ function _queryRecords(hostname, rrtype, cb) {
 
 function resolve(hostname, rrtype, cb) {
   if (typeof rrtype === 'function') { cb = rrtype; rrtype = 'A'; }
+  if (typeof hostname !== 'string') {
+    const v = hostname === undefined ? 'undefined' : hostname === null ? 'null' : 'an instance of ' + ((hostname.constructor && hostname.constructor.name) || 'Object');
+    const e = new TypeError('The "name" argument must be of type string. Received ' + v);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (typeof rrtype !== 'string') {
+    const v = rrtype === undefined ? 'undefined' : rrtype === null ? 'null' : 'an instance of ' + ((rrtype.constructor && rrtype.constructor.name) || 'Object');
+    const e = new TypeError('The "rrtype" argument must be of type string. Received ' + v);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
   if (rrtype === 'A' || rrtype === 'AAAA') {
     const family = rrtype === 'AAAA' ? 6 : 4;
     lookup(hostname, { family }, (err, address) => {
@@ -91,12 +101,18 @@ const promises = {
       else resolve({ address, family });
     });
   }),
-  resolve: (hostname, rrtype) => new Promise((resolve, reject) => {
+  resolve: (hostname, rrtype) => {
+    if (typeof hostname !== 'string') {
+      const v = hostname === undefined ? 'undefined' : hostname === null ? 'null' : 'an instance of ' + ((hostname.constructor && hostname.constructor.name) || 'Object');
+      const e = new TypeError('The "name" argument must be of type string. Received ' + v);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    return new Promise((resolve, reject) => {
     dns.resolve(hostname, rrtype || 'A', (err, addresses) => {
       if (err) reject(err);
       else resolve(addresses);
     });
-  }),
+  }); },
   resolve4: _promisify((h, cb) => dns.resolve4(h, cb)),
   resolve6: _promisify((h, cb) => dns.resolve6(h, cb)),
   resolveMx: _promisify((h, cb) => dns.resolveMx(h, cb)),
@@ -105,6 +121,17 @@ const promises = {
   resolveNs: _promisify((h, cb) => dns.resolveNs(h, cb)),
   resolveCname: _promisify((h, cb) => dns.resolveCname(h, cb)),
   resolvePtr: _promisify((h, cb) => dns.resolvePtr(h, cb)),
+  Resolver: class PromiseResolver {
+    constructor(options) { this._r = new Resolver(options); }
+    cancel() { this._r.cancel(); }
+    setLocalAddress(ipv4, ipv6) { this._r.setLocalAddress(ipv4, ipv6); }
+    getServers() { return this._r.getServers(); }
+    setServers(servers) { this._r.setServers(servers); }
+    resolve(hostname, rrtype) { return _promisify((h, r, cb) => this._r.resolve(h, r, cb))(hostname, rrtype || 'A'); }
+    resolve4(h, opts) { return _promisify((h2, cb) => this._r.resolve4(h2, cb))(h); }
+    resolve6(h, opts) { return _promisify((h2, cb) => this._r.resolve6(h2, cb))(h); }
+    reverse(ip) { return _promisify((i, cb) => this._r.reverse(i, cb))(ip); }
+  },
 };
 
 class Resolver {
@@ -157,16 +184,26 @@ const dns = {
       if (typeof s !== 'string') continue;
       // strip brackets and port for validation
       let addr = s;
+      let port = null;
       if (addr.startsWith('[')) {
         const ci = addr.indexOf(']');
-        addr = ci > 0 ? addr.substring(1, ci) : addr.substring(1);
+        if (ci > 0) {
+          const rest = addr.substring(ci + 1);
+          addr = addr.substring(1, ci);
+          if (rest.startsWith(':')) port = rest.substring(1);
+        } else {
+          addr = addr.substring(1);
+        }
       } else {
-        // strip trailing :port for IPv4
         const li = addr.lastIndexOf(':');
-        if (li > 0 && !addr.includes(':', li + 1)) addr = addr.substring(0, li);
+        if (li > 0 && !addr.includes(':', li + 1)) {
+          port = addr.substring(li + 1);
+          addr = addr.substring(0, li);
+        }
       }
-      // basic check — must look like IP
-      if (!/^[\d.:a-fA-F]+$/.test(addr)) {
+      const isV4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(addr);
+      const isV6 = /^[a-fA-F0-9:]+$/.test(addr) && addr.includes(':');
+      if ((!isV4 && !isV6) || (port !== null && !/^\d+$/.test(port))) {
         const e = new TypeError(`Invalid IP address: ${s}`);
         e.code = 'ERR_INVALID_IP_ADDRESS'; throw e;
       }
@@ -175,7 +212,22 @@ const dns = {
     dns._servers = newServers;
   },
   getServers: () => {
-    if (dns._servers) return dns._servers.slice();
+    if (dns._servers) return dns._servers.map(s => {
+      if (s.startsWith('[')) {
+        const ci = s.indexOf(']');
+        if (ci > 0) {
+          const rest = s.substring(ci + 1);
+          const addr = s.substring(1, ci);
+          if (rest === '' || rest === ':53') return addr;
+        }
+      } else if (!s.includes(':')) return s;
+      else {
+        const li = s.lastIndexOf(':');
+        const port = s.substring(li + 1);
+        if (port === '53') return s.substring(0, li);
+      }
+      return s;
+    });
     // Read from /etc/resolv.conf on first call
     try {
       const fs = require('fs');

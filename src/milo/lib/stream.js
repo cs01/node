@@ -677,7 +677,7 @@ class Writable extends Stream {
 
   pipe() { this.emit('error', new Error('Cannot pipe, not readable')); }
 
-  _write(chunk, encoding, cb) { cb(_ERR_METHOD_NOT_IMPLEMENTED('_write()')); }
+  _write(chunk, encoding, cb) { throw _ERR_METHOD_NOT_IMPLEMENTED('_write()'); }
 
   write(chunk, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
@@ -742,6 +742,7 @@ class Writable extends Stream {
       }
       if (err) {
         state.errored = err;
+        this.writable = false;
         if (cb) cb(err);
         process.nextTick(() => this.emit('error', err));
       } else {
@@ -1009,43 +1010,31 @@ Object.getOwnPropertyNames(Writable.prototype).forEach(method => {
 
 class Transform extends Duplex {
   constructor(opts) {
-    const userFinal = opts && opts.final;
-    if (opts) delete opts.final;
     super(opts);
     if (opts && opts.transform) this._transform = opts.transform;
     if (opts && typeof opts.flush === 'function') this._flush = opts.flush;
-    if (userFinal) this._userFinal = userFinal;
+    if (opts && typeof opts.final === 'function') this._final = opts.final;
+    this.on('prefinish', () => {
+      if (typeof this._flush === 'function' && !this.destroyed) {
+        this._flush((err, data) => {
+          if (data != null) this.push(data);
+          if (!err) this.push(null);
+        });
+      } else {
+        this.push(null);
+      }
+    });
   }
 
   _read() {}
 
-  _transform(chunk, encoding, cb) { cb(null, chunk); }
+  _transform(chunk, encoding, cb) { throw _ERR_METHOD_NOT_IMPLEMENTED('_transform()'); }
 
   _write(chunk, encoding, cb) {
     this._transform(chunk, encoding, (err, data) => {
       if (data != null) this.push(data);
       cb(err);
     });
-  }
-
-  _final(cb) {
-    const doFlush = () => {
-      if (this._flush) {
-        this._flush((err, data) => {
-          if (data != null) this.push(data);
-          this.push(null);
-          cb(err);
-        });
-      } else {
-        this.push(null);
-        cb();
-      }
-    };
-    if (this._userFinal) {
-      this._userFinal(doFlush);
-    } else {
-      doFlush();
-    }
   }
 }
 

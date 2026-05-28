@@ -299,6 +299,34 @@ if (!process.seteuid) {
 if (!process.setegid) {
   process.setegid = _makeSetId(_osB.setEgid.bind(_osB), _osB.resolveGroup.bind(_osB), 'Group identifier');
 }
+if (!process.setgroups) {
+  process.setgroups = function(groups) {
+    if (!Array.isArray(groups)) {
+      const e = new TypeError('The "groups" argument must be an instance of Array. Received ' + (groups === undefined ? 'undefined' : groups === null ? 'null' : typeof groups));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    for (let i = 0; i < groups.length; i++) {
+      const g = groups[i];
+      if (typeof g !== 'number' && typeof g !== 'string') {
+        const v = g === undefined ? 'undefined' : g === null ? 'null' : typeof g === 'boolean' ? 'type boolean (' + g + ')' : typeof g === 'function' ? 'function ' + (g.name || '') : typeof g === 'object' ? (Array.isArray(g) ? 'an instance of Array' : 'an instance of ' + ((g.constructor && g.constructor.name) || 'Object')) : 'type ' + typeof g + ' (' + String(g) + ')';
+        const e = new TypeError('The "groups[' + i + ']" argument must be one of type number or string. Received ' + v);
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
+      if (typeof g === 'number') {
+        if (g < 0 || g > 0xFFFFFFFF || !Number.isInteger(g)) {
+          const e = new RangeError('The value of "groups[' + i + ']" is out of range. It must be >= 0 && <= 4294967295. Received ' + g);
+          e.code = 'ERR_OUT_OF_RANGE'; throw e;
+        }
+      } else {
+        const resolved = _osB.resolveGroup(g);
+        if (resolved === -1) {
+          const e = new Error('Group identifier does not exist: ' + g);
+          e.code = 'ERR_UNKNOWN_CREDENTIAL'; throw e;
+        }
+      }
+    }
+  };
+}
 
 let _uncaughtExceptionCallback = null;
 process.setUncaughtExceptionCaptureCallback = (fn) => {
