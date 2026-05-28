@@ -288,7 +288,7 @@ if (!process.binding) {
       }
       return _utilBindingCache;
     }
-    throw new Error('process.binding is not supported');
+    throw new Error('No such module: ' + name);
   };
 }
 

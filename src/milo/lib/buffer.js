@@ -981,12 +981,27 @@ function isUtf8(input) {
   return true;
 }
 
+let _inspectMaxBytes = 50;
 const _exports = {
   Buffer, SlowBuffer, kMaxLength: 2 ** 31 - 1, kStringMaxLength: 2 ** 28 - 16,
-  INSPECT_MAX_BYTES: 50,
   isAscii, isUtf8,
   constants: { MAX_LENGTH: 2 ** 31 - 1, MAX_STRING_LENGTH: 2 ** 28 - 16 },
   atob: globalThis.atob, btoa: globalThis.btoa,
   File: globalThis.File, Blob: globalThis.Blob,
 };
+Object.defineProperty(_exports, 'INSPECT_MAX_BYTES', {
+  enumerable: true,
+  get() { return _inspectMaxBytes; },
+  set(val) {
+    if (typeof val !== 'number') {
+      const e = new TypeError('The "value" argument must be of type number. Received type ' + typeof val + " ('" + val + "')");
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (val < 0 || Number.isNaN(val)) {
+      const e = new RangeError('The value of "value" is out of range. It must be >= 0 && <= 2147483647. Received ' + val);
+      e.code = 'ERR_OUT_OF_RANGE'; throw e;
+    }
+    _inspectMaxBytes = val;
+  }
+});
 module.exports = _exports;

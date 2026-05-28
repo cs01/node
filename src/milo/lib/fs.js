@@ -19,6 +19,19 @@ function _ERR_INVALID_ARG_TYPE(name, expected, actual) {
   return e;
 }
 
+const _validEncodings = new Set(['ascii', 'utf8', 'utf-8', 'utf16le', 'utf-16le', 'ucs2', 'ucs-2', 'base64', 'base64url', 'latin1', 'binary', 'hex', null, undefined]);
+function _assertEncoding(encoding) {
+  if (encoding != null && !_validEncodings.has(encoding)) {
+    const e = new TypeError("The \"encoding\" argument must be one of type string or null. Received '" + encoding + "'");
+    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+  }
+}
+function _getEncoding(opts) {
+  const enc = typeof opts === 'string' ? opts : (opts && opts.encoding);
+  _assertEncoding(enc);
+  return enc || null;
+}
+
 function _validatePath(p, name) {
   if (typeof p !== 'string' && !Buffer.isBuffer(p)) {
     if (p instanceof URL) {
@@ -86,13 +99,13 @@ function _toPath(p) {
 }
 
 function readFileSync(path, opts) {
+  const encoding = _getEncoding(opts);
   if (typeof path === 'number') {
     const chunks = [];
     const buf = Buffer.alloc(8192);
     let n;
     while ((n = readSync(path, buf, 0, 8192, null)) > 0) chunks.push(buf.slice(0, n));
     const result = Buffer.concat(chunks);
-    const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
     return encoding ? result.toString(encoding) : result;
   }
   _validatePath(path, 'path');
@@ -106,7 +119,6 @@ function readFileSync(path, opts) {
   }
   const r = b.readFile(p);
   if (r === -1) { const e = new Error(`ENOENT: no such file or directory, open '${path}'`); e.code = 'ENOENT'; e.syscall = 'open'; e.path = String(path); throw e; }
-  const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
   if (encoding === 'utf8' || encoding === 'utf-8') return r;
   return Buffer.from(r);
 }
@@ -127,6 +139,7 @@ function _validateWriteData(data) {
 function writeFileSync(path, data, options) {
   if (typeof options === 'string') options = { encoding: options };
   const opts = options || {};
+  _assertEncoding(opts.encoding);
   _validateWriteData(data);
   if (typeof path === 'number') {
     const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
@@ -150,6 +163,7 @@ function writeFileSync(path, data, options) {
 function appendFileSync(path, data, options) {
   if (typeof options === 'string') options = { encoding: options };
   const opts = options || {};
+  _assertEncoding(opts.encoding);
   _validatePath(path, 'path');
   const p = _toPath(path);
   const mode = opts.mode != null ? (typeof opts.mode === 'string' ? parseInt(opts.mode, 8) : opts.mode) : 0o666;
@@ -274,6 +288,7 @@ function unlinkSync(path) {
 function rmdirSync(path) { _validatePath(path, 'path'); b.rmdir(_toPath(path)); }
 function renameSync(old, n) { _validatePath(old, 'oldPath'); _validatePath(n, 'newPath'); b.rename(_toPath(old), _toPath(n)); }
 function readdirSync(path, opts) {
+  _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
   _validatePath(path, 'path');
   const sp = _toPath(path);
   const result = b.readdir(sp);
@@ -290,7 +305,7 @@ function readdirSync(path, opts) {
   }
   return entries;
 }
-function realpathSync(path) { _validatePath(path, 'path'); return b.realpath(_toPath(path)); }
+function realpathSync(path, opts) { _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding)); _validatePath(path, 'path'); return b.realpath(_toPath(path)); }
 function chmodSync(path, mode) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); b.chmod(_toPath(path), mode); }
 function lchmodSync(path, mode) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); b.lchmod ? b.lchmod(_toPath(path), mode) : b.chmod(_toPath(path), mode); }
 function statfsSync(path, opts) {
@@ -317,7 +332,7 @@ function lstatSync(path, options) {
   }
   return _wrapStats(result);
 }
-function readlinkSync(path) { _validatePath(path, 'path'); const sp = _toPath(path); return b.readlink ? b.readlink(sp) : sp; }
+function readlinkSync(path, opts) { _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding)); _validatePath(path, 'path'); const sp = _toPath(path); return b.readlink ? b.readlink(sp) : sp; }
 // POSIX open flags
 const O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0x200, O_TRUNC = 0x400, O_APPEND = 0x8, O_EXCL = 0x800, O_SYNC = 0x80;
 const FLAG_MAP = {
@@ -516,7 +531,8 @@ function rmSync(path, opts) {
   }
 }
 
-function mkdtempSync(prefix) {
+function mkdtempSync(prefix, opts) {
+  _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
   _validatePath(prefix, 'prefix');
   prefix = _toPath(prefix);
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -529,9 +545,10 @@ function mkdtempSync(prefix) {
 
 function mkdtemp(prefix, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
   _validatePath(prefix, 'prefix');
   _validateCb(cb);
-  _async(mkdtempSync, [prefix], cb);
+  _async(mkdtempSync, [prefix, opts], cb);
 }
 
 function accessSync(path, mode) {
@@ -553,6 +570,7 @@ function createReadStream(path, opts) {
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
   if (typeof opts === 'string') opts = { encoding: opts };
+  _assertEncoding(opts && opts.encoding);
   const { Readable } = require('stream');
   const highWaterMark = (opts && opts.highWaterMark) || 65536;
   const encoding = opts && opts.encoding;
@@ -601,6 +619,7 @@ function createWriteStream(path, opts) {
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
   if (typeof opts === 'string') opts = { encoding: opts };
+  _assertEncoding(opts && opts.encoding);
   const { Writable } = require('stream');
   const flags = (opts && opts.flags) || 'w';
   const fd = openSync(path, flags);
@@ -646,8 +665,8 @@ function _async(syncFn, args, cb) {
 
 function readFile(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
   if (typeof path === 'number') {
-    // fd mode — read all data from fd
     process.nextTick(() => {
       try {
         const chunks = [];
@@ -662,16 +681,12 @@ function readFile(path, opts, cb) {
     return;
   }
   _validatePath(path, 'path');
-  const _enc = typeof opts === 'string' ? opts : (opts && opts.encoding);
-  if (_enc && !Buffer.isEncoding(_enc)) {
-    const e = new TypeError(`The argument 'encoding' is invalid for this operation. Received '${_enc}'`);
-    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
-  }
   _async(readFileSync, [path, opts], cb);
 }
 
 function writeFile(path, data, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
   if (typeof path === 'number') {
     // fd mode
     _validateCb(cb);
@@ -706,6 +721,7 @@ function mkdir(path, opts, cb) {
 
 function readdir(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
   _validatePath(path, 'path');
   _async(readdirSync, [path, opts], cb);
 }
@@ -732,6 +748,7 @@ function copyFile(src, dest, flags, cb) {
 }
 function realpath(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
   _validatePath(path, 'path');
   _async(realpathSync, [path], cb);
 }
@@ -739,8 +756,9 @@ realpath.native = realpath;
 realpathSync.native = realpathSync;
 function appendFile(path, data, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
   _validatePath(path, 'path');
-  _validateCb(cb); _async(appendFileSync, [path, data], (err) => cb(err));
+  _validateCb(cb); _async(appendFileSync, [path, data, opts], (err) => cb(err));
 }
 function exists(path, cb) {
   if (typeof cb !== 'function') throw _ERR_INVALID_ARG_TYPE('cb', 'function', cb);
@@ -877,8 +895,9 @@ function fstat(fd, opts, cb) {
 
 function readlink(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
+  _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
   _validatePath(path, 'path');
-  _async(readlinkSync, [path], cb);
+  _async(readlinkSync, [path, opts], cb);
 }
 function symlink(target, path, type, cb) {
   if (typeof type === 'function') { cb = type; type = undefined; }
@@ -987,6 +1006,7 @@ class FSWatcher extends EventEmitter {
 
 function watch(filename, options, listener) {
   if (typeof options === 'function') { listener = options; options = {}; }
+  _assertEncoding(typeof options === 'string' ? options : (options && options.encoding));
   _validatePath(filename, 'filename');
   const watcher = new FSWatcher(String(filename), options);
   if (listener) watcher.on('change', listener);

@@ -4,6 +4,7 @@
 const EventEmitter = require('events');
 const tcp = internalBinding('tcp');
 const net = require('net');
+const { getSystemErrorName } = require('util');
 
 class Socket extends EventEmitter {
   constructor(type, listener) {
@@ -34,9 +35,13 @@ class Socket extends EventEmitter {
     }
 
     const host = address || '0.0.0.0';
-    const r = tcp.udpBind(this._fd, port || 0, host);
+    const bindPort = port || 0;
+    const r = tcp.udpBind(this._fd, bindPort, host);
     if (r < 0) {
-      process.nextTick(() => this.emit('error', new Error('bind failed')));
+      const code = getSystemErrorName(r);
+      const err = new Error('bind ' + code + ' ' + host);
+      err.code = code; err.errno = r; err.syscall = 'bind'; err.address = host;
+      process.nextTick(() => this.emit('error', err));
       return this;
     }
 
@@ -281,12 +286,26 @@ function createSocket(options, listener) {
     const e = new TypeError('The "options" argument must be of type string or an instance of Object');
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
+  if (options.signal !== undefined && (options.signal === null || typeof options.signal !== 'object' || !('aborted' in options.signal))) {
+    const e = new TypeError('The "options.signal" property must be an instance of AbortSignal. Received ' + (options.signal === null ? 'null' : typeof options.signal === 'object' ? 'an instance of ' + (options.signal.constructor?.name || 'Object') : 'type ' + typeof options.signal + ' (' + options.signal + ')'));
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
   const type = options.type;
   if (type !== 'udp4' && type !== 'udp6') {
     const e = new TypeError(`Bad socket type specified. Valid types are: udp4, udp6`);
     e.code = 'ERR_SOCKET_BAD_TYPE'; throw e;
   }
-  return new Socket(type, listener);
+  const socket = new Socket(type, listener);
+  if (options.signal) {
+    if (options.signal.aborted) {
+      process.nextTick(() => socket.close());
+    } else {
+      const onAbort = () => socket.close();
+      options.signal.addEventListener('abort', onAbort, { once: true });
+      socket.once('close', () => options.signal.removeEventListener('abort', onAbort));
+    }
+  }
+  return socket;
 }
 
 module.exports = { createSocket, Socket };

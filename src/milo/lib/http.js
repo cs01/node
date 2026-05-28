@@ -6,6 +6,18 @@ const net = require('net');
 const stream = require('stream');
 const { Readable } = stream;
 
+function _invalidArgTypeHelper(input) {
+  if (input == null) return ' Received ' + String(input);
+  if (typeof input === 'function' && input.name) return ' Received function ' + input.name;
+  if (typeof input === 'object') {
+    const name = input.constructor?.name || 'Object';
+    return ' Received an instance of ' + name;
+  }
+  let inspected = String(input);
+  if (inspected.length > 28) inspected = inspected.slice(0, 25) + '...';
+  return ' Received type ' + typeof input + ' (' + inspected + ')';
+}
+
 // Headers that should NOT be concatenated — first value wins
 const _SINGLE_HEADERS = new Set([
   'content-type', 'content-length', 'user-agent', 'referer', 'host',
@@ -503,6 +515,14 @@ class ClientRequest extends EventEmitter {
     this._options = options;
     this._headers = {};
     this._body = [];
+    if (options.hostname != null && typeof options.hostname !== 'string') {
+      const e = new TypeError('The "options.hostname" property must be of type string or one of undefined or null.' + _invalidArgTypeHelper(options.hostname));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (options.host != null && typeof options.host !== 'string') {
+      const e = new TypeError('The "options.host" property must be of type string or one of undefined or null.' + _invalidArgTypeHelper(options.host));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
     if (options.method != null && typeof options.method !== 'string') {
       const e = new TypeError('The "options.method" property must be of type string. Received type ' + typeof options.method + ' (' + String(options.method) + ')');
       e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
