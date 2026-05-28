@@ -347,7 +347,7 @@ class Server extends EventEmitter {
   }
 
   close(cb) {
-    if (cb) this.once('close', cb);
+    if (typeof cb === 'function') this.once('close', cb);
     this._listening = false;
     this._handle = null;
     if (this._fd >= 0) {
@@ -567,6 +567,21 @@ module.exports = {
   getDefaultAutoSelectFamilyAttemptTimeout: () => module.exports._autoSelectTimeout || 2500,
   setDefaultAutoSelectFamily: () => {},
   getDefaultAutoSelectFamily: () => false,
+  _normalizeArgs: function(args) {
+    let arr;
+    if (args.length === 0) return [{}, null];
+    const arg0 = args[0];
+    let options = {};
+    if (typeof arg0 === 'object' && arg0 !== null) options = arg0;
+    else if (typeof arg0 === 'number') options.port = arg0;
+    else if (typeof arg0 === 'string') options.path = arg0;
+    const last = args[args.length - 1];
+    const cb = typeof last === 'function' ? last : null;
+    if (args.length > 1 && typeof args[1] === 'string') options.host = args[1];
+    arr = [options, cb];
+    arr[Symbol('normalizedArgs')] = true;
+    return arr;
+  },
   _fileWatchers,
   _ensurePoll: ensurePoll,
   _pollOnce,

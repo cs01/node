@@ -303,6 +303,10 @@ if (!process.setegid) {
 let _uncaughtExceptionCallback = null;
 process.setUncaughtExceptionCaptureCallback = (fn) => {
   if (fn !== null && typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('fn', 'function or null', fn);
+  if (fn !== null && _uncaughtExceptionCallback !== null) {
+    const e = new Error('`process.setupUncaughtExceptionCapture()` was called while a capture callback was already active');
+    e.code = 'ERR_UNCAUGHT_EXCEPTION_CAPTURE_ALREADY_SET'; throw e;
+  }
   _uncaughtExceptionCallback = fn;
 };
 process.hasUncaughtExceptionCaptureCallback = () => _uncaughtExceptionCallback !== null;

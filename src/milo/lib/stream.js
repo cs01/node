@@ -23,6 +23,9 @@ function _validateHWM(hwm, name) {
   }
 }
 
+let _defaultHWM = 65536;
+let _defaultObjectHWM = 16;
+
 // Function-based so old-style util.inherits + .call() works
 function Stream() { EventEmitter.call(this); }
 Object.setPrototypeOf(Stream.prototype, EventEmitter.prototype);
@@ -110,7 +113,7 @@ class Readable extends Stream {
     if (opts) { _validateHWM(opts.highWaterMark, 'highWaterMark'); _validateHWM(opts.readableHighWaterMark, 'readableHighWaterMark'); }
     const _isDuplex = this instanceof Duplex;
     const _rOM = opts ? (opts.readableObjectMode != null ? opts.readableObjectMode : !!opts.objectMode) : false;
-    const _rDefaultHWM = _rOM ? 16 : 65536;
+    const _rDefaultHWM = _rOM ? _defaultObjectHWM : _defaultHWM;
     let _rHWM = _rDefaultHWM;
     if (opts) {
       if (opts.highWaterMark != null) _rHWM = opts.highWaterMark;
@@ -155,6 +158,14 @@ class Readable extends Stream {
   read(size) {
     const state = this._readableState;
     if (state._destroyed) return null;
+    if (size !== undefined) {
+      size = parseInt(size, 10);
+      if (size > 0x40000000) {
+        const e = new RangeError('The value of "size" is out of range. It must be <= 1GiB. Received ' + size);
+        e.code = 'ERR_OUT_OF_RANGE'; throw e;
+      }
+      if (size > state.highWaterMark) state.highWaterMark = size;
+    }
     if (state.buffer.length === 0) {
       if (state.ended) {
         state.reading = false;
@@ -210,7 +221,7 @@ class Readable extends Stream {
     const state = this._readableState;
     this._didPush = true;
     if (state._destroyed) return false;
-    if (chunk === undefined) return state.length < state.highWaterMark;
+    if (chunk === undefined) return state.length <= state.highWaterMark;
     if (chunk === null) {
       state.ended = true;
       if (state.flowing || state.buffer.length === 0) {
@@ -613,7 +624,7 @@ class Writable extends Stream {
     this.writable = true;
     if (opts) { _validateHWM(opts.highWaterMark, 'highWaterMark'); _validateHWM(opts.writableHighWaterMark, 'writableHighWaterMark'); }
     const _wOM2 = !!(opts && opts.objectMode);
-    const _wDefaultHWM2 = _wOM2 ? 16 : 65536;
+    const _wDefaultHWM2 = _wOM2 ? _defaultObjectHWM : _defaultHWM;
     const _wHWM2 = (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM2;
     this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], bufferedRequestCount: 0, objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2, errorEmitted: false, errored: null, autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true, _destroyed: false, writable: true };
     if (opts && opts.write) this._write = opts.write;
@@ -670,7 +681,7 @@ class Writable extends Stream {
       if (this._decodeStrings !== false) { chunk = Buffer.from(chunk, encoding); encoding = 'buffer'; }
     }
     this._writableState.length += (this._writableState.objectMode ? 1 : (chunk.length || 0));
-    const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 65536;
+    const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : _defaultHWM;
     const ret = this._writableState.length < hwm;
     if (!ret) this._writableState.needDrain = true;
     if (this._writableState.corked > 0 || this._writableState.writing) {
@@ -700,8 +711,8 @@ class Writable extends Stream {
         if (cb) cb(err);
         process.nextTick(() => this.emit('error', err));
       } else {
-        const hwm = state.highWaterMark != null ? state.highWaterMark : 65536;
-        if (state.needDrain && state.length < hwm) {
+        const hwm = state.highWaterMark != null ? state.highWaterMark : _defaultHWM;
+        if (state.needDrain && (state.length < hwm || state.length === 0)) {
           state.needDrain = false;
           this.emit('drain');
         }
@@ -851,7 +862,7 @@ class Writable extends Stream {
   set destroyed(v) { if (this._writableState) this._writableState._destroyed = v; }
   get writableEnded() { return this._writableState.ended; }
   get writableFinished() { return this._writableState.finished; }
-  get writableHighWaterMark() { return this._writableState && this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 65536; }
+  get writableHighWaterMark() { return this._writableState && this._writableState.highWaterMark != null ? this._writableState.highWaterMark : _defaultHWM; }
   get writableLength() { return (this._writableState && this._writableState.length) || 0; }
   get writableObjectMode() { return !!(this._writableState && this._writableState.objectMode); }
   get writableCorked() { return (this._writableState && this._writableState.corked) || 0; }
@@ -867,7 +878,7 @@ class Duplex extends Readable {
     if (opts) _validateHWM(opts.writableHighWaterMark, 'writableHighWaterMark');
     this.allowHalfOpen = opts && opts.allowHalfOpen !== undefined ? opts.allowHalfOpen : true;
     const _wOM = opts ? (opts.writableObjectMode != null ? opts.writableObjectMode : !!opts.objectMode) : false;
-    const _wDefaultHWM = _wOM ? 16 : 65536;
+    const _wDefaultHWM = _wOM ? _defaultObjectHWM : _defaultHWM;
     let _wHWM = _wDefaultHWM;
     if (opts) {
       if (opts.highWaterMark != null) _wHWM = opts.highWaterMark;
@@ -886,7 +897,7 @@ class Duplex extends Readable {
   set destroyed(v) { if (this._readableState) this._readableState._destroyed = v; if (this._writableState) this._writableState._destroyed = v; }
   get writableEnded() { return this._writableState.ended; }
   get writableFinished() { return this._writableState.finished; }
-  get writableHighWaterMark() { return this._writableState && this._writableState.highWaterMark != null ? this._writableState.highWaterMark : 65536; }
+  get writableHighWaterMark() { return this._writableState && this._writableState.highWaterMark != null ? this._writableState.highWaterMark : _defaultHWM; }
   get writableLength() { return (this._writableState && this._writableState.length) || 0; }
   get writableObjectMode() { return !!(this._writableState && this._writableState.objectMode); }
   get writableCorked() { return (this._writableState && this._writableState.corked) || 0; }
@@ -1087,7 +1098,5 @@ module.exports.web = {
   WritableStreamDefaultWriter: globalThis.WritableStream ? class WritableStreamDefaultWriter { constructor(stream) { return stream.getWriter(); } } : undefined,
 };
 
-let _defaultHWM = 65536;
-let _defaultObjectHWM = 16;
 module.exports.getDefaultHighWaterMark = function(objectMode) { return objectMode ? _defaultObjectHWM : _defaultHWM; };
 module.exports.setDefaultHighWaterMark = function(objectMode, value) { if (objectMode) _defaultObjectHWM = value; else _defaultHWM = value; };

@@ -1200,6 +1200,7 @@
   require('_console_init');
   require('_process_init');
   require('_timers_init');
+  require('timers');
   try { const _b = require('buffer'); globalThis.Buffer = _b.Buffer || _b; } catch {}
   // Expose WebCrypto API as globalThis.crypto (Node 19+)
   try { const _c = require('crypto'); if (_c.webcrypto) Object.defineProperty(globalThis, 'crypto', { value: _c.webcrypto, writable: true, enumerable: true, configurable: true }); } catch {}

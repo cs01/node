@@ -30,7 +30,7 @@ EventEmitter.prototype.setMaxListeners = function(n) {
   }
   this._maxListeners = n; return this;
 };
-EventEmitter.prototype.getMaxListeners = function() { return this._maxListeners; };
+EventEmitter.prototype.getMaxListeners = function() { return this._maxListeners !== undefined ? this._maxListeners : EventEmitter.defaultMaxListeners; };
 
 EventEmitter.prototype.emit = function(type) {
   if (!this._events) this._events = Object.create(null);
