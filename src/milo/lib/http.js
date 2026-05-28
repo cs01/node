@@ -476,6 +476,10 @@ class ClientRequest extends EventEmitter {
     this._options = options;
     this._headers = {};
     this._body = [];
+    if (options.method != null && typeof options.method !== 'string') {
+      const e = new TypeError('The "options.method" property must be of type string. Received type ' + typeof options.method + ' (' + String(options.method) + ')');
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
     this.method = (options.method || 'GET').toUpperCase();
     this.path = options.path || '/';
     if (typeof this.path === 'string' && /[\x00-\x20\x7f-\xff]/.test(this.path)) throw _ERR_UNESCAPED_CHARACTERS('Request path');

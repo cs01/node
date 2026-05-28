@@ -512,6 +512,7 @@ function rmSync(path, opts) {
 
 function mkdtempSync(prefix) {
   _validatePath(prefix, 'prefix');
+  prefix = _toPath(prefix);
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let suffix = '';
   for (let i = 0; i < 6; i++) suffix += chars[Math.floor(Math.random() * chars.length)];
@@ -713,6 +714,8 @@ function realpath(path, opts, cb) {
   _validatePath(path, 'path');
   _async(realpathSync, [path], cb);
 }
+realpath.native = realpath;
+realpathSync.native = realpathSync;
 function appendFile(path, data, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
   _validatePath(path, 'path');
