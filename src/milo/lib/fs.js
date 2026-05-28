@@ -86,14 +86,21 @@ function _toPath(p) {
 }
 
 function readFileSync(path, opts) {
+  if (typeof path === 'number') {
+    const chunks = [];
+    const buf = Buffer.alloc(8192);
+    let n;
+    while ((n = readSync(path, buf, 0, 8192, null)) > 0) chunks.push(buf.slice(0, n));
+    const result = Buffer.concat(chunks);
+    const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
+    return encoding ? result.toString(encoding) : result;
+  }
   _validatePath(path, 'path');
   const p = _toPath(path);
   const flag = (opts && typeof opts === 'object') ? (opts.flag || 'r') : 'r';
-  // Handle exclusive flags (ax+, wx+) — fail if file exists
   if (flag.indexOf('x') !== -1) {
     if (existsSync(p)) throw _fsError('EEXIST', 'open', p, 'file already exists');
   }
-  // For append flags, create file if it doesn't exist
   if (flag.indexOf('a') !== -1 || flag.indexOf('w') !== -1) {
     if (!existsSync(p)) { writeFileSync(path, ''); }
   }
@@ -375,7 +382,10 @@ function readSync(fd, buffer, offset, length, position) {
 }
 
 function writeSync(fd, data, offset, length, position) {
-  if (typeof data === 'string') data = Buffer.from(data);
+  if (typeof data === 'string') { data = Buffer.from(data); }
+  else if (!Buffer.isBuffer(data) && !ArrayBuffer.isView(data)) {
+    throw _ERR_INVALID_ARG_TYPE('buffer', ['string', 'Buffer', 'TypedArray', 'DataView'], data);
+  }
   offset = offset || 0;
   length = length || data.length - offset;
   if (position != null) b.fdSeek(fd, position, 0);
@@ -539,7 +549,10 @@ function createReadStream(path, opts) {
   const { Readable } = require('stream');
   const highWaterMark = (opts && opts.highWaterMark) || 65536;
   const encoding = opts && opts.encoding;
-  const fd = openSync(path, (opts && opts.flags) || 'r');
+  const autoClose = opts && opts.autoClose !== undefined ? opts.autoClose : true;
+  let ownFd = false;
+  let fd;
+  if (opts && opts.fd != null) { fd = opts.fd; } else { fd = openSync(path, (opts && opts.flags) || 'r'); ownFd = true; }
   let pos = (opts && opts.start) || 0;
   const end = opts && opts.end;
   if (globalThis.__ref) globalThis.__ref();
@@ -547,7 +560,7 @@ function createReadStream(path, opts) {
   function closeStream() {
     if (closed) return;
     closed = true;
-    closeSync(fd);
+    if (ownFd || autoClose) { try { closeSync(fd); } catch(e) {} }
     if (globalThis.__unref) globalThis.__unref();
   }
   const rs = new Readable({

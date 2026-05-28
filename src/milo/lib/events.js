@@ -219,6 +219,14 @@ EventEmitter.setMaxListeners = function(n) {
 };
 
 function once(emitter, type) {
+  if (typeof emitter.addEventListener === 'function' && typeof emitter.on !== 'function') {
+    return new Promise(function(resolve) {
+      emitter.addEventListener(type, function onRes(ev) {
+        emitter.removeEventListener(type, onRes);
+        resolve([ev]);
+      });
+    });
+  }
   return new Promise(function(resolve, reject) {
     var onErr = function(e) { emitter.removeListener(type, onRes); reject(e); };
     var onRes = function() {

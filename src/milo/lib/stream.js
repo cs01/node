@@ -172,6 +172,9 @@ class Readable extends Stream {
         if (!state.endEmitted) { state.endEmitted = true; process.nextTick(() => { this.readable = false; this.emit('end'); if (state.autoDestroy && (!this._writableState || this._writableState.finished)) this.destroy(); }); }
         return null;
       }
+      if (size === undefined) {
+        if (state.length >= state.highWaterMark) { state.needReadable = true; return null; }
+      }
       state.reading = true;
       state.needReadable = true;
       this._read(state.highWaterMark);
@@ -224,6 +227,10 @@ class Readable extends Stream {
     if (chunk === undefined) return state.length <= state.highWaterMark;
     if (chunk === null) {
       state.ended = true;
+      if (state.readableListening && !state._readableEmitScheduled) {
+        state._readableEmitScheduled = true;
+        process.nextTick(() => { state._readableEmitScheduled = false; this.emit('readable'); });
+      }
       if (state.flowing || state.buffer.length === 0) {
         process.nextTick(() => {
           if (!state.endEmitted && !state._destroyed) { state.endEmitted = true; this.readable = false; this.emit('end'); if (state.autoDestroy && (!this._writableState || this._writableState.finished)) this.destroy(); }
@@ -289,11 +296,11 @@ class Readable extends Stream {
         state._readScheduled = true;
         process.nextTick(() => {
           state._readScheduled = false;
-          if (!state.reading && !state.ended && state.length < state.highWaterMark) {
+          if (!state.reading && !state.ended && state.length <= state.highWaterMark) {
             state.reading = true;
             this._read(state.highWaterMark);
             state.reading = false;
-            if (state.length > 0) {
+            if (state.length > 0 || state.ended) {
               state.needReadable = false;
               if (!state._readableEmitScheduled) {
                 state._readableEmitScheduled = true;
@@ -626,7 +633,7 @@ class Writable extends Stream {
     const _wOM2 = !!(opts && opts.objectMode);
     const _wDefaultHWM2 = _wOM2 ? _defaultObjectHWM : _defaultHWM;
     const _wHWM2 = (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM2;
-    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], bufferedRequestCount: 0, objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2, errorEmitted: false, errored: null, autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true, _destroyed: false, writable: true };
+    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], bufferedRequestCount: 0, objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2, errorEmitted: false, errored: null, autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true, _destroyed: false };
     if (opts && opts.write) this._write = opts.write;
     if (opts && opts.writev) this._writev = opts.writev;
     if (opts && opts.destroy) this._destroy = opts.destroy;
@@ -679,6 +686,8 @@ class Writable extends Stream {
     if (typeof chunk === 'string') {
       if (encoding && !Buffer.isEncoding(encoding)) throw _ERR_UNKNOWN_ENCODING(encoding);
       if (this._decodeStrings !== false) { chunk = Buffer.from(chunk, encoding); encoding = 'buffer'; }
+    } else if (!this._writableState.objectMode && !Buffer.isBuffer(chunk) && ArrayBuffer.isView(chunk)) {
+      chunk = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength); encoding = 'buffer';
     }
     this._writableState.length += (this._writableState.objectMode ? 1 : (chunk.length || 0));
     const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : _defaultHWM;
@@ -711,14 +720,16 @@ class Writable extends Stream {
         if (cb) cb(err);
         process.nextTick(() => this.emit('error', err));
       } else {
-        const hwm = state.highWaterMark != null ? state.highWaterMark : _defaultHWM;
-        if (state.needDrain && (state.length < hwm || state.length === 0)) {
-          state.needDrain = false;
-          this.emit('drain');
-        }
         if (cb) cb(err);
       }
       this._flushBuffered();
+      if (!state.writing && !err && state.needDrain) {
+        const hwm = state.highWaterMark != null ? state.highWaterMark : _defaultHWM;
+        if (state.length < hwm || state.length === 0) {
+          state.needDrain = false;
+          this.emit('drain');
+        }
+      }
     });
   }
 
