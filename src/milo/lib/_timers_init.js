@@ -123,18 +123,24 @@ let _eluIdleMs = 0;
 let _eluActiveMs = 0;
 const _now = Date.now;
 
+// pending close count — incremented when a socket/server defers _sockets/_servers deletion,
+// decremented when the 'close' event fires and the deletion runs
+let _pendingCloseRefs = 0;
+Object.defineProperty(globalThis, '__pendingCloseRef', { value: function() { _pendingCloseRefs++; }, enumerable: false });
+Object.defineProperty(globalThis, '__pendingCloseUnref', { value: function() { _pendingCloseRefs--; }, enumerable: false });
+
 Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEventLoop() {
   let net = null;
   try { net = require('net'); } catch {}
   const poll = net && net._pollOnce;
+  const tick = () => { if (process._tickCallback) process._tickCallback(); };
+  const drainAll = () => { tick(); _tb.drainMicrotasks(); tick(); };
 
   for (;;) {
     const tickStart = _now();
-    if (process._tickCallback) process._tickCallback();
+    drainAll();
     _tb.fireDue();
-    if (process._tickCallback) process._tickCallback();
-    _tb.drainMicrotasks();
-    if (process._tickCallback) process._tickCallback();
+    drainAll();
     _eluActiveMs += _now() - tickStart;
 
     const hasTimersNative = _tb.hasPending();
@@ -147,27 +153,27 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     const hasIO = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
     const hasTicks = process._nextTickQueue && process._nextTickQueue.length > 0;
     const hasImmediates = _immediateQueue.length > 0;
-    if (!hasTimers && !hasIO && !hasTicks && !hasImmediates) {
-      // Emit beforeExit — handlers may schedule new work
+    const hasPendingClose = _pendingCloseRefs > 0;
+    if (!hasTimers && !hasIO && !hasTicks && !hasImmediates && !hasPendingClose) {
       if (process._emitBeforeExit) process._emitBeforeExit();
-      if (process._tickCallback) process._tickCallback();
-      // Re-check if beforeExit handlers added work
+      drainAll();
       const hasTimers2 = _tb.hasPending() && (() => { for (const id of _timerCallbacks.keys()) { if (!_unrefTimers.has(id)) return true; } return false; })();
       const hasIO2 = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
       const hasTicks2 = process._nextTickQueue && process._nextTickQueue.length > 0;
       const hasImmediates2 = _immediateQueue.length > 0;
-      if (!hasTimers2 && !hasIO2 && !hasTicks2 && !hasImmediates2) break;
+      const hasPendingClose2 = _pendingCloseRefs > 0;
+      if (!hasTimers2 && !hasIO2 && !hasTicks2 && !hasImmediates2 && !hasPendingClose2) break;
     }
 
     let waitMs = 100;
-    if (hasImmediates) {
+    if (hasImmediates || hasPendingClose) {
       waitMs = 0;
     } else if (hasTimers) {
       const ms = _tb.msUntilNext();
       if (ms >= 0) waitMs = Math.min(waitMs, ms);
     }
 
-    if (waitMs < 1 && !hasImmediates) waitMs = 1;
+    if (waitMs < 1 && !hasImmediates && !hasPendingClose) waitMs = 1;
 
     const pollStart = _now();
     if (poll) {
@@ -176,12 +182,10 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
       _tb.sleepMs(waitMs);
     }
     _eluIdleMs += _now() - pollStart;
-    if (process._tickCallback) process._tickCallback();
-    // Re-poll until no new events: callbacks may generate I/O (e.g., client abort → server EOF)
-    if (poll) { let _rpn = 0; while (_rpn < 10 && poll(0) > 0) { _rpn++; if (process._tickCallback) process._tickCallback(); } }
-    // setImmediate: run after I/O poll (Node.js "check" phase)
+    drainAll();
+    if (poll) { let _rpn = 0; while (_rpn < 10 && poll(0) > 0) { _rpn++; drainAll(); } }
     _drainImmediates();
-    if (process._tickCallback) process._tickCallback();
+    drainAll();
   }
 }, enumerable: false });
 

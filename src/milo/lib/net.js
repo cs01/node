@@ -161,12 +161,15 @@ class Socket extends Duplex {
   }
 
   _destroy(err, cb) {
-    if (this._fd >= 0) {
-      Socket._sockets.delete(this._fd);
-      try { tcp.pollRemove(this._fd, EVFILT_READ); } catch {}
-      try { tcp.pollRemove(this._fd, EVFILT_WRITE); } catch {}
-      tcp.close(this._fd);
+    const fd = this._fd;
+    if (fd >= 0) {
+      try { tcp.pollRemove(fd, EVFILT_READ); } catch {}
+      try { tcp.pollRemove(fd, EVFILT_WRITE); } catch {}
+      tcp.close(fd);
       this._fd = -1;
+      // defer removal from _sockets until 'close' fires so __hasIO keeps loop alive
+      if (globalThis.__pendingCloseRef) globalThis.__pendingCloseRef();
+      this.once('close', () => { Socket._sockets.delete(fd); if (globalThis.__pendingCloseUnref) globalThis.__pendingCloseUnref(); });
     }
     cb(err);
   }
@@ -350,11 +353,14 @@ class Server extends EventEmitter {
     if (typeof cb === 'function') this.once('close', cb);
     this._listening = false;
     this._handle = null;
-    if (this._fd >= 0) {
-      Server._servers.delete(this._fd);
-      try { tcp.pollRemove(this._fd, EVFILT_READ); } catch {}
-      tcp.close(this._fd);
+    const fd = this._fd;
+    if (fd >= 0) {
+      try { tcp.pollRemove(fd, EVFILT_READ); } catch {}
+      tcp.close(fd);
       this._fd = -1;
+      // defer removal so __hasIO keeps loop alive until 'close' fires
+      if (globalThis.__pendingCloseRef) globalThis.__pendingCloseRef();
+      this.once('close', () => { Server._servers.delete(fd); if (globalThis.__pendingCloseUnref) globalThis.__pendingCloseUnref(); });
     }
     process.nextTick(() => this.emit('close'));
     return this;
