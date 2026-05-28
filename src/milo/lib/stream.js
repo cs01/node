@@ -728,9 +728,10 @@ class Writable extends Stream {
     const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : _defaultHWM;
     const ret = this._writableState.length < hwm;
     if (!ret) this._writableState.needDrain = true;
-    if (this._writableState.corked > 0 || this._writableState.writing) {
+    if (this._writableState.corked > 0 || this._writableState.writing || (this._writev && this._write === Writable.prototype._write)) {
       this._writableState.buffered.push({ chunk, encoding: encoding || 'buffer', cb });
       this._writableState.bufferedRequestCount++;
+      if (!this._writableState.corked && !this._writableState.writing) this._flushBuffered();
       return ret;
     }
     this._writableState.writing = true;
@@ -772,7 +773,8 @@ class Writable extends Stream {
   _flushBuffered() {
     const state = this._writableState;
     if (state.buffered.length === 0 || state.corked > 0 || state.writing) return;
-    if (this._writev && state.buffered.length > 1) {
+    const hasOwnWrite = this._write !== Writable.prototype._write;
+    if (this._writev && (state.buffered.length > 1 || !hasOwnWrite)) {
       const entries = state.buffered.splice(0);
       state.bufferedRequestCount = 0;
       state.writing = true;
@@ -834,6 +836,7 @@ class Writable extends Stream {
     }
     if (chunk != null) this.write(chunk, encoding);
     this._writableState.corked = 0;
+    this._flushBuffered();
     this._writableState.ending = true;
     this._writableState.ended = true;
     this.writable = false;
