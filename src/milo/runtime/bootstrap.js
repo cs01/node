@@ -948,7 +948,10 @@
     const dname = _path.dirname(resolved);
     const modRequire = _makeRequire(dname);
     mod.require = modRequire;
-    if (resolved.endsWith('.json')) { mod.exports = JSON.parse(fileSrc); }
+    if (resolved.endsWith('.json')) {
+      try { mod.exports = JSON.parse(fileSrc); }
+      catch (e) { e.message = resolved + ': ' + e.message; throw e; }
+    }
     else {
       let src = fileSrc;
       // Strip shebang lines — V8 doesn't handle them, Node's C++ loader normally does this
@@ -1200,6 +1203,10 @@
       return paths;
     };
     require.cache = moduleCache;
+    Object.defineProperty(require, 'extensions', {
+      get() { try { return globalThis.require('module')._extensions; } catch { return {}; } },
+      configurable: true,
+    });
     Object.defineProperty(require, 'main', {
       get() { return _requireMain; },
       set(v) { _requireMain = v; },

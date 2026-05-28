@@ -9,7 +9,8 @@ class Socket extends EventEmitter {
   constructor(type, listener) {
     super();
     this.type = type || 'udp4';
-    this._fd = -1;
+    this._fd = tcp.udpSocket();
+    this._closed = false;
     this._bound = false;
     this._receiving = false;
     if (listener) this.on('message', listener);
@@ -24,10 +25,12 @@ class Socket extends EventEmitter {
     }
     if (typeof address === 'function') { cb = address; address = undefined; }
 
-    this._fd = tcp.udpSocket();
     if (this._fd < 0) {
-      process.nextTick(() => this.emit('error', new Error('socket() failed')));
-      return this;
+      this._fd = tcp.udpSocket();
+      if (this._fd < 0) {
+        process.nextTick(() => this.emit('error', new Error('socket() failed')));
+        return this;
+      }
     }
 
     const host = address || '0.0.0.0';
@@ -172,6 +175,7 @@ class Socket extends EventEmitter {
       tcp.close(this._fd);
       this._fd = -1;
     }
+    this._closed = true;
     this._bound = false;
     this._receiving = false;
     if (cb) this.once('close', cb);
@@ -185,11 +189,45 @@ class Socket extends EventEmitter {
     return { address: info.address, port: info.port, family: 'IPv4' };
   }
 
+  sendto(buffer, offset, length, port, address, cb) {
+    if (typeof offset !== 'number') {
+      const v = offset === undefined ? 'undefined' : "type " + typeof offset + " ('" + offset + "')";
+      const e = new TypeError('The "offset" argument must be of type number. Received ' + v);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (typeof length !== 'number') {
+      const v = length === undefined ? 'undefined' : "type " + typeof length + " ('" + length + "')";
+      const e = new TypeError('The "length" argument must be of type number. Received ' + v);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (typeof port !== 'number') {
+      const v = typeof port === 'boolean' ? 'type boolean (' + port + ')' : "type " + typeof port + " ('" + port + "')";
+      const e = new TypeError('The "port" argument must be of type number. Received ' + v);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (typeof address !== 'string') {
+      const v = typeof address === 'boolean' ? 'type boolean (' + address + ')' : 'type ' + typeof address;
+      const e = new TypeError('The "address" argument must be of type string. Received ' + v);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    this.send(buffer, offset, length, port, address, cb);
+  }
+
   setBroadcast(flag) { if (this._fd >= 0) tcp.udpSetOpt(this._fd, 1, flag ? 1 : 0); }
   setTTL(ttl) { if (this._fd >= 0) tcp.udpSetOpt(this._fd, 2, ttl); }
   setMulticastTTL(ttl) { if (this._fd >= 0) tcp.udpSetOpt(this._fd, 3, ttl); }
-  addMembership(mcast, iface) { if (this._fd >= 0) tcp.udpAddMembership(this._fd, mcast, iface || ''); }
-  dropMembership(mcast, iface) { if (this._fd >= 0) tcp.udpDropMembership(this._fd, mcast, iface || ''); }
+  addMembership(mcast, iface) {
+    if (mcast === undefined) { const e = new TypeError('The "multicastAddress" argument must be specified'); e.code = 'ERR_MISSING_ARGS'; throw e; }
+    if (this._closed) { const e = new Error('Not running'); e.code = 'ERR_SOCKET_DGRAM_NOT_RUNNING'; throw e; }
+    const r = tcp.udpAddMembership(this._fd, mcast, iface || '');
+    if (r < 0) throw new Error('addMembership EINVAL');
+  }
+  dropMembership(mcast, iface) {
+    if (mcast === undefined) { const e = new TypeError('The "multicastAddress" argument must be specified'); e.code = 'ERR_MISSING_ARGS'; throw e; }
+    if (this._closed) { const e = new Error('Not running'); e.code = 'ERR_SOCKET_DGRAM_NOT_RUNNING'; throw e; }
+    const r = tcp.udpDropMembership(this._fd, mcast, iface || '');
+    if (r < 0) throw new Error('dropMembership EINVAL');
+  }
   setMulticastLoopback() {}
   ref() { return this; }
   unref() { return this; }

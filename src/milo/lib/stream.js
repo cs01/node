@@ -604,6 +604,16 @@ Readable.prototype.asIndexedPairs = function(options) {
   return this.map((val) => [index++, val], options);
 };
 
+Readable.prototype[Symbol.asyncDispose] = function() {
+  if (!this.destroyed) {
+    return new Promise((resolve) => {
+      this.once('close', resolve);
+      this.destroy(new DOMException('The operation was aborted', 'AbortError'));
+    });
+  }
+  return Promise.resolve();
+};
+
 Readable.from = function(iterable, opts) {
   const r = new Readable({ objectMode: true, highWaterMark: 16, ...opts });
   r._read = () => {};
@@ -934,6 +944,15 @@ class Writable extends Stream {
   get writableObjectMode() { return !!(this._writableState && this._writableState.objectMode); }
   get writableCorked() { return (this._writableState && this._writableState.corked) || 0; }
   get writableNeedDrain() { return !!(this._writableState && this._writableState.needDrain); }
+  [Symbol.asyncDispose]() {
+    if (!this.destroyed) {
+      return new Promise((resolve) => {
+        this.once('close', resolve);
+        this.destroy(new DOMException('The operation was aborted', 'AbortError'));
+      });
+    }
+    return Promise.resolve();
+  }
 }
 
 class Duplex extends Readable {

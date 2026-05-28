@@ -1,6 +1,14 @@
 // events module — EventEmitter (function-based for util.inherits/.call() compat)
 'use strict';
 
+function _invalidArgTypeHelper(value) {
+  if (value == null) return ' Received ' + value;
+  if (typeof value === 'function') return ' Received function ' + (value.name || '');
+  if (typeof value === 'object') return ' Received an instance of ' + (value.constructor && value.constructor.name || 'Object');
+  if (typeof value === 'string') return " Received type string ('" + value + "')";
+  return ' Received type ' + typeof value + ' (' + String(value) + ')';
+}
+
 function _ERR_INVALID_ARG_TYPE(name, expected, actual) {
   let received;
   if (actual === null) received = 'null';
@@ -13,10 +21,17 @@ function _ERR_INVALID_ARG_TYPE(name, expected, actual) {
   return e;
 }
 
-function EventEmitter() {
-  if (!(this instanceof EventEmitter)) return new EventEmitter();
+function EventEmitter(opts) {
+  if (!(this instanceof EventEmitter)) return new EventEmitter(opts);
   this._events = Object.create(null);
   this._maxListeners = undefined;
+  if (opts && opts.captureRejections !== undefined) {
+    if (typeof opts.captureRejections !== 'boolean') {
+      const e = new TypeError('The "options.captureRejections" property must be of type boolean.' + _invalidArgTypeHelper(opts.captureRejections));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    this._captureRejections = opts.captureRejections;
+  }
 }
 
 EventEmitter.prototype.setMaxListeners = function(n) {

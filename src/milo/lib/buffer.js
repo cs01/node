@@ -44,7 +44,11 @@ function _bufFromTypeError(value) {
   else if (typeof value === 'symbol') received = `. Received type symbol (${String(value)})`;
   else if (typeof value === 'bigint') received = `. Received type bigint (${value}n)`;
   else if (typeof value === 'function') received = `. Received function ${value.name || ''}`;
-  else if (typeof value === 'object') received = value.constructor?.name ? `. Received an instance of ${value.constructor.name}` : `. Received [Object]`;
+  else if (typeof value === 'object') {
+    if (value.constructor?.name) received = `. Received an instance of ${value.constructor.name}`;
+    else if (Object.getPrototypeOf(value) === null) received = `. Received [[Object: null prototype]]`;
+    else received = `. Received [Object]`;
+  }
   else received = `. Received type ${typeof value}`;
   const e = new TypeError('The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object' + received);
   e.code = 'ERR_INVALID_ARG_TYPE';
@@ -512,7 +516,7 @@ class Buffer extends Uint8Array {
     const hex = [];
     for (let i = 0; i < Math.min(this.length, max); i++) hex.push(this[i].toString(16).padStart(2, '0'));
     let str = hex.join(' ');
-    if (this.length > max) str += ' ... ' + (this.length - max) + ' more bytes';
+    if (this.length > max) { const rem = this.length - max; str += ' ... ' + rem + ' more byte' + (rem !== 1 ? 's' : ''); }
     return '<Buffer ' + str + '>';
   }
 

@@ -517,16 +517,54 @@ class SocketAddress {
 
 class BlockList {
   constructor() { this._rules = []; }
+  _validateAddress(address, name) {
+    if (typeof address !== 'string') {
+      const recv = address === undefined ? 'undefined' : address === null ? 'null' : typeof address === 'object' ? 'an instance of ' + (address.constructor?.name || 'Object') : 'type ' + typeof address + ' (' + (typeof address === 'bigint' ? String(address) + 'n' : String(address)) + ')';
+      const e = new TypeError('The "' + name + '" argument must be of type string. Received ' + recv);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+  }
+  _validateFamily(family) {
+    if (family !== undefined) {
+      if (typeof family !== 'string') {
+        const recv = family === null ? 'null' : typeof family === 'object' ? 'an instance of ' + (family.constructor?.name || 'Object') : 'type ' + typeof family + ' (' + (typeof family === 'bigint' ? String(family) + 'n' : String(family)) + ')';
+        const e = new TypeError('The "family" argument must be of type string. Received ' + recv);
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
+      const f = family.toLowerCase();
+      if (f !== 'ipv4' && f !== 'ipv6') {
+        const e = new TypeError('The argument \'family\' must be one of: ipv4, ipv6. Received \'' + family + '\'');
+        e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+      }
+    }
+  }
   addAddress(address, family) {
+    this._validateAddress(address, 'address');
+    this._validateFamily(family);
     this._rules.push({ type: 'address', address, family: family || 'ipv4' });
   }
   addRange(start, end, family) {
+    this._validateAddress(start, 'start');
+    this._validateAddress(end, 'end');
+    this._validateFamily(family);
     this._rules.push({ type: 'range', start, end, family: family || 'ipv4' });
   }
   addSubnet(network, prefix, family) {
+    this._validateAddress(network, 'network');
+    if (typeof prefix !== 'number') {
+      const recv = prefix === undefined ? 'undefined' : prefix === null ? 'null' : 'type ' + typeof prefix;
+      const e = new TypeError('The "prefix" argument must be of type number. Received ' + recv);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    this._validateFamily(family);
     this._rules.push({ type: 'subnet', network, prefix, family: family || 'ipv4' });
   }
   check(address, family) {
+    if (typeof address !== 'string') {
+      const recv = address === undefined ? 'undefined' : address === null ? 'null' : typeof address === 'object' ? 'an instance of ' + (address.constructor?.name || 'Object') : 'type ' + typeof address;
+      const e = new TypeError('The "address" argument must be of type string. Received ' + recv);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
     for (const rule of this._rules) {
       if (rule.type === 'address' && rule.address === address) return true;
       if (rule.type === 'range') {

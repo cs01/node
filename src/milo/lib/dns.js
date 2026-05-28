@@ -147,7 +147,17 @@ const promises = {
 class Resolver {
   constructor(options) {
     this._servers = null;
-    if (options && options.timeout) this._timeout = options.timeout;
+    if (options && options.timeout !== undefined) {
+      if (typeof options.timeout !== 'number') {
+        const e = new TypeError('The "options.timeout" property must be of type number. Received type ' + typeof options.timeout + (typeof options.timeout === 'string' ? " ('" + options.timeout + "')" : ' (' + String(options.timeout) + ')'));
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
+      if (options.timeout < -1 || !Number.isInteger(options.timeout) || options.timeout > 2147483647) {
+        const e = new RangeError('The value of "options.timeout" is out of range. It must be >= -1 && <= 2147483647. Received ' + options.timeout);
+        e.code = 'ERR_OUT_OF_RANGE'; throw e;
+      }
+      this._timeout = options.timeout;
+    }
   }
   cancel() {}
   setLocalAddress(ipv4, ipv6) {}

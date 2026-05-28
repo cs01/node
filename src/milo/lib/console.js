@@ -51,7 +51,9 @@ class Console {
       for (const k of Object.getOwnPropertyNames(p)) {
         if (k !== 'constructor' && !keys.has(k) && typeof p[k] === 'function') {
           keys.add(k);
-          this[k] = p[k].bind(this);
+          const bound = p[k].bind(this);
+          Object.defineProperty(bound, 'name', { value: k });
+          this[k] = bound;
         }
       }
       p = Object.getPrototypeOf(p);

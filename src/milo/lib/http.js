@@ -34,7 +34,10 @@ class IncomingMessage extends Readable {
         const key = headers[i].toLowerCase();
         const val = headers[i + 1];
         this.rawHeaders.push(headers[i], val);
-        if (this.headers[key]) { this.headers[key] += ', ' + val; }
+        if (key === 'set-cookie') {
+          if (this.headers[key]) this.headers[key].push(val);
+          else this.headers[key] = [val];
+        } else if (this.headers[key]) { this.headers[key] += ', ' + val; }
         else { this.headers[key] = val; }
       }
     }
@@ -142,7 +145,14 @@ class OutgoingMessage extends EventEmitter {
       throw e;
     }
     const lower = k.toLowerCase();
-    this._headers[lower] = v;
+    if (lower === 'set-cookie') {
+      const existing = this._headers[lower];
+      if (Array.isArray(v)) this._headers[lower] = existing ? existing.concat(v) : v;
+      else if (existing) { if (Array.isArray(existing)) existing.push(v); else this._headers[lower] = [existing, v]; }
+      else this._headers[lower] = v;
+    } else {
+      this._headers[lower] = v;
+    }
     this._rawHeaderNames[lower] = k;
     return this;
   }
@@ -157,6 +167,15 @@ class OutgoingMessage extends EventEmitter {
   hasHeader(k) { return k.toLowerCase() in this._headers; }
   getHeaderNames() { return Object.keys(this._headers); }
   getHeaders() { return { ...this._headers }; }
+  setHeaders(headers) {
+    if (this._headersSent) { const e = new Error('Cannot set headers after they are sent to the client'); e.code = 'ERR_HTTP_HEADERS_SENT'; throw e; }
+    if (!(headers instanceof globalThis.Headers) && !(headers instanceof Map)) {
+      const e = new TypeError('The "headers" argument must be an instance of Headers or Map');
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    headers.forEach((v, k) => this.setHeader(k, v));
+    return this;
+  }
   _renderHeaders() {
     if (this._headersSent) { const e = new Error('Cannot render headers after they are sent to the client'); e.code = 'ERR_HTTP_HEADERS_SENT'; throw e; }
     const headers = {};
@@ -207,8 +226,12 @@ class ServerResponse extends OutgoingMessage {
     this.statusCode = code;
     if (headers) {
       if (Array.isArray(headers)) {
-        if (headers.length % 2 !== 0) { const e = new TypeError('Invalid number of arguments'); e.code = 'ERR_INVALID_ARG_VALUE'; throw e; }
-        for (let i = 0; i < headers.length; i += 2) this.setHeader(String(headers[i]), String(headers[i + 1]));
+        if (Array.isArray(headers[0])) {
+          for (let i = 0; i < headers.length; i++) this.setHeader(String(headers[i][0]), String(headers[i][1]));
+        } else {
+          if (headers.length % 2 !== 0) { const e = new TypeError('Invalid number of arguments'); e.code = 'ERR_INVALID_ARG_VALUE'; throw e; }
+          for (let i = 0; i < headers.length; i += 2) this.setHeader(String(headers[i]), String(headers[i + 1]));
+        }
       } else {
         for (const [k,v] of Object.entries(headers)) this.setHeader(k, v);
       }
@@ -342,7 +365,11 @@ class Server extends EventEmitter {
             if (idx > 0) {
               const key = lines[i].substring(0, idx).trim().toLowerCase();
               const val = lines[i].substring(idx + 1).trim();
-              req.headers[key] = val;
+              if (key === 'set-cookie') {
+                if (req.headers[key]) req.headers[key].push(val);
+                else req.headers[key] = [val];
+              } else if (req.headers[key]) { req.headers[key] += ', ' + val; }
+              else { req.headers[key] = val; }
               req.rawHeaders.push(lines[i].substring(0, idx).trim(), val);
             }
           }
@@ -485,11 +512,30 @@ class ClientRequest extends EventEmitter {
     if (typeof this.path === 'string' && /[^!-ÿ]/.test(this.path)) throw _ERR_UNESCAPED_CHARACTERS('Request path');
     this.host = options.hostname || options.host || 'localhost';
     this.protocol = options.protocol || 'http:';
+    if (this.protocol !== 'http:' && this.protocol !== 'https:') {
+      const e = new TypeError('Protocol "' + this.protocol + '" not supported. Expected "http:"');
+      e.code = 'ERR_INVALID_PROTOCOL'; throw e;
+    }
     this.socket = null;
     this.finished = false;
+    this.destroyed = false;
     this.writableEnded = false;
     this.writableFinished = false;
     this.headersSent = false;
+
+    if (options.agent !== undefined && options.agent !== null && options.agent !== false) {
+      if (typeof options.agent !== 'object' || !options.agent.addRequest) {
+        let recv;
+        if (typeof options.agent === 'boolean') recv = ' Received type boolean (' + options.agent + ')';
+        else if (typeof options.agent === 'function') recv = ' Received function ' + (options.agent.name || '');
+        else if (typeof options.agent === 'symbol') recv = ' Received type symbol (' + String(options.agent) + ')';
+        else if (typeof options.agent === 'object') recv = ' Received an instance of ' + (options.agent.constructor?.name || 'Object');
+        else if (typeof options.agent === 'string') recv = " Received type string ('" + options.agent + "')";
+        else recv = ' Received type ' + typeof options.agent + ' (' + String(options.agent) + ')';
+        const e = new TypeError('The "options.agent" property must be one of Agent-like Object, undefined, or false.' + recv);
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
+    }
 
     if (options.headers) {
       for (const [k, v] of Object.entries(options.headers)) this._headers[k.toLowerCase()] = v;
@@ -514,6 +560,16 @@ class ClientRequest extends EventEmitter {
   getRawHeaderNames() { return Object.keys(this._headers); }
   getHeaders() { return { ...this._headers }; }
 
+  destroy(err) {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    if (this.socket) this.socket.destroy(err);
+    if (err) this.emit('error', err);
+    this.emit('close');
+    return this;
+  }
+  abort() { this.destroy(); }
+
   write(chunk, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
     this._body.push(typeof chunk === 'string' ? Buffer.from(chunk, encoding) : chunk);
@@ -532,6 +588,7 @@ class ClientRequest extends EventEmitter {
   }
 
   _send() {
+    if (this.destroyed) return;
     const opts = this._options;
     const host = opts.hostname || opts.host || 'localhost';
     const port = parseInt(opts.port) || 80;
@@ -554,6 +611,7 @@ class ClientRequest extends EventEmitter {
         socket = new net.Socket();
       }
       this.socket = socket;
+      if (!socket) return;
 
       let responseChunks = [];
       let responseLen = 0;
@@ -791,7 +849,7 @@ const Agent_class = class Agent {
   destroy() { this.sockets = {}; this.freeSockets = {}; this.requests = {}; }
 };
 
-const METHODS = ['GET','HEAD','POST','PUT','DELETE','CONNECT','OPTIONS','TRACE','PATCH'];
+const METHODS = ['ACL','BIND','CHECKOUT','CONNECT','COPY','DELETE','GET','HEAD','LINK','LOCK','M-SEARCH','MERGE','MKACTIVITY','MKCALENDAR','MKCOL','MOVE','NOTIFY','OPTIONS','PATCH','POST','PROPFIND','PROPPATCH','PURGE','PUT','QUERY','REBIND','REPORT','SEARCH','SOURCE','SUBSCRIBE','TRACE','UNBIND','UNLINK','UNLOCK','UNSUBSCRIBE'];
 const STATUS_CODES = {
   100:'Continue',101:'Switching Protocols',
   200:'OK',201:'Created',202:'Accepted',204:'No Content',
