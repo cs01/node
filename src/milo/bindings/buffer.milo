@@ -82,16 +82,21 @@ fn bufHexDecode(info: *u8, _ud: *u8): void {
         var i: i64 = 0
         var o: i64 = 0
         let limit = (charLen - 1) as i64
+        // Stop at the first invalid hex char (Node decodes the valid prefix).
         while i < limit {
             let hi = hexVal(strBuf[i])
             let lo = hexVal(strBuf[i + 1])
+            if hi < 0 || lo < 0 {
+                break
+            }
             outPtr[o] = ((hi << 4) | lo) as u8
             i = i + 2
             o = o + 1
         }
         free(strBuf)
+        ci.ret(iso.uint8arrayNew(ab, 0, o))
+        return
     }
-    ci.ret(iso.uint8arrayNew(ab, 0, outLen))
 }
 
 fn b64Val(c: u8): i64 {
@@ -104,7 +109,7 @@ fn hexVal(c: u8): i32 {
     if ch >= 48 && ch <= 57 { return ch - 48 }       // '0'-'9'
     if ch >= 97 && ch <= 102 { return ch - 87 }       // 'a'-'f'
     if ch >= 65 && ch <= 70 { return ch - 55 }        // 'A'-'F'
-    return 0
+    return -1
 }
 
 // base64 lookup table
