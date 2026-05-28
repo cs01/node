@@ -14,7 +14,10 @@ const _SIGNAL_NAME = {};
 for (const name of Object.keys(_SIGNAL_NUM)) _SIGNAL_NAME[_SIGNAL_NUM[name]] = name;
 
 function _signalToNum(signal) {
-  return typeof signal === 'string' ? (_SIGNAL_NUM[signal] || 15) : (signal || 15);
+  // Signal 0 is the liveness-probe no-op — must not collapse to SIGTERM.
+  if (signal === 0) return 0;
+  if (signal === undefined || signal === null) return 15;
+  return typeof signal === 'string' ? (_SIGNAL_NUM[signal] || 15) : signal;
 }
 
 function _validateFile(file) {
@@ -199,7 +202,8 @@ function spawnSync(file, args, options) {
     stdout = Buffer.from(stdout);
     stderr = Buffer.from(stderr);
   }
-  return { status: result.status, signal: null, output: [null, stdout, stderr], stdout, stderr, pid: result.pid || 0 };
+  const signal = result.signal == null ? null : (_SIGNAL_NAME[result.signal] || null);
+  return { status: result.status, signal, output: [null, stdout, stderr], stdout, stderr, pid: result.pid || 0 };
 }
 
 function execSync(command, options) {
