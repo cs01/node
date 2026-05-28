@@ -15,7 +15,7 @@ List: `src/milo/bun-curated-tests.txt` (2,143 tests present in our repo)
 
 ### current pass rates (2026-05-27)
 
-On bun's curated subset: **bun 99%, milo 35%** (200-sample)
+On bun's curated subset: **bun 99%, milo 40.5%** (full run: 868/2143 pass, 1061 fail, 208 timeout, 6 OOM)
 Full runs on process (57 tests) and module (26 tests) below; others from 200-sample.
 
 | module     | pass/total | rate | priority | top blockers |

@@ -73,7 +73,33 @@ class Socket extends EventEmitter {
   }
 
   send(msg, offset, length, port, address, cb) {
+    if (msg === undefined || (typeof msg !== 'string' && !Buffer.isBuffer(msg) && !ArrayBuffer.isView(msg) && !(msg instanceof ArrayBuffer) && !Array.isArray(msg))) {
+      let recv;
+      if (msg === undefined) recv = 'undefined';
+      else if (msg === null) recv = 'null';
+      else if (typeof msg === 'object') recv = 'an instance of ' + (msg.constructor?.name || 'Object');
+      else recv = 'type ' + typeof msg + ' (' + String(msg) + ')';
+      const e = new TypeError('The "buffer" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received ' + recv);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
     if (typeof offset === 'number' && typeof length === 'number' && typeof port === 'number') {
+      if (this._connected) {
+        const e = new Error('Already connected');
+        e.code = 'ERR_SOCKET_DGRAM_IS_CONNECTED'; throw e;
+      }
+      if (port < 1 || port > 65535 || !Number.isInteger(port)) {
+        const e = new RangeError('Port should be > 0 and < 65536. Received ' + port);
+        e.code = 'ERR_SOCKET_BAD_PORT'; throw e;
+      }
+      const msgLen = typeof msg === 'string' ? Buffer.byteLength(msg) : msg.length || msg.byteLength;
+      if (offset < 0 || offset >= msgLen) {
+        const e = new RangeError('"offset" is outside of buffer bounds');
+        e.code = 'ERR_BUFFER_OUT_OF_BOUNDS'; throw e;
+      }
+      if (length < 0 || offset + length > msgLen) {
+        const e = new RangeError('"length" is outside of buffer bounds');
+        e.code = 'ERR_BUFFER_OUT_OF_BOUNDS'; throw e;
+      }
       msg = typeof msg === 'string' ? msg.substring(offset, offset + length) : msg.slice(offset, offset + length);
     } else if (typeof offset === 'number' && typeof length === 'string') {
       // send(msg, port, address, cb)
@@ -101,6 +127,10 @@ class Socket extends EventEmitter {
     if (typeof address === 'function') { cb = address; address = undefined; }
 
     if (this._connected) {
+      if (port !== undefined && address !== undefined) {
+        const e = new Error('Already connected');
+        e.code = 'ERR_SOCKET_DGRAM_IS_CONNECTED'; throw e;
+      }
       if (port === undefined) port = this._remotePort;
       if (address === undefined) address = this._remoteAddress;
     }
@@ -114,8 +144,16 @@ class Socket extends EventEmitter {
       }
     }
 
-    // Handle array of buffers
-    if (Array.isArray(msg)) msg = Buffer.concat(msg.map(b => Buffer.isBuffer(b) ? b : Buffer.from(b)));
+    // Handle array of buffers — validate each element
+    if (Array.isArray(msg)) {
+      for (const item of msg) {
+        if (typeof item !== 'string' && !Buffer.isBuffer(item) && !ArrayBuffer.isView(item)) {
+          const e = new TypeError('The "buffer list arguments" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Array');
+          e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+        }
+      }
+      msg = Buffer.concat(msg.map(b => Buffer.isBuffer(b) ? b : Buffer.from(b)));
+    }
     const buf = typeof msg === 'string' ? Buffer.from(msg) : (Buffer.isBuffer(msg) ? msg : Buffer.from(msg));
     const n = tcp.udpSend(this._fd, buf.toString(), port, address);
     if (cb) process.nextTick(() => cb(n < 0 ? new Error('send failed') : null));

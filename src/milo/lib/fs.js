@@ -761,7 +761,18 @@ function link(existingPath, newPath, cb) { _validatePath(existingPath, 'existing
 
 function fsyncSync(fd) { _validateFd(fd); b.fsync(fd); }
 function fdatasyncSync(fd) { _validateFd(fd); b.fdatasync(fd); }
-function ftruncateSync(fd, len) { _validateFd(fd); b.ftruncate(fd, len || 0); }
+function _validateLen(len) {
+  if (len !== undefined && typeof len !== 'number') {
+    const recv = len === null ? 'null' : typeof len === 'object' ? 'an instance of ' + (len.constructor?.name || 'Object') : typeof len === 'string' ? "type string ('" + len + "')" : 'type ' + typeof len;
+    const e = new TypeError('The "len" argument must be of type number. Received ' + recv);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (typeof len === 'number' && !Number.isInteger(len)) {
+    const e = new RangeError('The value of "len" is out of range. It must be an integer. Received ' + len);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
+}
+function ftruncateSync(fd, len) { _validateFd(fd); _validateLen(len); b.ftruncate(fd, len || 0); }
 function fchmodSync(fd, mode) { _validateFd(fd); mode = _validateMode(mode, 'mode'); b.fchmod(fd, mode); }
 
 function fsync(fd, cb) { _validateFd(fd); _validateCb(cb); _async(fsyncSync, [fd], (err) => cb(err)); }
@@ -805,6 +816,14 @@ function read(fd, buffer, offset, length, position, cb) {
     // read(fd, options, cb)
     if (buffer != null && typeof buffer === 'object' && !Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
       const opts = buffer;
+      if (opts.buffer !== undefined && opts.buffer !== null && !Buffer.isBuffer(opts.buffer) && !(opts.buffer instanceof Uint8Array) && !ArrayBuffer.isView(opts.buffer)) {
+        const e = new TypeError('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received an instance of Object');
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
+      if (opts.buffer === null) {
+        const e = new TypeError('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received an instance of Object');
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
       buffer = opts.buffer || Buffer.alloc(16384);
       offset = opts.offset || 0;
       length = opts.length != null ? opts.length : buffer.length;
@@ -1061,11 +1080,11 @@ const promises = {
     return { type: 0, bsize: 4096, blocks: 0, bfree: 0, bavail: 0, files: 0, ffree: 0 };
   }),
   truncate: _promisify((p, len) => truncateSync(p, len)),
-  chown: () => Promise.resolve(),
-  lchown: () => Promise.resolve(),
-  lchmod: () => Promise.resolve(),
-  lutimes: () => Promise.resolve(),
-  utimes: () => Promise.resolve(),
+  chown: (p, uid, gid) => { try { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); } catch(e) { return Promise.reject(e); } return _promisify(chownSync)(p, uid, gid); },
+  lchown: (p, uid, gid) => { try { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); } catch(e) { return Promise.reject(e); } return _promisify(lchownSync)(p, uid, gid); },
+  lchmod: (p, mode) => { try { _validatePath(p, 'path'); } catch(e) { return Promise.reject(e); } return Promise.resolve(); },
+  lutimes: (p, atime, mtime) => { try { _validatePath(p, 'path'); } catch(e) { return Promise.reject(e); } return Promise.resolve(); },
+  utimes: (p, atime, mtime) => { try { _validatePath(p, 'path'); } catch(e) { return Promise.reject(e); } return Promise.resolve(); },
   open: (p, flags, mode) => {
     const fd = openSync(p, flags || 'r', mode);
     const handle = {
@@ -1097,7 +1116,7 @@ function _validateGid(gid) {
 function fchown(fd, uid, gid, cb) { _validateFd(fd); _validateUid(uid); _validateGid(gid); _validateCb(cb); const _f = internalBinding('fs'); if (_f.fchown) _f.fchown(fd, uid, gid); process.nextTick(cb, null); }
 function fchownSync(fd, uid, gid) { _validateFd(fd); _validateUid(uid); _validateGid(gid); const _f = internalBinding('fs'); if (_f.fchown) _f.fchown(fd, uid, gid); }
 function chown(p, uid, gid, cb) { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); const sp = _toPath(p); const _f = internalBinding('fs'); if (_f.chown) _f.chown(sp, uid, gid); if (cb) process.nextTick(cb, null); }
-function lchown(p, uid, gid, cb) { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); const sp = _toPath(p); const _f = internalBinding('fs'); if (_f.lchown) _f.lchown(sp, uid, gid); else if (_f.chown) _f.chown(sp, uid, gid); if (cb) process.nextTick(cb, null); }
+function lchown(p, uid, gid, cb) { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); _validateCb(cb); const sp = _toPath(p); const _f = internalBinding('fs'); if (_f.lchown) _f.lchown(sp, uid, gid); else if (_f.chown) _f.chown(sp, uid, gid); process.nextTick(cb, null); }
 function utimes(p, atime, mtime, cb) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); _f.utimes(sp, Math.floor(atime), Math.floor(mtime)); if (cb) process.nextTick(cb, null); }
 function lutimes(p, atime, mtime, cb) { _validatePath(p, 'path'); if (cb) process.nextTick(cb, null); }
 function chownSync(p, uid, gid) { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); const sp = _toPath(p); const _f = internalBinding('fs'); if (_f.chown) _f.chown(sp, uid, gid); }
@@ -1105,12 +1124,14 @@ function lchownSync(p, uid, gid) { _validatePath(p, 'path'); _validateUid(uid); 
 function utimesSync(p, atime, mtime) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); _f.utimes(sp, Math.floor(atime), Math.floor(mtime)); }
 function truncateSync(p, len) {
   _validatePath(p, 'path');
+  _validateLen(len);
   const fd = openSync(_toPath(p), 'r+');
   try { ftruncateSync(fd, len || 0); } finally { closeSync(fd); }
 }
 function truncate(p, len, cb) {
   if (typeof len === 'function') { cb = len; len = 0; }
   _validatePath(p, 'path');
+  _validateLen(len);
   try { truncateSync(p, len); if (cb) process.nextTick(cb, null); }
   catch (e) { if (cb) process.nextTick(cb, e); else throw e; }
 }

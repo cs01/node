@@ -203,7 +203,14 @@ const delimiter = ':';
 const win32 = {
   sep: '\\', delimiter: ';',
   resolve(...args) { for (const a of args) validateString(a, 'path'); return resolve(...args).replace(/\//g, '\\'); },
-  normalize(p) { validateString(p, 'path'); return normalize(p.replace(/\\/g, '/')).replace(/\//g, '\\'); },
+  normalize(p) {
+    validateString(p, 'path');
+    if (p.length === 0) return '.';
+    const isUnc = p.length >= 2 && (p.charCodeAt(0) === 92 || p.charCodeAt(0) === 47) && (p.charCodeAt(1) === 92 || p.charCodeAt(1) === 47);
+    let result = normalize(p.replace(/\\/g, '/')).replace(/\//g, '\\');
+    if (isUnc && !result.startsWith('\\\\')) result = '\\' + result;
+    return result;
+  },
   isAbsolute(p) { validateString(p, 'path'); return p.length > 0 && (p.charCodeAt(0) === 47 || p.charCodeAt(0) === 92 || /^[a-zA-Z]:[\\/]/.test(p)); },
   join(...args) { if (args.length === 0) return '.'; for (const a of args) validateString(a, 'path'); const joined = args.filter(a => a !== '').map(a => a.replace(/\\/g, '/')).join('/'); if (!joined) return '.'; return normalize(joined).replace(/\//g, '\\'); },
   dirname(p) { validateString(p, 'path'); const n = p.replace(/\\/g, '/'); const d = dirname(n); return d.replace(/\//g, '\\'); },
