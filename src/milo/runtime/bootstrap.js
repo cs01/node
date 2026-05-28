@@ -1159,18 +1159,45 @@
       throw _mnfErr;
     }
 
-    require.resolve = function(id) {
+    require.resolve = function(id, options) {
+      if (typeof id !== 'string') { const e = new TypeError('The "request" argument must be of type string. Received ' + (id === null ? 'null' : typeof id)); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+      const origId = id;
       if (id.startsWith('node:')) id = id.slice(5);
       const flatId = id.replace(/\//g, '_');
-      if (moduleCache[id] || _tryMiloLib(id) || _tryMiloLib(flatId) || __loadBuiltin(id)) return id;
-      const resolved = _resolve(id, parentDir);
-      if (resolved) return resolved;
-      const searchDir = parentDir || (process.cwd ? process.cwd() : '');
-      const nmResolved = _resolveNodeModules(id, searchDir);
-      if (nmResolved) return nmResolved;
+      if (moduleCache[id] || _tryMiloLib(id) || _tryMiloLib(flatId) || __loadBuiltin(id)) return origId;
+      if (options && options.paths) {
+        for (const p of options.paths) {
+          const resolved = _resolve(id, p);
+          if (resolved) return resolved;
+          const nmResolved = _resolveNodeModules(id, p);
+          if (nmResolved) return nmResolved;
+        }
+      } else {
+        const resolved = _resolve(id, parentDir);
+        if (resolved) return resolved;
+        const searchDir = parentDir || (process.cwd ? process.cwd() : '');
+        const nmResolved = _resolveNodeModules(id, searchDir);
+        if (nmResolved) return nmResolved;
+      }
       const _rnfErr = new Error("Cannot find module '" + id + "'");
       _rnfErr.code = 'MODULE_NOT_FOUND';
       throw _rnfErr;
+    };
+    require.resolve.paths = function(request) {
+      if (typeof request !== 'string') { const e = new TypeError('The "request" argument must be of type string. Received ' + typeof request); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+      if (request.startsWith('node:')) return null;
+      if (request === '.' || request === '..' || request.startsWith('./') || request.startsWith('../')) {
+        return [parentDir || process.cwd()];
+      }
+      const paths = [];
+      let dir = parentDir || process.cwd();
+      while (true) {
+        paths.push(dir + '/node_modules');
+        const parent = dir.substring(0, dir.lastIndexOf('/'));
+        if (parent === dir || parent === '') break;
+        dir = parent;
+      }
+      return paths;
     };
     require.cache = moduleCache;
     Object.defineProperty(require, 'main', {

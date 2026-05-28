@@ -35,16 +35,16 @@ EventEmitter.prototype.getMaxListeners = function() { return this._maxListeners 
 EventEmitter.prototype.emit = function(type) {
   if (!this._events) this._events = Object.create(null);
   if (type === 'error') {
-    const monitorHandlers = this._events[EventEmitter.errorMonitor];
-    if (monitorHandlers && monitorHandlers.length > 0) {
+    const monitorEvt = this._events[EventEmitter.errorMonitor];
+    if (monitorEvt) {
       const args = new Array(arguments.length - 1);
       for (let j = 1; j < arguments.length; j++) args[j - 1] = arguments[j];
-      const fns = monitorHandlers.slice();
-      for (let j = 0; j < fns.length; j++) fns[j].apply(this, args);
+      if (typeof monitorEvt === 'function') monitorEvt.apply(this, args);
+      else { const fns = monitorEvt.slice(); for (let j = 0; j < fns.length; j++) fns[j].apply(this, args); }
     }
   }
   const handlers = this._events[type];
-  if (!handlers || handlers.length === 0) {
+  if (!handlers) {
     if (type === 'error') {
       const err = arguments[1];
       if (this.domain) {
@@ -84,8 +84,8 @@ EventEmitter.prototype.emit = function(type) {
   }
   const args = new Array(arguments.length - 1);
   for (let i = 1; i < arguments.length; i++) args[i - 1] = arguments[i];
-  const copy = handlers.slice();
-  for (let i = 0; i < copy.length; i++) copy[i].apply(this, args);
+  if (typeof handlers === 'function') { handlers.apply(this, args); }
+  else { const copy = handlers.slice(); for (let i = 0; i < copy.length; i++) copy[i].apply(this, args); }
   return true;
 };
 
@@ -93,12 +93,16 @@ EventEmitter.prototype.on = function(type, fn) {
   if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   if (!this._events) this._events = Object.create(null);
   if (type !== 'newListener' && typeof this.emit === 'function') this.emit('newListener', type, fn.listener || fn);
-  (this._events[type] || (this._events[type] = [])).push(fn);
+  const existing = this._events[type];
+  if (!existing) this._events[type] = fn;
+  else if (typeof existing === 'function') this._events[type] = [existing, fn];
+  else existing.push(fn);
+  const len = typeof this._events[type] === 'function' ? 1 : this._events[type].length;
   const max = this._maxListeners !== undefined ? this._maxListeners : EventEmitter.defaultMaxListeners;
-  if (max > 0 && this._events[type].length > max && !this._events[type].warned) {
-    this._events[type].warned = true;
-    const w = new Error(`Possible EventEmitter memory leak detected. ${this._events[type].length} ${String(type)} listeners added to [${this.constructor.name}]. MaxListeners is ${max}. Use emitter.setMaxListeners() to increase limit`);
-    w.name = 'MaxListenersExceededWarning'; w.emitter = this; w.type = type; w.count = this._events[type].length;
+  if (max > 0 && len > max && !this._events[type].warned) {
+    if (typeof this._events[type] !== 'function') this._events[type].warned = true;
+    const w = new Error(`Possible EventEmitter memory leak detected. ${len} ${String(type)} listeners added to [${this.constructor.name}]. MaxListeners is ${max}. Use emitter.setMaxListeners() to increase limit`);
+    w.name = 'MaxListenersExceededWarning'; w.emitter = this; w.type = type; w.count = len;
     if (typeof process !== 'undefined' && process.emitWarning) process.emitWarning(w);
   }
   return this;
@@ -110,7 +114,10 @@ EventEmitter.prototype.prependListener = function(type, fn) {
   if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   if (!this._events) this._events = Object.create(null);
   if (type !== 'newListener' && typeof this.emit === 'function') this.emit('newListener', type, fn.listener || fn);
-  (this._events[type] || (this._events[type] = [])).unshift(fn);
+  const existing = this._events[type];
+  if (!existing) this._events[type] = fn;
+  else if (typeof existing === 'function') this._events[type] = [fn, existing];
+  else existing.unshift(fn);
   return this;
 };
 
@@ -137,16 +144,23 @@ EventEmitter.prototype.removeListener = function(type, fn) {
   if (!this._events) this._events = Object.create(null);
   const list = this._events[type];
   if (!list) return this;
+  if (typeof list === 'function') {
+    if (list === fn || list.listener === fn) {
+      const original = list.listener || list;
+      delete this._events[type];
+      if (this._events.removeListener) this.emit('removeListener', type, original);
+    }
+    return this;
+  }
   for (let i = list.length - 1; i >= 0; i--) {
     if (list[i] === fn || list[i].listener === fn) {
       const original = list[i].listener || list[i];
-      list.splice(i, 1);
-      if (list.length === 0) delete this._events[type];
+      if (list.length === 1) delete this._events[type];
+      else { list.splice(i, 1); if (list.length === 1) this._events[type] = list[0]; }
       if (this._events.removeListener) this.emit('removeListener', type, original);
       return this;
     }
   }
-  if (list.length === 0) delete this._events[type];
   return this;
 };
 
@@ -161,19 +175,30 @@ EventEmitter.prototype.removeAllListeners = function(type) {
 
 EventEmitter.prototype.listeners = function(type) {
   if (!this._events) return [];
-  return (this._events[type] || []).map(function(h) { return h.listener || h; });
+  const evt = this._events[type];
+  if (!evt) return [];
+  if (typeof evt === 'function') return [evt.listener || evt];
+  return evt.map(function(h) { return h.listener || h; });
 };
 
 EventEmitter.prototype.rawListeners = function(type) {
   if (!this._events) return [];
-  return (this._events[type] || []).slice();
+  const evt = this._events[type];
+  if (!evt) return [];
+  if (typeof evt === 'function') return [evt];
+  return evt.slice();
 };
 
 EventEmitter.prototype.listenerCount = function(type, listener) {
   if (!this._events) return 0;
-  const list = this._events[type] || [];
-  if (listener === undefined) return list.length;
-  return list.filter(function(h) { return h === listener || h.listener === listener; }).length;
+  const evt = this._events[type];
+  if (!evt) return 0;
+  if (typeof evt === 'function') {
+    if (listener === undefined) return 1;
+    return (evt === listener || evt.listener === listener) ? 1 : 0;
+  }
+  if (listener === undefined) return evt.length;
+  return evt.filter(function(h) { return h === listener || h.listener === listener; }).length;
 };
 
 EventEmitter.prototype.eventNames = function() {
