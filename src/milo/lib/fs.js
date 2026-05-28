@@ -1140,10 +1140,12 @@ const promises = {
 function _validateUid(uid) {
   if (typeof uid !== 'number') throw _ERR_INVALID_ARG_TYPE('uid', 'integer', uid);
   if (!Number.isInteger(uid)) { const e = new RangeError(`The value of "uid" is out of range. It must be an integer. Received ${uid}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+  if (uid < -1 || uid > 4294967295) { const e = new RangeError(`The value of "uid" is out of range. It must be >= -1 && <= 4294967295. Received ${uid}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
 }
 function _validateGid(gid) {
   if (typeof gid !== 'number') throw _ERR_INVALID_ARG_TYPE('gid', 'integer', gid);
   if (!Number.isInteger(gid)) { const e = new RangeError(`The value of "gid" is out of range. It must be an integer. Received ${gid}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+  if (gid < -1 || gid > 4294967295) { const e = new RangeError(`The value of "gid" is out of range. It must be >= -1 && <= 4294967295. Received ${gid}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
 }
 function fchown(fd, uid, gid, cb) { _validateFd(fd); _validateUid(uid); _validateGid(gid); _validateCb(cb); const _f = internalBinding('fs'); if (_f.fchown) _f.fchown(fd, uid, gid); process.nextTick(cb, null); }
 function fchownSync(fd, uid, gid) { _validateFd(fd); _validateUid(uid); _validateGid(gid); const _f = internalBinding('fs'); if (_f.fchown) _f.fchown(fd, uid, gid); }

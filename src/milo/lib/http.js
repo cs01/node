@@ -536,6 +536,11 @@ class ClientRequest extends EventEmitter {
       const e = new TypeError('Protocol "' + this.protocol + '" not supported. Expected "http:"');
       e.code = 'ERR_INVALID_PROTOCOL'; throw e;
     }
+    if (options.timeout !== undefined && (typeof options.timeout !== 'number' || options.timeout < 0 || !Number.isFinite(options.timeout))) {
+      const e = new TypeError('The "timeout" argument must be of type number. Received ' + (options.timeout === null ? 'null' : typeof options.timeout + ' (' + options.timeout + ')'));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    this.timeout = options.timeout || 0;
     this.socket = null;
     this.finished = false;
     this.destroyed = false;
@@ -558,7 +563,13 @@ class ClientRequest extends EventEmitter {
     }
 
     if (options.headers) {
-      for (const [k, v] of Object.entries(options.headers)) this._headers[k.toLowerCase()] = v;
+      for (const [k, v] of Object.entries(options.headers)) {
+        if (k.toLowerCase() === 'host' && Array.isArray(v)) {
+          const e = new TypeError('The "headers.host" property must be of type string. Received an instance of Array');
+          e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+        }
+        this._headers[k.toLowerCase()] = v;
+      }
     }
 
     if (cb) this.once('response', cb);
