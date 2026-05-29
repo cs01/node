@@ -159,6 +159,33 @@ if (!process.on) {
 
 const _startTime = Date.now();
 if (!process.uptime) process.uptime = () => (Date.now() - _startTime) / 1000;
+
+// process.ref/unref: symbol-based API (Symbol.for('nodejs.ref')) takes precedence
+// over the legacy .ref()/.unref() methods, matching Node's per_thread.js.
+{
+  const _kRef = Symbol.for('nodejs.ref');
+  const _kUnref = Symbol.for('nodejs.unref');
+  if (!process.ref) process.ref = function ref(maybeRefable) {
+    const fn = maybeRefable == null ? undefined : (maybeRefable[_kRef] ?? maybeRefable.ref);
+    if (typeof fn === 'function') fn.call(maybeRefable);
+    else { const e = new TypeError('The "maybeRefable" argument must be a referenceable object'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+  };
+  if (!process.unref) process.unref = function unref(maybeRefable) {
+    const fn = maybeRefable == null ? undefined : (maybeRefable[_kUnref] ?? maybeRefable.unref);
+    if (typeof fn === 'function') fn.call(maybeRefable);
+    else { const e = new TypeError('The "maybeRefable" argument must be a referenceable object'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+  };
+}
+// Source maps: we don't remap stack traces yet, but honor the enable/disable
+// API surface and its arg validation so callers behave correctly.
+if (!process.setSourceMapsEnabled) {
+  let _sourceMapsEnabled = false;
+  process.setSourceMapsEnabled = function setSourceMapsEnabled(val) {
+    if (typeof val !== 'boolean') { const e = new TypeError('The "val" argument must be of type boolean. Received ' + typeof val); e.code = 'ERR_INVALID_ARG_TYPE'; e.name = 'TypeError [ERR_INVALID_ARG_TYPE]'; throw e; }
+    _sourceMapsEnabled = val;
+  };
+  if (!process.getSourceMapsSupport) process.getSourceMapsSupport = () => ({ enabled: _sourceMapsEnabled, nodeModules: false, generatedCode: false });
+}
 if (!process.title) process.title = 'milo-node';
 if (!process.execPath) {
   const _ep = process.argv[0] || '';
