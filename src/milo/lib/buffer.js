@@ -508,7 +508,13 @@ class Buffer extends Uint8Array {
     if (encoding === 'hex') return _hexEncode(this, start, end);
     if (encoding === 'base64') return _base64Encode(this, start, end);
     if (encoding === 'base64url') return _base64Encode(this, start, end).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    if (encoding === 'ascii' || encoding === 'latin1' || encoding === 'binary') {
+    if (encoding === 'ascii') {
+      // Node's 'ascii' decode masks the high bit (byte & 0x7f), unlike latin1.
+      let s = '';
+      for (let i = start; i < end; i++) s += String.fromCharCode(this[i] & 0x7f);
+      return s;
+    }
+    if (encoding === 'latin1' || encoding === 'binary') {
       let s = '';
       for (let i = start; i < end; i++) s += String.fromCharCode(this[i]);
       return s;
