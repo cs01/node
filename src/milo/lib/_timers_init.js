@@ -45,6 +45,7 @@ function _safeCall(fn, args, thisArg) {
 
 let _negativeTimerWarned = false;
 let _overflowTimerWarned = false;
+let _nanTimerWarned = false;
 const TIMEOUT_MAX = 2 ** 31 - 1;
 function _validateTimerCb(fn) {
   if (typeof fn !== 'function') {
@@ -54,6 +55,15 @@ function _validateTimerCb(fn) {
 }
 function _warnTimerDelay(delay) {
   if (typeof delay !== 'number') return;
+  if (Number.isNaN(delay)) {
+    if (!_nanTimerWarned) {
+      _nanTimerWarned = true;
+      const w = new Error(`${delay} is not a number.\nTimers in Node.js can not span more than ${TIMEOUT_MAX} ms (approximately 24.8 days).`);
+      w.name = 'TimeoutNaNWarning';
+      process.emitWarning(w);
+    }
+    return;
+  }
   if (delay < 0 && !_negativeTimerWarned) {
     _negativeTimerWarned = true;
     const w = new Error(`${delay} is a negative number.\nTimers in Node.js can not span more than ${TIMEOUT_MAX} ms (approximately 24.8 days).`);
