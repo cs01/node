@@ -77,7 +77,14 @@ class Worker extends EventEmitter {
   constructor(filename, options = {}) {
     super();
     let file = filename;
-    if (filename instanceof URL || (typeof filename === 'string' && filename.startsWith('file:'))) {
+    const isEval = !!options.eval;
+    if (isEval) {
+      if (typeof filename !== 'string') {
+        const e = new TypeError('The "filename" argument must be of type string.');
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
+      file = filename; // inline source, run as-is
+    } else if (filename instanceof URL || (typeof filename === 'string' && filename.startsWith('file:'))) {
       file = require('url').fileURLToPath(filename);
     } else if (typeof filename === 'string') {
       file = path.resolve(file);
@@ -85,7 +92,7 @@ class Worker extends EventEmitter {
       const e = new TypeError('The "filename" argument must be of type string or an instance of URL.');
       e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
     }
-    this._chan = _b.create(file);
+    this._chan = _b.create(file, isEval ? 1 : 0);
     this.threadId = _b.threadId(this._chan);
     _b.setData(this._chan, options.workerData);
     this._exited = false;

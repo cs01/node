@@ -109,6 +109,7 @@ extern struct WChannel {
     terminateFlag: i32,
     exitCode: i32,
     workerIso: *u8,
+    isEval: i32,
 }
 
 fn printStr(s: *u8): void {
@@ -576,13 +577,17 @@ fn workerCreate(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let iso = ci.isolate()
     unsafe {
-        var pathBuf: [u8; 4096] = [0; 4096]
-        let plen = ci.arg(0).writeUtf8(iso, pathBuf as *u8, 4096)
+        // arg0 = file path OR (when isEval) inline source — sized generously since
+        // eval worker code can be large. arg1 = isEval flag.
+        let buf = calloc(1, 262144)
+        let plen = ci.arg(0).writeUtf8(iso, buf, 262143)
         let chan = calloc(1, 256) as *WChannel
         pthread_mutex_init(chan as *u8, 0 as *u8)
         let sp = calloc(1, plen as i64 + 1)
-        memcpy(sp, pathBuf as *u8, plen as i64)
+        memcpy(sp, buf, plen as i64)
+        free(buf)
         chan.scriptPath = sp
+        chan.isEval = ci.i32Arg(1, 0)
         workerThreadIdCounter = workerThreadIdCounter + 1
         chan.threadId = workerThreadIdCounter
         ci.retF64(chan as i64 as f64)
@@ -770,34 +775,40 @@ fn nm_worker_entry(arg: *u8): *u8 {
         bsPath[bp] = 0
         runBootstrap(ctx, bsPath as *u8)
 
-        // require the worker script through the module system
-        var runCode: [u8; 4096] = [0; 4096]
-        let rPre = "(function(){const p=require('path');const f=p.resolve('"
-        let rPost = "');require.main={id:'.',filename:f,loaded:false,paths:[]};require(f);})()"
-        var wi: i64 = 0
-        var wj: i64 = 0
-        while wj < strlen(rPre) {
-            runCode[wi] = rPre[wj]
-            wi = wi + 1
-            wj = wj + 1
-        }
-        wj = 0
-        while wj < strlen(chan.scriptPath) {
-            runCode[wi] = chan.scriptPath[wj]
-            wi = wi + 1
-            wj = wj + 1
-        }
-        wj = 0
-        while wj < strlen(rPost) {
-            runCode[wi] = rPost[wj]
-            wi = wi + 1
-            wj = wj + 1
-        }
-        runCode[wi] = 0
         // run the worker script; uncaught errors surface to the parent via the
         // JS uncaughtException handler (which posts a {t:'error'} envelope).
         let tc = v8c_try_catch_new(isoPtr)
-        ctx.compileRun(runCode as *u8, wi as i32, "[worker]" as *u8)
+        if chan.isEval != 0 {
+            // eval worker: run the inline source directly
+            ctx.compileRun(chan.scriptPath, strlen(chan.scriptPath) as i32, "[worker eval]" as *u8)
+        } else {
+            // require the worker script file through the module system
+            let codeBuf = calloc(1, 262144)
+            let rPre = "(function(){const p=require('path');const f=p.resolve('"
+            let rPost = "');require.main={id:'.',filename:f,loaded:false,paths:[]};require(f);})()"
+            var wi: i64 = 0
+            var wj: i64 = 0
+            while wj < strlen(rPre) {
+                codeBuf[wi] = rPre[wj]
+                wi = wi + 1
+                wj = wj + 1
+            }
+            wj = 0
+            while wj < strlen(chan.scriptPath) {
+                codeBuf[wi] = chan.scriptPath[wj]
+                wi = wi + 1
+                wj = wj + 1
+            }
+            wj = 0
+            while wj < strlen(rPost) {
+                codeBuf[wi] = rPost[wj]
+                wi = wi + 1
+                wj = wj + 1
+            }
+            codeBuf[wi] = 0
+            ctx.compileRun(codeBuf, wi as i32, "[worker]" as *u8)
+            free(codeBuf)
+        }
         v8c_try_catch_delete(tc)
         v8c_isolate_run_microtasks(isoPtr)
 
