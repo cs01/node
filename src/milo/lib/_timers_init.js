@@ -34,7 +34,9 @@ class Timeout {
 }
 
 function _safeCall(fn, args, thisArg) {
-  try { fn.call(thisArg, ...args); }
+  // Reflect.apply, not fn.call — user code may overwrite fn.call/fn.apply
+  // (they're just own properties), and node invokes the callback regardless.
+  try { Reflect.apply(fn, thisArg, args); }
   catch (e) {
     if (process._fatalException) process._fatalException(e);
     else throw e;
@@ -76,7 +78,10 @@ globalThis.setTimeout = function setTimeout(fn, delay, ...args) {
 
 globalThis.clearTimeout = function clearTimeout(t) {
   if (t && typeof t === 'object') t._destroyed = true;
-  const id = t && typeof t === 'object' ? t._id : t;
+  // ids are numeric; accept the primitive form too — `${timeout}` yields a numeric
+  // string that must be coerced back or it won't match the registry key.
+  let id = t && typeof t === 'object' ? t._id : t;
+  if (typeof id === 'string') id = +id;
   _timerCallbacks.delete(id);
   _unrefTimers.delete(id);
   _tb.clear(id);
@@ -94,7 +99,8 @@ globalThis.setInterval = function setInterval(fn, delay, ...args) {
 
 globalThis.clearInterval = function clearInterval(t) {
   if (t && typeof t === 'object') t._destroyed = true;
-  const id = t && typeof t === 'object' ? t._id : t;
+  let id = t && typeof t === 'object' ? t._id : t;
+  if (typeof id === 'string') id = +id;
   _timerCallbacks.delete(id);
   _unrefTimers.delete(id);
   _tb.clear(id);
@@ -114,7 +120,8 @@ globalThis.setImmediate = function setImmediate(fn, ...args) {
   return t;
 };
 globalThis.clearImmediate = function clearImmediate(t) {
-  const id = t && typeof t === 'object' ? t._id : t;
+  let id = t && typeof t === 'object' ? t._id : t;
+  if (typeof id === 'string') id = +id;
   _activeImmediates.delete(id);
 };
 
