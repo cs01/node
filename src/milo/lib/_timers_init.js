@@ -135,6 +135,19 @@ globalThis.clearImmediate = function clearImmediate(t) {
   _activeImmediates.delete(id);
 };
 
+// One event-loop iteration for a worker thread: fire due timers, drain ticks +
+// microtasks + immediates, return whether timer/immediate/tick work remains.
+Object.defineProperty(globalThis, '__workerTick', { value: function __workerTick() {
+  const tick = () => { if (process._tickCallback) process._tickCallback(); };
+  tick(); _tb.drainMicrotasks(); tick();
+  _tb.fireDue();
+  _drainImmediates();
+  tick(); _tb.drainMicrotasks(); tick();
+  let hasTimers = false;
+  if (_tb.hasPending()) { for (const id of _timerCallbacks.keys()) { if (!_unrefTimers.has(id)) { hasTimers = true; break; } } }
+  return hasTimers || _immediateQueue.length > 0 || (process._nextTickQueue && process._nextTickQueue.length > 0);
+}, enumerable: false });
+
 function _drainImmediates() {
   const batch = _immediateQueue.splice(0, _immediateQueue.length);
   for (const item of batch) {
@@ -170,8 +183,12 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     drainAll();
     _tb.fireDue();
     drainAll();
+    // pump messages from worker threads (parent side) + dispatch exit events
+    if (globalThis.__pumpParentWorkers) globalThis.__pumpParentWorkers();
+    drainAll();
     _eluActiveMs += _now() - tickStart;
 
+    const hasWorkers = globalThis.__hasActiveWorkers ? globalThis.__hasActiveWorkers() : false;
     const hasTimersNative = _tb.hasPending();
     let hasTimers = false;
     if (hasTimersNative) {
@@ -183,15 +200,18 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     const hasTicks = process._nextTickQueue && process._nextTickQueue.length > 0;
     const hasImmediates = _immediateQueue.length > 0;
     const hasPendingClose = _pendingCloseRefs > 0;
-    if (!hasTimers && !hasIO && !hasTicks && !hasImmediates && !hasPendingClose) {
+    if (!hasTimers && !hasIO && !hasTicks && !hasImmediates && !hasPendingClose && !hasWorkers) {
       if (process._emitBeforeExit) process._emitBeforeExit();
+      drainAll();
+      if (globalThis.__pumpParentWorkers) globalThis.__pumpParentWorkers();
       drainAll();
       const hasTimers2 = _tb.hasPending() && (() => { for (const id of _timerCallbacks.keys()) { if (!_unrefTimers.has(id)) return true; } return false; })();
       const hasIO2 = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
       const hasTicks2 = process._nextTickQueue && process._nextTickQueue.length > 0;
       const hasImmediates2 = _immediateQueue.length > 0;
       const hasPendingClose2 = _pendingCloseRefs > 0;
-      if (!hasTimers2 && !hasIO2 && !hasTicks2 && !hasImmediates2 && !hasPendingClose2) break;
+      const hasWorkers2 = globalThis.__hasActiveWorkers ? globalThis.__hasActiveWorkers() : false;
+      if (!hasTimers2 && !hasIO2 && !hasTicks2 && !hasImmediates2 && !hasPendingClose2 && !hasWorkers2) break;
     }
 
     let waitMs = 100;
@@ -201,6 +221,8 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
       const ms = _tb.msUntilNext();
       if (ms >= 0) waitMs = Math.min(waitMs, ms);
     }
+    // poll worker queues promptly (cross-thread messages aren't I/O events)
+    if (hasWorkers) waitMs = Math.min(waitMs, 2);
 
     if (waitMs < 1 && !hasImmediates && !hasPendingClose) waitMs = 1;
 

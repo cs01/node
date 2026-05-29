@@ -87,7 +87,6 @@
       owner_symbol: Symbol('owner_symbol'),
       handle_onclose_symbol: Symbol('handle_onclose'),
     },
-    worker: { isMainThread: true, threadId: 0 },
     performance: {
       milestones: {},
       loopIdleTime() { return 0; },

@@ -68,6 +68,46 @@ extern fn v8c_function_call(ctx: *u8, func: i32, recv: i32, argc: i32, argv: *i3
 extern fn nm_set_lib_dir(dir: *u8): void
 extern fn nm_get_lib_dir(): *u8
 
+// --- worker_threads: pthreads + structured-clone bridge (threads/queue in Milo) ---
+extern fn memcpy(dst: *u8, src: *u8, n: i64): *u8
+extern fn calloc(count: i64, size: i64): *u8
+extern fn usleep(usec: u32): i32
+extern fn pthread_create(thread: *u8, attr: *u8, start: *u8, arg: *u8): i32
+extern fn pthread_join(thread: *u8, retval: *u8): i32
+extern fn pthread_detach(thread: *u8): i32
+extern fn pthread_mutex_init(m: *u8, attr: *u8): i32
+extern fn pthread_mutex_lock(m: *u8): i32
+extern fn pthread_mutex_unlock(m: *u8): i32
+extern fn v8c_serialize(iso: *u8, ctx: *u8, val: i32, outLen: *i64, outSabs: *u8): *u8
+extern fn v8c_deserialize(iso: *u8, ctx: *u8, data: *u8, len: i64, sabs: *u8): i32
+extern fn v8c_sab_free(sabs: *u8): void
+
+// A cross-thread message queue node. Shared heap (NOT thread_local) — both the
+// parent and worker thread touch the channel under its mutex.
+extern struct WMsg {
+    bytes: *u8,
+    len: i64,
+    sabs: *u8,
+    next: *u8,
+}
+
+extern struct WChannel {
+    mutexMem: [u8; 64],     // pthread_mutex_t
+    threadMem: [u8; 8],     // pthread_t
+    toWorkerHead: *u8,
+    toWorkerTail: *u8,
+    toParentHead: *u8,
+    toParentTail: *u8,
+    scriptPath: *u8,
+    wdBytes: *u8,
+    wdLen: i64,
+    wdSabs: *u8,
+    threadId: i32,
+    doneFlag: i32,
+    terminateFlag: i32,
+    exitCode: i32,
+}
+
 fn printStr(s: *u8): void {
     unsafe {
         let len = strlen(s)
@@ -258,6 +298,7 @@ fn registerBuiltinBindings(): void {
         nm_binding_register("spawn" as *u8, nm_init_spawn as *u8)
         nm_binding_register("dns" as *u8, nm_init_dns as *u8)
         nm_binding_register("zlib" as *u8, nm_init_zlib as *u8)
+        nm_binding_register("worker" as *u8, nm_init_worker as *u8)
     }
 }
 
@@ -420,6 +461,365 @@ fn nm_init_console(_iso: *u8, ctx_ptr: *u8, exports: i32): void {
         c.setMethod(exp, "setRawMode" as *u8, ttySetRawMode as *u8)
         c.setMethod(exp, "getWindowSize" as *u8, ttyGetWindowSize as *u8)
     }
+}
+
+extern fn v8c_to_bool(iso: *u8, val: i32, out: *i32): i32
+
+var workerThreadIdCounter: i32 = 1
+// Once a worker isolate has existed, skip the main thread's final V8 teardown:
+// V8::Dispose asserts the isolate group's refcount, which multi-isolate trips.
+// Process exit reclaims everything anyway (Node likewise often skips full teardown).
+var gWorkersSpawned: i32 = 0
+
+// Enqueue a serialized message. toParent != 0 → worker→parent queue, else parent→worker.
+fn msgPush(chan: *WChannel, toParent: i32, bytes: *u8, len: i64, sabs: *u8): void {
+    unsafe {
+        let node = calloc(1, 40) as *WMsg
+        node.bytes = bytes
+        node.len = len
+        node.sabs = sabs
+        node.next = 0 as *u8
+        pthread_mutex_lock(chan as *u8)
+        if toParent != 0 {
+            if chan.toParentTail as i64 == 0 {
+                chan.toParentHead = node as *u8
+                chan.toParentTail = node as *u8
+            } else {
+                let tail = chan.toParentTail as *WMsg
+                tail.next = node as *u8
+                chan.toParentTail = node as *u8
+            }
+        } else {
+            if chan.toWorkerTail as i64 == 0 {
+                chan.toWorkerHead = node as *u8
+                chan.toWorkerTail = node as *u8
+            } else {
+                let tail = chan.toWorkerTail as *WMsg
+                tail.next = node as *u8
+                chan.toWorkerTail = node as *u8
+            }
+        }
+        pthread_mutex_unlock(chan as *u8)
+    }
+}
+
+// Dequeue one node (caller frees). fromParent != 0 → worker reading parent→worker.
+fn msgPop(chan: *WChannel, fromParent: i32): *WMsg {
+    var node: *WMsg = 0 as *WMsg
+    unsafe {
+        pthread_mutex_lock(chan as *u8)
+        if fromParent != 0 {
+            node = chan.toWorkerHead as *WMsg
+            if node as i64 != 0 {
+                chan.toWorkerHead = node.next
+                if chan.toWorkerHead as i64 == 0 { chan.toWorkerTail = 0 as *u8 }
+            }
+        } else {
+            node = chan.toParentHead as *WMsg
+            if node as i64 != 0 {
+                chan.toParentHead = node.next
+                if chan.toParentHead as i64 == 0 { chan.toParentTail = 0 as *u8 }
+            }
+        }
+        pthread_mutex_unlock(chan as *u8)
+    }
+    return node
+}
+
+// Serialize a value (caller's isolate/ctx) and push it onto a queue.
+fn workerPostImpl(ci: CallbackInfo, toParent: i32): void {
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 == 0 { return }
+        let val = ci.arg(1)
+        var lenSlot: [i64; 1] = [0]
+        var sabsSlot: [i64; 1] = [0]
+        let bytes = v8c_serialize(iso.ptr, ctx.ptr, val.slot, lenSlot as *i64, sabsSlot as *u8)
+        if bytes as i64 == 0 { return }
+        msgPush(chan, toParent, bytes, lenSlot[0], sabsSlot[0] as *u8)
+    }
+}
+
+// Pop+deserialize one message into the caller's isolate; return undefined if empty.
+fn workerPollImpl(ci: CallbackInfo, fromParent: i32): void {
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 == 0 {
+            ci.retUndefined()
+            return
+        }
+        let node = msgPop(chan, fromParent)
+        if node as i64 == 0 {
+            ci.retUndefined()
+            return
+        }
+        let slot = v8c_deserialize(iso.ptr, ctx.ptr, node.bytes, node.len, node.sabs)
+        free(node.bytes)
+        if node.sabs as i64 != 0 { v8c_sab_free(node.sabs) }
+        free(node as *u8)
+        if slot < 0 {
+            ci.retUndefined()
+            return
+        }
+        ci.ret(Value { slot: slot })
+    }
+}
+
+fn workerCreate(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    unsafe {
+        var pathBuf: [u8; 4096] = [0; 4096]
+        let plen = ci.arg(0).writeUtf8(iso, pathBuf as *u8, 4096)
+        let chan = calloc(1, 256) as *WChannel
+        pthread_mutex_init(chan as *u8, 0 as *u8)
+        let sp = calloc(1, plen as i64 + 1)
+        memcpy(sp, pathBuf as *u8, plen as i64)
+        chan.scriptPath = sp
+        workerThreadIdCounter = workerThreadIdCounter + 1
+        chan.threadId = workerThreadIdCounter
+        ci.retF64(chan as i64 as f64)
+    }
+}
+
+fn workerSetData(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 == 0 { return }
+        let val = ci.arg(1)
+        var lenSlot: [i64; 1] = [0]
+        var sabsSlot: [i64; 1] = [0]
+        let bytes = v8c_serialize(iso.ptr, ctx.ptr, val.slot, lenSlot as *i64, sabsSlot as *u8)
+        chan.wdBytes = bytes
+        chan.wdLen = lenSlot[0]
+        chan.wdSabs = sabsSlot[0] as *u8
+    }
+}
+
+fn workerGetData(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 == 0 || chan.wdBytes as i64 == 0 {
+            ci.retUndefined()
+            return
+        }
+        let slot = v8c_deserialize(iso.ptr, ctx.ptr, chan.wdBytes, chan.wdLen, chan.wdSabs)
+        if slot < 0 {
+            ci.retUndefined()
+            return
+        }
+        ci.ret(Value { slot: slot })
+    }
+}
+
+fn workerPostToWorker(info: *u8, _ud: *u8): void { workerPostImpl(CallbackInfo { ptr: info }, 0) }
+fn workerPollFromWorker(info: *u8, _ud: *u8): void { workerPollImpl(CallbackInfo { ptr: info }, 0) }
+fn workerPostToParent(info: *u8, _ud: *u8): void { workerPostImpl(CallbackInfo { ptr: info }, 1) }
+fn workerPollToWorker(info: *u8, _ud: *u8): void { workerPollImpl(CallbackInfo { ptr: info }, 1) }
+
+fn workerThreadId(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 == 0 { ci.retI32(0) } else { ci.retI32(chan.threadId) }
+    }
+}
+
+fn workerStart(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 == 0 { return }
+        gWorkersSpawned = 1
+        let threadPtr = (chan as i64 + 64) as *u8
+        pthread_create(threadPtr, 0 as *u8, nm_worker_entry as *u8, chan as *u8)
+    }
+}
+
+fn workerMarkDone(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 != 0 {
+            chan.exitCode = ci.i32Arg(1, 0)
+            chan.doneFlag = 1
+        }
+    }
+}
+fn workerIsDone(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 == 0 { ci.retI32(1) } else { ci.retI32(chan.doneFlag) }
+    }
+}
+fn workerExitCode(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 == 0 { ci.retI32(0) } else { ci.retI32(chan.exitCode) }
+    }
+}
+fn workerRequestTerminate(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 != 0 { chan.terminateFlag = 1 }
+    }
+}
+fn workerShouldTerminate(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 == 0 { ci.retI32(0) } else { ci.retI32(chan.terminateFlag) }
+    }
+}
+fn workerJoin(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let chan = ci.i64Arg(0, 0) as *WChannel
+        if chan as i64 == 0 { return }
+        let threadPtr = (chan as i64 + 64) as *u8
+        pthread_join(threadPtr, 0 as *u8)
+    }
+}
+
+fn nm_init_worker(_iso: *u8, ctx_ptr: *u8, exports: i32): void {
+    let c = Context { ptr: ctx_ptr }
+    let exp = Value { slot: exports }
+    unsafe {
+        c.setMethod(exp, "create" as *u8, workerCreate as *u8)
+        c.setMethod(exp, "start" as *u8, workerStart as *u8)
+        c.setMethod(exp, "setData" as *u8, workerSetData as *u8)
+        c.setMethod(exp, "getData" as *u8, workerGetData as *u8)
+        c.setMethod(exp, "postToWorker" as *u8, workerPostToWorker as *u8)
+        c.setMethod(exp, "pollFromWorker" as *u8, workerPollFromWorker as *u8)
+        c.setMethod(exp, "postToParent" as *u8, workerPostToParent as *u8)
+        c.setMethod(exp, "pollToWorker" as *u8, workerPollToWorker as *u8)
+        c.setMethod(exp, "threadId" as *u8, workerThreadId as *u8)
+        c.setMethod(exp, "markDone" as *u8, workerMarkDone as *u8)
+        c.setMethod(exp, "isDone" as *u8, workerIsDone as *u8)
+        c.setMethod(exp, "exitCode" as *u8, workerExitCode as *u8)
+        c.setMethod(exp, "requestTerminate" as *u8, workerRequestTerminate as *u8)
+        c.setMethod(exp, "shouldTerminate" as *u8, workerShouldTerminate as *u8)
+        c.setMethod(exp, "join" as *u8, workerJoin as *u8)
+    }
+}
+
+// Thread entry: stand up a fresh isolate, run the worker script, pump its loop.
+fn nm_worker_entry(arg: *u8): *u8 {
+    unsafe {
+        let chan = arg as *WChannel
+        let isoPtr = v8c_isolate_new()
+        if isoPtr as i64 == 0 {
+            chan.doneFlag = 1
+            return 0 as *u8
+        }
+        v8c_isolate_enter(isoPtr)
+        let hs = v8c_handle_scope_new(isoPtr)
+        let ctxPtr = v8c_context_new(isoPtr)
+        v8c_context_enter(ctxPtr)
+        let iso = Isolate { ptr: isoPtr }
+        let ctx = Context { ptr: ctxPtr }
+        let global = ctx.global()
+        ctx.setMethod(global, "internalBinding" as *u8, nm_internal_binding as *u8)
+        ctx.setMethod(global, "__loadBuiltin" as *u8, nativeLoadBuiltin as *u8)
+        ctx.objectSet(global, "__libDir" as *u8, iso.string(nm_get_lib_dir()))
+
+        let proc = setupProcessObject(iso, ctx, 0, 0 as *i64)
+        ctx.objectSet(global, "process" as *u8, proc)
+        // expose worker identity to JS before bootstrap
+        ctx.objectSet(global, "__workerChannel" as *u8, iso.number(chan as i64 as f64))
+        ctx.objectSet(global, "__workerThreadId" as *u8, iso.int32(chan.threadId))
+
+        // bootstrap path = <root>/src/milo/runtime/bootstrap.js
+        var bsPath: [u8; 1024] = [0; 1024]
+        let ld = nm_get_lib_dir()
+        let rootLen = strlen(ld) - 3
+        var bp: i64 = 0
+        while bp < rootLen {
+            bsPath[bp] = ld[bp]
+            bp = bp + 1
+        }
+        let bsSuffix = "src/milo/runtime/bootstrap.js"
+        var bs: i64 = 0
+        while bs < strlen(bsSuffix) {
+            bsPath[bp] = bsSuffix[bs]
+            bp = bp + 1
+            bs = bs + 1
+        }
+        bsPath[bp] = 0
+        runBootstrap(ctx, bsPath as *u8)
+
+        // require the worker script through the module system
+        var runCode: [u8; 4096] = [0; 4096]
+        let rPre = "(function(){const p=require('path');const f=p.resolve('"
+        let rPost = "');require.main={id:'.',filename:f,loaded:false,paths:[]};require(f);})()"
+        var wi: i64 = 0
+        var wj: i64 = 0
+        while wj < strlen(rPre) {
+            runCode[wi] = rPre[wj]
+            wi = wi + 1
+            wj = wj + 1
+        }
+        wj = 0
+        while wj < strlen(chan.scriptPath) {
+            runCode[wi] = chan.scriptPath[wj]
+            wi = wi + 1
+            wj = wj + 1
+        }
+        wj = 0
+        while wj < strlen(rPost) {
+            runCode[wi] = rPost[wj]
+            wi = wi + 1
+            wj = wj + 1
+        }
+        runCode[wi] = 0
+        // run the worker script; uncaught errors surface to the parent via the
+        // JS uncaughtException handler (which posts a {t:'error'} envelope).
+        let tc = v8c_try_catch_new(isoPtr)
+        ctx.compileRun(runCode as *u8, wi as i32, "[worker]" as *u8)
+        v8c_try_catch_delete(tc)
+        v8c_isolate_run_microtasks(isoPtr)
+
+        // event loop: drain timers + pump messages until done or terminate
+        let undef = iso.undefined()
+        let runLoop = ctx.objectGet(global, "__runEventLoop" as *u8)
+        let pump = ctx.objectGet(global, "__workerPump" as *u8)
+        var running: i32 = 1
+        while running == 1 {
+            if chan.terminateFlag != 0 { running = 0 }
+            else {
+                if runLoop.slot >= 0 { v8c_function_call(ctxPtr, runLoop.slot, undef.slot, 0, 0 as *i32) }
+                v8c_isolate_run_microtasks(isoPtr)
+                if pump.slot >= 0 {
+                    let r = v8c_function_call(ctxPtr, pump.slot, undef.slot, 0, 0 as *i32)
+                    v8c_isolate_run_microtasks(isoPtr)
+                    var aliveOut: [i32; 1] = [1]
+                    v8c_to_bool(isoPtr, r, aliveOut as *i32)
+                    if aliveOut[0] == 0 { running = 0 }
+                }
+                usleep(1000)
+            }
+        }
+        chan.doneFlag = 1
+        v8c_context_exit(ctxPtr)
+        v8c_handle_scope_delete(hs)
+        v8c_context_dispose(ctxPtr)
+        v8c_isolate_exit(isoPtr)
+        v8c_isolate_dispose(isoPtr)
+    }
+    return 0 as *u8
 }
 
 fn milo_node_main(argc: i32, argv: *i64): i32 {
@@ -795,10 +1195,12 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
 
         v8c_context_exit(ctxPtr)
         v8c_handle_scope_delete(hs)
-        v8c_context_dispose(ctxPtr)
-        v8c_isolate_exit(isoPtr)
-        v8c_isolate_dispose(isoPtr)
-        v8c_platform_shutdown()
+        if gWorkersSpawned == 0 {
+            v8c_context_dispose(ctxPtr)
+            v8c_isolate_exit(isoPtr)
+            v8c_isolate_dispose(isoPtr)
+            v8c_platform_shutdown()
+        }
 
         if result.slot >= 0 { return 0 }
         return 1
