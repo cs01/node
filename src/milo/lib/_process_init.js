@@ -154,7 +154,10 @@ process.nextTick = (fn, ...args) => {
 
 if (!process.on) {
   const EventEmitter = require('events');
-  function ProcessProto() {}
+  // V8 renders objects as `#<ctorName>` using the constructor's baked-in name
+  // (a post-hoc name override doesn't take), so create it with the real name
+  // 'process' — Node reports "...of #<process>", not the internal proto name.
+  const ProcessProto = ({ process: function() {} }).process;
   Object.setPrototypeOf(ProcessProto.prototype, EventEmitter.prototype);
   Object.setPrototypeOf(process, ProcessProto.prototype);
   EventEmitter.call(process);
@@ -308,6 +311,9 @@ Object.defineProperty(process, 'exitCode', {
 
 // Wrap process.exit to emit 'exit' event before native exit
 const _nativeExit = process.exit;
+// reallyExit is the actual termination step; Node exposes it so it can be
+// stubbed (tests) or hooked. process.exit funnels through it after 'exit'.
+if (!process.reallyExit) process.reallyExit = _nativeExit;
 process.exit = function(code) {
   if (code !== undefined) process.exitCode = code;
   const exitCode = process.exitCode || 0;
@@ -315,7 +321,7 @@ process.exit = function(code) {
     process._exiting = true;
     try { process.emit('exit', exitCode); } catch {}
   }
-  _nativeExit(exitCode);
+  process.reallyExit(exitCode);
 };
 // Called by runtime before normal program completion (via __runExitHandlers global)
 process._emitBeforeExit = function() {
