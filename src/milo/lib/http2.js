@@ -112,8 +112,10 @@ class Http2Stream extends Duplex {
   }
   setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
   priority() {}
-  _push(chunk) { this.push(chunk); }
-  _end() { this.push(null); }
+  // ignore data/eof once the readable side is done — a peer may keep sending
+  // DATA after we've ended/closed/rejected the stream (push-after-EOF guard).
+  _push(chunk) { if (this._readableEnded || this.destroyed || this.closed) return; this.push(chunk); }
+  _end() { if (this._readableEnded) return; this._readableEnded = true; this.push(null); }
 }
 
 class ServerHttp2Stream extends Http2Stream {
