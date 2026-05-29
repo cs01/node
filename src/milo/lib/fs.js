@@ -906,7 +906,7 @@ function read(fd, buffer, offset, length, position, cb) {
       }
       buffer = opts.buffer || Buffer.alloc(16384);
       offset = opts.offset || 0;
-      length = opts.length != null ? opts.length : buffer.length;
+      length = opts.length != null ? opts.length : buffer.length - offset;
       position = opts.position != null ? opts.position : null;
     } else {
       offset = 0;
@@ -919,7 +919,7 @@ function read(fd, buffer, offset, length, position, cb) {
     if (offset != null && typeof offset === 'object' && !Buffer.isBuffer(offset) && !ArrayBuffer.isView(offset)) {
       const opts = offset;
       offset = opts.offset == null ? 0 : opts.offset;
-      length = opts.length == null ? (buffer ? buffer.length : 0) : opts.length;
+      length = opts.length == null ? (buffer ? buffer.length - offset : 0) : opts.length;
       position = opts.position == null ? null : opts.position;
     } else {
       length = buffer ? buffer.length - (offset || 0) : 0;
@@ -934,7 +934,7 @@ function read(fd, buffer, offset, length, position, cb) {
       cb = length;
       const opts = offset;
       offset = opts.offset || 0;
-      length = opts.length != null ? opts.length : buffer.length;
+      length = opts.length != null ? opts.length : buffer.length - offset;
       position = opts.position != null ? opts.position : null;
     }
   }
@@ -1005,25 +1005,31 @@ function write(fd, buffer, offset, length, position, cb) {
     process.nextTick(() => cb(null, n, buffer));
     return;
   }
-  if (offset != null && typeof offset === 'object') {
-    cb = length; ({ offset = 0, length = buffer.length - offset, position = null } = offset);
+  // non-string buffer must be a view (Buffer/TypedArray/DataView)
+  if (!ArrayBuffer.isView(buffer)) {
+    throw _ERR_INVALID_ARG_TYPE('buffer', ['string', 'Buffer', 'TypedArray', 'DataView'], buffer);
   }
-  if (typeof offset === 'function') { cb = offset; offset = 0; length = buffer.length; position = null; }
-  if (typeof length === 'function') { cb = length; length = buffer.length - (offset || 0); position = null; }
-  if (typeof position === 'function') { cb = position; position = null; }
+  // write(fd, buffer, options, cb): 3rd arg may be an options object
+  if (offset !== null && typeof offset === 'object') {
+    cb = length; const o = offset; offset = o.offset; length = o.length; position = o.position;
+  } else if (typeof offset === 'function') { cb = offset; offset = undefined; length = undefined; position = undefined; }
+  else if (typeof length === 'function') { cb = length; length = undefined; position = undefined; }
+  else if (typeof position === 'function') { cb = position; position = undefined; }
   _validateCb(cb);
-  if (offset != null && (typeof offset !== 'number' || Number.isNaN(offset) || !Number.isInteger(offset))) {
-    const e = new RangeError(`The value of "offset" is out of range. It must be an integer. Received ${typeof offset === 'number' ? offset : typeof offset}`);
-    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  const bl = buffer.byteLength;
+  if (offset == null) offset = 0;
+  else {
+    if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
+    if (!Number.isInteger(offset)) throw _ERR_OUT_OF_RANGE('offset', 'an integer', offset);
+    if (offset < 0 || offset > bl) throw _ERR_OUT_OF_RANGE('offset', `>= 0 && <= ${bl}`, offset);
   }
-  if (offset != null && offset < 0) {
-    const e = new RangeError(`The value of "offset" is out of range. It must be >= 0. Received ${offset}`);
-    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  if (length == null) length = bl - offset;
+  else {
+    if (typeof length !== 'number') throw _ERR_INVALID_ARG_TYPE('length', 'number', length);
+    if (!Number.isInteger(length)) throw _ERR_OUT_OF_RANGE('length', 'an integer', length);
+    if (length < 0 || length > bl - offset) throw _ERR_OUT_OF_RANGE('length', `>= 0 && <= ${bl - offset}`, length);
   }
-  if (length != null && length < 0) {
-    const e = new RangeError(`The value of "length" is out of range. It must be >= 0. Received ${length}`);
-    e.code = 'ERR_OUT_OF_RANGE'; throw e;
-  }
+  if (position === undefined) position = null;
   try {
     const n = writeSync(fd, buffer, offset, length, position);
     process.nextTick(() => cb(null, n, buffer));
@@ -1225,7 +1231,7 @@ const promises = {
         read(buf, off, len, pos) {
           // mirror fs.read overloads: read(buf, {offset,length,position}) and null offset/len → defaults
           if (off != null && typeof off === 'object' && !Buffer.isBuffer(off) && !ArrayBuffer.isView(off)) {
-            pos = off.position == null ? null : off.position; len = off.length == null ? buf.length : off.length; off = off.offset == null ? 0 : off.offset;
+            const _o = off.offset == null ? 0 : off.offset; len = off.length == null ? buf.length - _o : off.length; pos = off.position == null ? null : off.position; off = _o;
           } else {
             if (off == null) off = 0;
             if (len == null) len = buf.length - off;
