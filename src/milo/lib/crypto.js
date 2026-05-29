@@ -440,6 +440,84 @@ const subtle = {
   },
 };
 
+// ---- Diffie-Hellman (BigInt modpow; named MODP groups from RFC 2412/3526) ----
+const _DH_GROUPS = {
+  modp1: 'FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A63A3620FFFFFFFFFFFFFFFF',
+  modp2: 'FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE65381FFFFFFFFFFFFFFFF',
+  modp5: 'FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA237327FFFFFFFFFFFFFFFF',
+  modp14: 'FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF',
+};
+function _bufToBig(buf) { let h = ''; for (const b of buf) h += b.toString(16).padStart(2, '0'); return h === '' ? 0n : BigInt('0x' + h); }
+function _bigToBuf(n, len) { let h = n.toString(16); if (h.length % 2) h = '0' + h; let b = Buffer.from(h, 'hex'); if (len && b.length < len) b = Buffer.concat([Buffer.alloc(len - b.length), b]); return b; }
+function _modpow(base, exp, mod) { let r = 1n; base %= mod; while (exp > 0n) { if (exp & 1n) r = (r * base) % mod; exp >>= 1n; base = (base * base) % mod; } return r; }
+function _toBuf(v, enc) { if (Buffer.isBuffer(v) || ArrayBuffer.isView(v)) return Buffer.from(v.buffer || v, v.byteOffset || 0, v.byteLength != null ? v.byteLength : v.length); if (typeof v === 'string') return Buffer.from(v, enc || 'latin1'); if (typeof v === 'number') return _bigToBuf(BigInt(v)); return Buffer.from(v); }
+function _encodeOut(buf, enc) { return enc ? buf.toString(enc) : buf; }
+
+class DiffieHellman {
+  constructor(prime, a, b, c) {
+    // (primeLength:number [, generator]) | (prime:string, primeEnc, gen, genEnc)
+    // | (prime:Buffer, generator, genEnc)
+    let generator, genEnc, primeEnc;
+    if (typeof prime === 'string') { primeEnc = a; generator = b; genEnc = c; }
+    else { generator = a; genEnc = b; }
+    if (typeof prime === 'number') this._prime = _genProbablePrime(prime);
+    else this._prime = _bufToBig(_toBuf(prime, primeEnc));
+    this._gen = generator === undefined ? 2n : (typeof generator === 'number' ? BigInt(generator) : _bufToBig(_toBuf(generator, genEnc)));
+    if (this._gen === 0n) this._gen = 2n;
+    this._priv = null; this._pub = null;
+    this.verifyError = 0;
+  }
+  _len() { return _bigToBuf(this._prime).length; }
+  generateKeys(enc) {
+    const plen = this._len();
+    do { this._priv = _bufToBig(randomBytes(plen)) % (this._prime - 2n); } while (this._priv < 2n);
+    this._pub = _modpow(this._gen, this._priv, this._prime);
+    return this.getPublicKey(enc);
+  }
+  computeSecret(other, inEnc, outEnc) {
+    const o = _bufToBig(_toBuf(other, inEnc));
+    const s = _modpow(o, this._priv, this._prime);
+    return _encodeOut(_bigToBuf(s, this._len()), outEnc);
+  }
+  getPrime(enc) { return _encodeOut(_bigToBuf(this._prime), enc); }
+  getGenerator(enc) { return _encodeOut(_bigToBuf(this._gen), enc); }
+  getPublicKey(enc) { return _encodeOut(_bigToBuf(this._pub, this._len()), enc); }
+  getPrivateKey(enc) { return _encodeOut(_bigToBuf(this._priv, this._len()), enc); }
+  setPublicKey(v, enc) { this._pub = _bufToBig(_toBuf(v, enc)); return this; }
+  setPrivateKey(v, enc) { this._priv = _bufToBig(_toBuf(v, enc)); return this; }
+}
+function _isProbablePrime(n, k = 16) {
+  if (n < 2n) return false;
+  for (const p of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n]) { if (n % p === 0n) return n === p; }
+  let d = n - 1n, r = 0n; while ((d & 1n) === 0n) { d >>= 1n; r++; }
+  for (let i = 0; i < k; i++) {
+    const a = 2n + _bufToBig(randomBytes(_bigToBuf(n).length)) % (n - 4n);
+    let x = _modpow(a, d, n);
+    if (x === 1n || x === n - 1n) continue;
+    let ok = false;
+    for (let j = 0n; j < r - 1n; j++) { x = (x * x) % n; if (x === n - 1n) { ok = true; break; } }
+    if (!ok) return false;
+  }
+  return true;
+}
+function _genProbablePrime(bits) {
+  const bytes = Math.ceil(bits / 8);
+  for (;;) {
+    const buf = randomBytes(bytes);
+    buf[0] |= 0x80; buf[bytes - 1] |= 1; // top bit + odd
+    const n = _bufToBig(buf);
+    if (_isProbablePrime(n)) return n;
+  }
+}
+function createDiffieHellman(prime, primeEnc, generator, genEnc) { return new DiffieHellman(prime, primeEnc, generator, genEnc); }
+function createDiffieHellmanGroup(name) {
+  const hex = _DH_GROUPS[name];
+  if (!hex) { const e = new Error(`Unknown group: ${name}`); e.code = 'ERR_CRYPTO_UNKNOWN_DH_GROUP'; throw e; }
+  const dh = new DiffieHellman(Buffer.from(hex, 'hex'), undefined, 2);
+  return dh;
+}
+const getDiffieHellman = createDiffieHellmanGroup;
+
 const webcrypto = { subtle, getRandomValues(buf) { randomFillSync(buf); return buf; } };
 
 module.exports = {
@@ -449,6 +527,7 @@ module.exports = {
   createSign, createVerify, generateKeyPair, generateKeyPairSync, generateKeySync,
   KeyObject, createSecretKey, createPublicKey, createPrivateKey,
   webcrypto, subtle,
+  DiffieHellman, createDiffieHellman, createDiffieHellmanGroup, getDiffieHellman, DiffieHellmanGroup: createDiffieHellmanGroup,
   constants: {},
   getFips: () => 0,
   setFips: () => {},
