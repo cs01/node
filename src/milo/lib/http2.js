@@ -344,6 +344,31 @@ class ServerHttp2Session extends Http2Session {
 // ---- Compatibility API (HTTP/1-style req/res over an http2 stream) ----
 const { Readable } = require('stream');
 
+// Node's req.socket/res.socket is a proxy to the real TCP socket whose
+// readable/writable/destroy reflect the http2 *stream*, not the raw connection.
+// A Proxy over the real socket keeps `instanceof net.Socket` true while
+// overriding the stream-coupled bits.
+function _proxySocket(stream) {
+  const real = stream.session && stream.session.socket;
+  if (!real) return undefined;
+  return new Proxy(real, {
+    get(target, prop) {
+      switch (prop) {
+        case 'readable': return stream.readable;
+        case 'writable': return stream.writable;
+        case 'destroyed': return stream.destroyed || target.destroyed;
+        case 'destroy': return (...a) => { stream.destroy(...a); return target; };
+        case 'end': return (...a) => { stream.end(...a); return target; };
+        default: {
+          const v = target[prop];
+          return typeof v === 'function' ? v.bind(target) : v;
+        }
+      }
+    },
+    set(target, prop, value) { target[prop] = value; return true; },
+  });
+}
+
 class Http2ServerRequest extends Readable {
   constructor(stream, headers) {
     super();
@@ -360,7 +385,7 @@ class Http2ServerRequest extends Readable {
     this.scheme = headers[':scheme'] || 'https';
     this.aborted = false;
     this.complete = false;
-    this.socket = stream.session && stream.session.socket;
+    this.socket = _proxySocket(stream);
     this.connection = this.socket;
     stream.on('data', (d) => { if (!this.push(d)) stream.pause && stream.pause(); });
     stream.on('end', () => { this.complete = true; this.push(null); });
@@ -384,6 +409,7 @@ class Http2ServerResponse extends EventEmitter {
     this.sendDate = true;
     this._headers = {};
     this[sensitiveHeaders] = [];
+    this._proxy = _proxySocket(stream);
     stream.on('close', () => { if (!this.finished) this.emit('close'); });
     stream.on('drain', () => this.emit('drain'));
   }
@@ -431,7 +457,7 @@ class Http2ServerResponse extends EventEmitter {
   }
   setTimeout(ms, cb) { this.stream.setTimeout(ms, cb); return this; }
   // Node detaches the socket from the response once it has finished.
-  get socket() { return this.finished ? undefined : (this.stream.session && this.stream.session.socket); }
+  get socket() { return this.finished ? undefined : this._proxy; }
   get connection() { return this.socket; }
   get writable() { return !this.finished; }
   flushHeaders() { if (!this._sent) this._respond(false); }
