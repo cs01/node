@@ -93,7 +93,14 @@ class Http2Stream extends Duplex {
     this.session._sendData(this.id, chunk, false);
     cb();
   }
-  _final(cb) { this._localEnded = true; this.session._sendData(this.id, Buffer.alloc(0), true); cb(); }
+  _final(cb) {
+    // if END_STREAM was already sent (e.g. no-body request/response via HEADERS),
+    // don't emit a second END_STREAM via an empty DATA frame (protocol error).
+    if (this._localEnded) { cb(); return; }
+    this._localEnded = true;
+    this.session._sendData(this.id, Buffer.alloc(0), true);
+    cb();
+  }
   _read() {}
   close(code = 0, cb) {
     if (this.closed) { if (cb) process.nextTick(cb); return; }
@@ -440,6 +447,7 @@ class Http2ServerResponse extends EventEmitter {
   get headersSent() { return this._sent === true; }
   set headersSent(v) { this._sent = v; }
   writeHead(statusCode, statusMessage, headers) {
+    if (this._sent) { const e = new Error('Response has already been initiated.'); e.code = 'ERR_HTTP2_HEADERS_SENT'; throw e; }
     if (typeof statusMessage === 'object') { headers = statusMessage; statusMessage = undefined; }
     this.statusCode = statusCode;
     if (headers) for (const k of Object.keys(headers)) this._headers[k.toLowerCase()] = headers[k];
