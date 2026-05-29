@@ -238,7 +238,9 @@ class Readable extends Stream {
       const err = new Error('stream.push() after EOF');
       err.code = 'ERR_STREAM_PUSH_AFTER_EOF';
       state.errored = err;
-      process.nextTick(() => this.emit('error', err));
+      // emit 'error' only once: after the first push-after-EOF the stream is
+      // errored, so repeat pushes must not re-fire (matches node's once semantics).
+      if (!state.errorEmitted) { state.errorEmitted = true; process.nextTick(() => this.emit('error', err)); }
       return false;
     }
     if (!state.objectMode) {
@@ -696,7 +698,8 @@ class Writable extends Stream {
       const err = new Error('write after end');
       err.code = 'ERR_STREAM_WRITE_AFTER_END';
       if (cb) process.nextTick(cb, err);
-      process.nextTick(() => this.emit('error', err));
+      // emit 'error' only once across repeated write-after-end calls.
+      if (!this._writableState.errorEmitted) { this._writableState.errorEmitted = true; this._writableState.errored = err; process.nextTick(() => this.emit('error', err)); }
       return false;
     }
     if (chunk === null) {
