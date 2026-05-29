@@ -679,6 +679,18 @@
 
   const moduleCache = { path: _path };
   const _moduleWrappers = {};
+  // Persistent map of resolved-path -> Module object (not just exports) so
+  // module.children can be populated. moduleCache holds exports and _moduleWrappers
+  // is cleared after load; this survives for the lifetime of the process.
+  const _moduleObjects = {};
+  // Mirror node's updateChildren: link child into parent.children. On a cache hit
+  // (scan=true) only add if not already present, so repeated require()s of the same
+  // module don't duplicate it; builtins are never linked (they aren't Module objects).
+  function _updateChildren(parentMod, child, scan) {
+    if (!parentMod || !child) return;
+    const kids = parentMod.children;
+    if (kids && !(scan && kids.includes(child))) kids.push(child);
+  }
   const _requireStack = [];
   globalThis._requireStack = _requireStack;
 
@@ -986,8 +998,8 @@
     return null;
   }
 
-  function _loadModule(id, resolved, fileSrc) {
-    const mod = { exports: {} };
+  function _loadModule(id, resolved, fileSrc, parentMod, isBuiltin) {
+    const mod = { id: resolved, exports: {}, filename: resolved, loaded: false, children: [], parent: parentMod || null, paths: [] };
     // Link require.main to actual module object so `module === require.main` works
     if (require.main && require.main.filename === resolved) {
       mod.id = require.main.id;
@@ -996,10 +1008,12 @@
       require.main = mod;
     }
     _moduleWrappers[resolved] = mod;
+    _moduleObjects[resolved] = mod;
+    if (!isBuiltin) _updateChildren(parentMod, mod, false);
     const isBare = !id.startsWith('./') && !id.startsWith('../') && !id.startsWith('/') && id !== '.' && id !== '..';
     if (isBare && id !== resolved) _moduleWrappers[id] = mod;
     const dname = _path.dirname(resolved);
-    const modRequire = _makeRequire(dname);
+    const modRequire = _makeRequire(dname, mod);
     mod.require = modRequire;
     if (resolved.endsWith('.json')) {
       try { mod.exports = JSON.parse(fileSrc); }
@@ -1012,6 +1026,7 @@
       if (_isESM(resolved)) src = _esmToCjs(src, resolved);
       (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src))(mod.exports, modRequire, mod, resolved, dname, primordials);
     }
+    mod.loaded = true;
     moduleCache[resolved] = mod.exports;
     if (isBare && id !== resolved) moduleCache[id] = mod.exports;
     delete _moduleWrappers[resolved];
@@ -1019,7 +1034,7 @@
     return mod.exports;
   }
 
-  function _makeRequire(parentDir) {
+  function _makeRequire(parentDir, parentMod) {
     function require(id) {
       if (id.startsWith('node:')) id = id.slice(5);
       const flatId = id.replace(/\//g, '_');
@@ -1194,19 +1209,19 @@
       let src = isRelative ? undefined : (_tryMiloLib(id) || _tryMiloLib(flatId) || __loadBuiltin(id));
       if (src !== undefined) {
         const fname = _path.join(_miloLibDir, id + '.js');
-        return _loadModule(id, fname, src);
+        return _loadModule(id, fname, src, parentMod, true);
       }
 
       const resolved = _resolve(id, parentDir);
-      if (_moduleWrappers[resolved]) return _moduleWrappers[resolved].exports;
-      if (resolved && moduleCache[resolved]) return moduleCache[resolved];
-      if (resolved) return _loadModule(id, resolved, _fs.readFileSync(resolved));
+      if (_moduleWrappers[resolved]) { _updateChildren(parentMod, _moduleObjects[resolved], true); return _moduleWrappers[resolved].exports; }
+      if (resolved && moduleCache[resolved]) { _updateChildren(parentMod, _moduleObjects[resolved], true); return moduleCache[resolved]; }
+      if (resolved) return _loadModule(id, resolved, _fs.readFileSync(resolved), parentMod, false);
 
       const searchDir = parentDir || (process.cwd ? process.cwd() : '');
       const nmResolved = _resolveNodeModules(id, searchDir);
       if (nmResolved) {
-        if (moduleCache[nmResolved]) return moduleCache[nmResolved];
-        return _loadModule(id, nmResolved, _fs.readFileSync(nmResolved));
+        if (moduleCache[nmResolved]) { _updateChildren(parentMod, _moduleObjects[nmResolved], true); return moduleCache[nmResolved]; }
+        return _loadModule(id, nmResolved, _fs.readFileSync(nmResolved), parentMod, false);
       }
 
       try { const b = _nativeBinding(id); moduleCache[id] = b; return b; } catch {}
