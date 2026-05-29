@@ -109,9 +109,16 @@ Promise.prototype.then = function(onFulfilled, onRejected) {
 
 class AsyncResource {
   constructor(type, opts) {
+    if (typeof type !== 'string') { const e = new TypeError('The "type" argument must be of type string. Received ' + (type === undefined ? 'undefined' : typeof type)); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (type === '') { const e = new TypeError(`Invalid name for async "type": ${type}`); e.code = 'ERR_ASYNC_TYPE'; throw e; }
+    // opts may be a number (triggerAsyncId) or { triggerAsyncId, requireManualDestroy }
+    let triggerAsyncId = typeof opts === 'number' ? opts : (opts && opts.triggerAsyncId !== undefined ? opts.triggerAsyncId : executionAsyncId());
+    if (typeof triggerAsyncId !== 'number' || !Number.isInteger(triggerAsyncId) || triggerAsyncId < -1) {
+      const e = new RangeError(`Invalid triggerAsyncId value: ${triggerAsyncId}`); e.code = 'ERR_INVALID_ASYNC_ID'; throw e;
+    }
     this.type = type;
     this._asyncId = AsyncResource._nextId++;
-    this._triggerAsyncId = (opts && opts.triggerAsyncId) || 0;
+    this._triggerAsyncId = triggerAsyncId;
     this._snapshot = _captureContext();
   }
   runInAsyncScope(fn, thisArg, ...args) {
