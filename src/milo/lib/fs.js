@@ -599,8 +599,16 @@ function mkdtemp(prefix, opts, cb) {
   _async(mkdtempSync, [prefix, opts], cb);
 }
 
+// mode must be an integer in [F_OK..R_OK|W_OK|X_OK]; non-numbers (incl. objects
+// with Symbol.toPrimitive — node checks typeof before coercion) throw arg-type.
+function _validateAccessMode(mode) {
+  if (mode === undefined) return;
+  if (typeof mode !== 'number') throw _ERR_INVALID_ARG_TYPE('mode', 'number', mode);
+  if (!Number.isInteger(mode) || mode < 0 || mode > 7) throw _ERR_OUT_OF_RANGE('mode', '>= 0 && <= 7', mode);
+}
 function accessSync(path, mode) {
   _validatePath(path, 'path');
+  _validateAccessMode(mode);
   const sp = _toPath(path);
   if (!existsSync(sp)) throw _fsError('ENOENT', 'access', sp, 'no such file or directory');
 }
@@ -786,6 +794,7 @@ function chmod(path, mode, cb) { _validatePath(path, 'path'); _validateCb(cb); _
 function access(path, mode, cb) {
   if (typeof mode === 'function') { cb = mode; mode = undefined; }
   _validatePath(path, 'path');
+  _validateAccessMode(mode);
   _validateCb(cb); _async(accessSync, [path, mode], (err) => cb(err));
 }
 function rm(path, opts, cb) {
