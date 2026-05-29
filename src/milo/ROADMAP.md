@@ -21,9 +21,9 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 |------------|-----------|------|----------|--------------|
 | event      | 26/28     | 92%  | —        | mostly passing |
 | next       | 8/9       | 88%  | —        | mostly passing |
-| buffer     | 43/63     | 68%  | high     | error validation, includes/indexOf edge cases |
+| buffer     | 47/63     | 74%  | high     | ucs2 indexOf alignment, Buffer() DEP0005 dedup, arrayBufferViewHasBuffer (V8) |
 | querystring| 2/3       | 66%  | —        | mostly passing |
-| process    | 36/57     | 63%  | high     | error codes, execve, seteuid |
+| process    | 45/57     | 78%  | high     | beforeExit re-emit on server close, execve, --title flag, hrtime natives |
 | url        | 7/11      | 63%  | med      | whatwg url edge cases |
 | readable   | 3/5       | 60%  | med      | destroy/unpipe edge cases |
 | v8         | 3/5       | 60%  | —        | mostly passing |
@@ -151,6 +151,10 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 
 ## done
 
+- [x] buffer ascii decode masks high bit (byte & 0x7f), separate from latin1 (test-buffer-ascii)
+- [x] process.exit funnels through overridable process.reallyExit; process reports as #<process> (really-exit, exit-code-validation)
+- [x] process.kill returns true + propagates kill(2) errno (dead-pid signal-0 probe throws)
+- [x] process.emitWarning honors noDeprecation/throwDeprecation; default 'warning' listener prints Error-only (warning, no-deprecation)
 - [x] top-level uncaught throws route through process._fatalException — `[main]` runner wraps require(f) in try/catch; capture callbacks + 'uncaughtException' listeners now fire instead of native print+exit (process 68%→71%, broad cross-module win)
 - [x] error codes in toString — Error.prototype.toString brackets ERR_* codes ("TypeError [ERR_X]: msg") so assert.throws(/ERR_X/) matches String(err); cross-module win (buffer 33%→73%)
 - [x] process.ref/unref — symbol-based (nodejs.ref) + legacy api
