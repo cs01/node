@@ -13,7 +13,31 @@ class Module {
   }
 
   static createRequire(filename) {
-    return globalThis.require;
+    const _path = require('path');
+    const _throw = () => {
+      const e = new TypeError(`The argument 'filename' must be a file URL object, file URL string, or absolute path string. Received ${require('util').inspect(filename)}`);
+      e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+    };
+    let filepath;
+    const isURLObj = filename !== null && typeof filename === 'object' &&
+      typeof filename.href === 'string' && typeof filename.protocol === 'string';
+    if (isURLObj) {
+      if (filename.protocol !== 'file:') _throw();
+      filepath = require('url').fileURLToPath(filename);
+    } else if (typeof filename === 'string') {
+      if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(filename)) {
+        // has a URL scheme — only file: is acceptable (rejects https:// etc)
+        if (!filename.startsWith('file:')) _throw();
+        filepath = require('url').fileURLToPath(new URL(filename));
+      } else if (_path.isAbsolute(filename)) {
+        filepath = filename;
+      } else {
+        _throw(); // relative path string like '../' is not allowed
+      }
+    } else {
+      _throw();
+    }
+    return globalThis._makeRequire(_path.dirname(filepath));
   }
 
   static builtinModules = [
@@ -87,10 +111,22 @@ class Module {
 
   static _resolveLookupPaths(request, parent) {
     if (Module.isBuiltin(request)) return null;
-    const paths = [];
-    if (parent && parent.paths) paths.push(...parent.paths);
-    if (Module.globalPaths) paths.push(...Module.globalPaths);
-    return paths.length > 0 ? paths : null;
+    // bare specifier (not ./ ../ / and not .\ on windows): search node_modules paths.
+    const isWin = process.platform === 'win32';
+    if (request.charAt(0) !== '.' ||
+        (request.length > 1 && request.charAt(1) !== '.' && request.charAt(1) !== '/' &&
+         (!isWin || request.charAt(1) !== '\\'))) {
+      const paths = [];
+      if (parent && parent.paths) paths.push(...parent.paths);
+      if (Module.globalPaths) paths.push(...Module.globalPaths);
+      // node returns the paths array (never null) for non-builtin bare specifiers;
+      // null is reserved for builtins.
+      return paths;
+    }
+    // relative/absolute: current dir wins. Without a real parent (REPL/-e), node
+    // returns ['.']; otherwise the parent's directory.
+    if (!parent || !parent.id || !parent.filename) return ['.'];
+    return [require('path').dirname(parent.filename)];
   }
 
   static wrap(script) {
