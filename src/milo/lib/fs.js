@@ -606,11 +606,18 @@ function _validateAccessMode(mode) {
   if (typeof mode !== 'number') throw _ERR_INVALID_ARG_TYPE('mode', 'number', mode);
   if (!Number.isInteger(mode) || mode < 0 || mode > 7) throw _ERR_OUT_OF_RANGE('mode', '>= 0 && <= 7', mode);
 }
+// macOS errno → node error code (the subset access(2) can return)
+const _ERRNO_CODES = { 1: 'EPERM', 2: 'ENOENT', 13: 'EACCES', 20: 'ENOTDIR', 30: 'EROFS', 62: 'ELOOP', 63: 'ENAMETOOLONG' };
+const _ERRNO_MSG = { EPERM: 'operation not permitted', ENOENT: 'no such file or directory', EACCES: 'permission denied', ENOTDIR: 'not a directory', EROFS: 'read-only file system', ELOOP: 'too many symbolic links', ENAMETOOLONG: 'name too long' };
 function accessSync(path, mode) {
   _validatePath(path, 'path');
   _validateAccessMode(mode);
   const sp = _toPath(path);
-  if (!existsSync(sp)) throw _fsError('ENOENT', 'access', sp, 'no such file or directory');
+  const errno = b.access(sp, mode === undefined ? 0 : mode);
+  if (errno !== 0) {
+    const code = _ERRNO_CODES[errno] || 'EACCES';
+    throw _fsError(code, 'access', sp, _ERRNO_MSG[code] || 'permission denied');
+  }
 }
 
 function copyFileSync(src, dest, mode) {

@@ -370,6 +370,29 @@ fn fsChmod(info: *u8, _ud: *u8): void {
     }
 }
 
+// access(path, mode) → 0 on success, else the positive errno (EACCES/ENOENT/...).
+// macOS errno lives behind __error() (returns *errno).
+extern fn __error(): *i32
+fn fsAccess(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    var pathBuf: [u8; 4096] = [0; 4096]
+    unsafe {
+        let plen = getStringArg(info, 0, pathBuf as *u8, 4096)
+        if plen < 0 {
+            ci.retI32(-1)
+            return
+        }
+        let mode = getIntArg(info, 1, 0)
+        let r = access(pathBuf as *u8, mode)
+        if r == 0 {
+            ci.retI32(0)
+            return
+        }
+        let ep = __error()
+        ci.retI32(ep[0])
+    }
+}
+
 extern fn symlink(target: *u8, linkpath: *u8): i32
 extern fn link(oldpath: *u8, newpath: *u8): i32
 extern fn fchmod(fd: i32, mode: u32): i32
@@ -618,6 +641,7 @@ fn nm_init_fs(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "readdir" as *u8, fsReaddir as *u8)
         c.setMethod(exp, "realpath" as *u8, fsRealpath as *u8)
         c.setMethod(exp, "chmod" as *u8, fsChmod as *u8)
+        c.setMethod(exp, "access" as *u8, fsAccess as *u8)
         c.setMethod(exp, "open" as *u8, fsOpen as *u8)
         c.setMethod(exp, "close" as *u8, fsClose as *u8)
         c.setMethod(exp, "fdRead" as *u8, fsFdRead as *u8)
