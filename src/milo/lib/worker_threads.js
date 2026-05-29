@@ -11,6 +11,51 @@ const _isWorker = typeof globalThis.__workerChannel === 'number';
 const _chan = _isWorker ? globalThis.__workerChannel : 0;
 const _threadId = _isWorker ? (globalThis.__workerThreadId | 0) : 0;
 
+// V8's MessagePort is EventTarget-only; bridge to Node's EventEmitter API so
+// `port.on('message', fn)` etc. work on standalone MessageChannel ports.
+if (globalThis.MessagePort && !globalThis.MessagePort.prototype.on) {
+  const _mpListeners = new WeakMap();
+  const _getMap = (port) => { let m = _mpListeners.get(port); if (!m) { m = {}; _mpListeners.set(port, m); } return m; };
+  const MP = globalThis.MessagePort.prototype;
+  MP.on = MP.addListener = function(event, fn) {
+    const map = _getMap(this);
+    if (!map[event]) map[event] = [];
+    const wrapper = (e) => fn(event === 'message' ? e.data : e);
+    map[event].push({ fn, wrapper });
+    this.addEventListener(event, wrapper);
+    if (event === 'message' && typeof this.start === 'function') this.start();
+    return this;
+  };
+  MP.once = function(event, fn) {
+    const wrapper = (...a) => { this.removeListener(event, fn); fn.apply(this, a); };
+    wrapper._orig = fn;
+    return this.on(event, wrapper);
+  };
+  MP.off = MP.removeListener = function(event, fn) {
+    const arr = _getMap(this)[event];
+    if (!arr) return this;
+    const idx = arr.findIndex(e => e.fn === fn || e.fn._orig === fn);
+    if (idx >= 0) { this.removeEventListener(event, arr[idx].wrapper); arr.splice(idx, 1); }
+    return this;
+  };
+  MP.removeAllListeners = function(event) {
+    const map = _getMap(this);
+    const evs = event ? [event] : Object.keys(map);
+    for (const ev of evs) { for (const e of (map[ev] || [])) this.removeEventListener(ev, e.wrapper); delete map[ev]; }
+    return this;
+  };
+  MP.emit = function(event, ...args) {
+    const arr = _getMap(this)[event];
+    if (!arr || !arr.length) return false;
+    for (const e of arr.slice()) e.fn.apply(this, args);
+    return true;
+  };
+  MP.listenerCount = function(event) { return (_getMap(this)[event] || []).length; };
+  MP.eventNames = function() { const map = _getMap(this); return Object.keys(map).filter(k => map[k].length > 0); };
+  MP.ref = function() { return this; };
+  MP.unref = function() { return this; };
+}
+
 function _serializeErr(e) {
   if (e instanceof Error) return { message: e.message, stack: e.stack, name: e.name, code: e.code };
   return { message: String(e), name: 'Error' };
@@ -90,6 +135,19 @@ if (_isWorker) {
   parentPort.start = () => {};
   parentPort.ref = () => parentPort;
   parentPort.unref = () => parentPort;
+  // EventTarget-style onmessage: handler receives a MessageEvent-like { data }.
+  // Coexists with the EventEmitter .on('message') API (which gets the raw value).
+  let _onmessage = null;
+  const _onmessageWrap = (v) => { if (_onmessage) _onmessage({ data: v }); };
+  Object.defineProperty(parentPort, 'onmessage', {
+    configurable: true,
+    get() { return _onmessage; },
+    set(fn) {
+      if (_onmessage) parentPort.removeListener('message', _onmessageWrap);
+      _onmessage = fn;
+      if (fn) parentPort.on('message', _onmessageWrap);
+    },
+  });
 
   process.on('uncaughtException', (e) => {
     try { _b.postToParent(_chan, { t: 'error', e: _serializeErr(e) }); } catch {}
