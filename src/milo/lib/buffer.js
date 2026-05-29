@@ -193,6 +193,19 @@ function _checkIntValue(value, min, max) {
   }
 }
 
+// bigint64/uint64 writes require an actual bigint in range — DataView.setBigInt64
+// silently wraps mod 2^64, so we validate before delegating. `range` is the
+// human-readable bound string node uses in its ERR_OUT_OF_RANGE message.
+function _checkBigIntValue(value, min, max, range) {
+  if (typeof value !== 'bigint') throw _ERR_INVALID_ARG_TYPE('value', 'bigint', value);
+  if (value < min || value > max) {
+    const received = String(value).replace(/(\d)(?=(\d\d\d)+(?!\d))/g, '$1_') + 'n';
+    const e = new RangeError(`The value of "value" is out of range. It must be ${range}. Received ${received}`);
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
+}
+const _INT64_MIN = -(2n ** 63n), _INT64_MAX = 2n ** 63n - 1n, _UINT64_MAX = 2n ** 64n - 1n;
+
 function _base64Decode(str) {
   if (_nativeBase64Decode) return _nativeBase64Decode(str);
   return Uint8Array.from(atob(str), c => c.charCodeAt(0));
@@ -750,10 +763,10 @@ class Buffer extends Uint8Array {
   readBigInt64LE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigInt64(offset, true); }
   readBigUInt64BE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigUint64(offset, false); }
   readBigUInt64LE(offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); return dv.getBigUint64(offset, true); }
-  writeBigInt64BE(value, offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigInt64(offset, BigInt(value), false); return offset + 8; }
-  writeBigInt64LE(value, offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigInt64(offset, BigInt(value), true); return offset + 8; }
-  writeBigUInt64BE(value, offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigUint64(offset, BigInt(value), false); return offset + 8; }
-  writeBigUInt64LE(value, offset) { offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigUint64(offset, BigInt(value), true); return offset + 8; }
+  writeBigInt64BE(value, offset) { _checkBigIntValue(value, _INT64_MIN, _INT64_MAX, '>= -(2n ** 63n) and < 2n ** 63n'); offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigInt64(offset, value, false); return offset + 8; }
+  writeBigInt64LE(value, offset) { _checkBigIntValue(value, _INT64_MIN, _INT64_MAX, '>= -(2n ** 63n) and < 2n ** 63n'); offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigInt64(offset, value, true); return offset + 8; }
+  writeBigUInt64BE(value, offset) { _checkBigIntValue(value, 0n, _UINT64_MAX, '>= 0n and < 2n ** 64n'); offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigUint64(offset, value, false); return offset + 8; }
+  writeBigUInt64LE(value, offset) { _checkBigIntValue(value, 0n, _UINT64_MAX, '>= 0n and < 2n ** 64n'); offset = _checkOffset(offset, 8, this.length); const dv = new DataView(this.buffer, this.byteOffset, this.byteLength); dv.setBigUint64(offset, value, true); return offset + 8; }
 
   swap16() { if (this.length % 2 !== 0) { const e = new RangeError('Buffer size must be a multiple of 16-bits'); e.code = 'ERR_INVALID_BUFFER_SIZE'; throw e; } for (let i = 0; i < this.length; i += 2) { const t = this[i]; this[i] = this[i+1]; this[i+1] = t; } return this; }
   swap32() { if (this.length % 4 !== 0) { const e = new RangeError('Buffer size must be a multiple of 32-bits'); e.code = 'ERR_INVALID_BUFFER_SIZE'; throw e; } for (let i = 0; i < this.length; i += 4) { let t = this[i]; this[i] = this[i+3]; this[i+3] = t; t = this[i+1]; this[i+1] = this[i+2]; this[i+2] = t; } return this; }
