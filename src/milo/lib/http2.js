@@ -268,17 +268,114 @@ class ServerHttp2Session extends Http2Session {
   constructor(socket) { super(socket, constants.NGHTTP2_SESSION_SERVER); }
 }
 
+// ---- Compatibility API (HTTP/1-style req/res over an http2 stream) ----
+const { Readable } = require('stream');
+
+class Http2ServerRequest extends Readable {
+  constructor(stream, headers) {
+    super();
+    this.stream = stream;
+    this.headers = headers;
+    this.rawHeaders = [];
+    for (const k of Object.keys(headers)) { this.rawHeaders.push(k, headers[k]); }
+    this.httpVersionMajor = 2;
+    this.httpVersionMinor = 0;
+    this.httpVersion = '2.0';
+    this.method = headers[':method'] || 'GET';
+    this.url = headers[':path'] || '/';
+    this.authority = headers[':authority'];
+    this.scheme = headers[':scheme'] || 'https';
+    this.aborted = false;
+    this.complete = false;
+    this.socket = stream.session && stream.session.socket;
+    stream.on('data', (d) => { if (!this.push(d)) stream.pause && stream.pause(); });
+    stream.on('end', () => { this.complete = true; this.push(null); });
+    stream.on('close', () => { if (!this.complete) { this.aborted = true; this.emit('aborted'); } });
+    stream.on('error', (e) => this.emit('error', e));
+  }
+  _read() {}
+  get trailers() { return {}; }
+  get rawTrailers() { return []; }
+  setTimeout(ms, cb) { this.stream.setTimeout(ms, cb); return this; }
+}
+
+class Http2ServerResponse extends EventEmitter {
+  constructor(stream) {
+    super();
+    this.stream = stream;
+    this.statusCode = 200;
+    this.headersSent = false;
+    this.finished = false;
+    this.writableEnded = false;
+    this.sendDate = true;
+    this._headers = {};
+    this[sensitiveHeaders] = [];
+    stream.on('close', () => { if (!this.finished) this.emit('close'); });
+    stream.on('drain', () => this.emit('drain'));
+  }
+  setHeader(name, value) { this._headers[String(name).toLowerCase()] = value; return this; }
+  getHeader(name) { return this._headers[String(name).toLowerCase()]; }
+  getHeaders() { return { ...this._headers }; }
+  getHeaderNames() { return Object.keys(this._headers); }
+  hasHeader(name) { return String(name).toLowerCase() in this._headers; }
+  removeHeader(name) { delete this._headers[String(name).toLowerCase()]; }
+  get headersSent() { return this._sent === true; }
+  set headersSent(v) { this._sent = v; }
+  writeHead(statusCode, statusMessage, headers) {
+    if (typeof statusMessage === 'object') { headers = statusMessage; statusMessage = undefined; }
+    this.statusCode = statusCode;
+    if (headers) for (const k of Object.keys(headers)) this._headers[k.toLowerCase()] = headers[k];
+    this._respond(false);
+    return this;
+  }
+  _respond(endStream) {
+    if (this._sent) return;
+    this._sent = true;
+    this.stream.respond({ ':status': this.statusCode, ...this._headers }, { endStream });
+  }
+  write(chunk, enc, cb) {
+    if (!this._sent) this._respond(false);
+    const r = this.stream.write(chunk, enc, cb);
+    return r;
+  }
+  end(chunk, enc, cb) {
+    if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
+    if (!this._sent) {
+      if (chunk === undefined || chunk === null) { this._respond(true); }
+      else { this._respond(false); }
+    }
+    this.finished = true; this.writableEnded = true;
+    const done = () => { this.emit('finish'); this.emit('close'); if (cb) cb(); };
+    if (chunk !== undefined && chunk !== null) this.stream.end(chunk, enc, done);
+    else if (!this._localEndedViaRespond) { try { this.stream.end(done); } catch { done(); } }
+    else done();
+    return this;
+  }
+  setTimeout(ms, cb) { this.stream.setTimeout(ms, cb); return this; }
+  get socket() { return this.stream.session && this.stream.session.socket; }
+  get writable() { return !this.finished; }
+  flushHeaders() { if (!this._sent) this._respond(false); }
+}
+
 class Http2Server extends EventEmitter {
   constructor(options, handler) {
     super();
     this._net = net.createServer((socket) => {
       const session = new ServerHttp2Session(socket);
       this.emit('session', session);
-      session.on('stream', (s, h, flags) => this.emit('stream', s, h, flags));
+      session.on('stream', (s, h, flags) => {
+        this.emit('stream', s, h, flags);
+        if (this.listenerCount('request') > 0) {
+          const req = new Http2ServerRequest(s, h);
+          const res = new Http2ServerResponse(s);
+          this.emit('request', req, res);
+        }
+      });
       session.on('error', (e) => this.emit('sessionError', e));
     });
     this._net.on('error', (e) => this.emit('error', e));
-    if (handler) this.on('stream', handler);
+    // createServer's handler is the compat 'request' handler (per Node docs)
+    if (handler) this.on('request', handler);
   }
   listen(...args) { this._net.listen(...args); return this; }
   close(cb) { this._net.close(cb); return this; }
@@ -315,4 +412,5 @@ module.exports = {
   constants, sensitiveHeaders, connect, createServer, createSecureServer,
   getDefaultSettings, getPackedSettings, getUnpackedSettings,
   Http2Session, ClientHttp2Session, ServerHttp2Session, Http2Stream, ServerHttp2Stream, ClientHttp2Stream, Http2Server,
+  Http2ServerRequest, Http2ServerResponse,
 };
