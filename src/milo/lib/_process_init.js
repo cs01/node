@@ -181,7 +181,7 @@ if (!process.uptime) process.uptime = () => (Date.now() - _startTime) / 1000;
 if (!process.setSourceMapsEnabled) {
   let _sourceMapsEnabled = false;
   process.setSourceMapsEnabled = function setSourceMapsEnabled(val) {
-    if (typeof val !== 'boolean') { const e = new TypeError('The "val" argument must be of type boolean. Received ' + typeof val); e.code = 'ERR_INVALID_ARG_TYPE'; e.name = 'TypeError [ERR_INVALID_ARG_TYPE]'; throw e; }
+    if (typeof val !== 'boolean') { const e = new TypeError('The "val" argument must be of type boolean. Received ' + typeof val); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
     _sourceMapsEnabled = val;
   };
   if (!process.getSourceMapsSupport) process.getSourceMapsSupport = () => ({ enabled: _sourceMapsEnabled, nodeModules: false, generatedCode: false });

@@ -565,6 +565,24 @@
   }
 
   // --- node error helpers ---
+  // Node renders its internal (ERR_*) errors as "TypeError [ERR_X]: msg" via toString
+  // while leaving .name untouched — so assert.throws(/ERR_X/) matches String(err) and
+  // tests asserting err.name === 'TypeError' both pass. System errors (ENOENT, EACCES)
+  // keep the plain "Error: msg" form. Install once on the prototype so every lib's
+  // coded errors get this for free, no per-helper change needed.
+  {
+    const _origErrToString = Error.prototype.toString;
+    Object.defineProperty(Error.prototype, 'toString', {
+      value: function toString() {
+        const c = this.code;
+        if (typeof c === 'string' && c.startsWith('ERR_')) {
+          return `${this.name} [${c}]: ${this.message}`;
+        }
+        return _origErrToString.call(this);
+      },
+      writable: true, configurable: true, enumerable: false,
+    });
+  }
   function _makeNodeError(Base, code, msg) {
     const e = new Base(msg);
     e.code = code;
