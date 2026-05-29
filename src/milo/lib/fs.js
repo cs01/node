@@ -19,7 +19,7 @@ function _ERR_INVALID_ARG_TYPE(name, expected, actual) {
   return e;
 }
 
-const _validEncodings = new Set(['ascii', 'utf8', 'utf-8', 'utf16le', 'utf-16le', 'ucs2', 'ucs-2', 'base64', 'base64url', 'latin1', 'binary', 'hex', null, undefined]);
+const _validEncodings = new Set(['ascii', 'utf8', 'utf-8', 'utf16le', 'utf-16le', 'ucs2', 'ucs-2', 'base64', 'base64url', 'latin1', 'binary', 'hex', 'buffer', null, undefined]);
 function _assertEncoding(encoding) {
   if (encoding != null && !_validEncodings.has(encoding)) {
     const e = new TypeError("The \"encoding\" argument must be one of type string or null. Received '" + encoding + "'");
@@ -325,10 +325,11 @@ function readdirSync(path, opts) {
     throw _fsError('ENOENT', 'scandir', sp, 'no such file or directory');
   }
   const entries = result.sort();
+  const asBuffer = (typeof opts === 'string' ? opts : opts && opts.encoding) === 'buffer';
   if (opts && opts.withFileTypes) {
-    return entries.map(name => new Dirent(name, sp));
+    return entries.map(name => new Dirent(asBuffer ? Buffer.from(name) : name, sp));
   }
-  return entries;
+  return asBuffer ? entries.map(name => Buffer.from(name)) : entries;
 }
 function realpathSync(path, opts) { _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding)); _validatePath(path, 'path'); return b.realpath(_toPath(path)); }
 function chmodSync(path, mode) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); b.chmod(_toPath(path), mode); }
