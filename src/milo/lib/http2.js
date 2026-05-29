@@ -161,7 +161,16 @@ class Http2Session extends EventEmitter {
 
     socket.on('data', (d) => this._onData(d));
     socket.on('error', (e) => { if (!this.destroyed) this.emit('error', e); });
-    socket.on('close', () => { if (!this.destroyed) { this.destroyed = true; this.emit('close'); } });
+    socket.on('close', () => {
+      // connection gone: tear down every open stream so req/res 'close' fire and
+      // the event loop can drain (otherwise the process hangs).
+      for (const s of this.streams.values()) {
+        try { if (!s._readableEnded) s._end(); } catch {}
+        s.emit('close');
+      }
+      this.streams.clear();
+      if (!this.destroyed) { this.destroyed = true; this.emit('close'); }
+    });
 
     if (type === constants.NGHTTP2_SESSION_CLIENT) socket.write(F.PREFACE);
     this._send(F.serializeFrame(F.FRAME.SETTINGS, 0, 0, F.packSettings({ [F.SETTINGS.INITIAL_WINDOW_SIZE]: 0x7fffffff, [F.SETTINGS.ENABLE_PUSH]: 0 })));
@@ -247,7 +256,10 @@ class Http2Session extends EventEmitter {
       let s = this.streams.get(streamId);
       if (!s) { s = new ServerHttp2Stream(this, streamId); s.pending = false; this.streams.set(streamId, s); }
       if (endStream) s._end();
-      this.emit('stream', s, obj, 0);
+      // A throw in the user handler must not hang the peer: RST the stream and
+      // surface the error (matches Node, which sends an internal error).
+      try { this.emit('stream', s, obj, 0); }
+      catch (e) { try { this._sendRst(streamId, 2); } catch {} process.nextTick(() => { throw e; }); }
     } else {
       const s = this.streams.get(streamId);
       if (s) { s.pending = false; s.emit('response', obj, 0); if (endStream) s._end(); }
@@ -344,7 +356,7 @@ class Http2ServerRequest extends Readable {
     this.httpVersion = '2.0';
     this.method = headers[':method'] || 'GET';
     this.url = headers[':path'] || '/';
-    this.authority = headers[':authority'];
+    this.authority = headers[':authority'] !== undefined ? headers[':authority'] : headers['host'];
     this.scheme = headers[':scheme'] || 'https';
     this.aborted = false;
     this.complete = false;
@@ -352,7 +364,7 @@ class Http2ServerRequest extends Readable {
     this.connection = this.socket;
     stream.on('data', (d) => { if (!this.push(d)) stream.pause && stream.pause(); });
     stream.on('end', () => { this.complete = true; this.push(null); });
-    stream.on('close', () => { if (!this.complete) { this.aborted = true; this.emit('aborted'); } });
+    stream.on('close', () => { if (!this.complete) { this.aborted = true; this.emit('aborted'); } this.emit('close'); });
     stream.on('error', (e) => this.emit('error', e));
   }
   _read() {}
@@ -418,7 +430,8 @@ class Http2ServerResponse extends EventEmitter {
     return this;
   }
   setTimeout(ms, cb) { this.stream.setTimeout(ms, cb); return this; }
-  get socket() { return this.stream.session && this.stream.session.socket; }
+  // Node detaches the socket from the response once it has finished.
+  get socket() { return this.finished ? undefined : (this.stream.session && this.stream.session.socket); }
   get connection() { return this.socket; }
   get writable() { return !this.finished; }
   flushHeaders() { if (!this._sent) this._respond(false); }
