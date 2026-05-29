@@ -35,11 +35,20 @@ class Console {
         e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
       }
     }
+    let groupIndentation = 2;
+    if (opts && opts.groupIndentation !== undefined) {
+      const gi = opts.groupIndentation;
+      if (typeof gi !== 'number') { const e = new TypeError(`The "options.groupIndentation" property must be of type number.${_invalidArgTypeHelper(gi)}`); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+      if (!Number.isInteger(gi)) { const e = new RangeError(`The value of "options.groupIndentation" is out of range. It must be an integer. Received ${gi}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+      if (gi < 0 || gi > 1000) { const e = new RangeError(`The value of "options.groupIndentation" is out of range. It must be >= 0 && <= 1000. Received ${gi}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+      groupIndentation = gi;
+    }
     this._stdout = stdout;
     this._stderr = stderr || stdout;
     this._times = new Map();
     this._counts = new Map();
     this._groupIndent = '';
+    this._groupIndentationWidth = groupIndentation;
     this._ignoreErrors = opts ? opts.ignoreErrors !== false : true;
     this._colorMode = opts && opts.colorMode;
     this._inspectOptions = opts && opts.inspectOptions;
@@ -66,8 +75,13 @@ class Console {
     return args.map(a => typeof a === 'string' ? a : inspect(a)).join(' ');
   }
 
+  _indented(s) {
+    // group indentation applies to every line of the output, not just the first.
+    return this._groupIndent ? this._groupIndent + s.replace(/\n/g, '\n' + this._groupIndent) + '\n' : s + '\n';
+  }
+
   log(...args) {
-    const msg = this._groupIndent + this._fmt(...args) + '\n';
+    const msg = this._indented(this._fmt(...args));
     if (this._ignoreErrors === false) {
       if (this._stdout && this._stdout.write) this._stdout.write(msg);
       else internalBinding('_console').write(msg);
@@ -84,7 +98,7 @@ class Console {
   dir(obj, opts) { this.log(inspect(obj, opts)); }
 
   error(...args) {
-    const msg = this._groupIndent + this._fmt(...args) + '\n';
+    const msg = this._indented(this._fmt(...args));
     if (this._ignoreErrors === false) {
       if (this._stderr && this._stderr.write) this._stderr.write(msg);
       else internalBinding('_console').writeError(msg);
@@ -143,8 +157,8 @@ class Console {
       this._stdout.write('\x1b[1;1H\x1b[0J');
     }
   }
-  group(...args) { if (args.length > 0) this.log(...args); this._groupIndent += '  '; }
-  groupEnd() { if (this._groupIndent.length >= 2) this._groupIndent = this._groupIndent.slice(2); }
+  group(...args) { if (args.length > 0) this.log(...args); this._groupIndent += ' '.repeat(this._groupIndentationWidth); }
+  groupEnd() { const w = this._groupIndentationWidth; if (this._groupIndent.length >= w) this._groupIndent = this._groupIndent.slice(0, this._groupIndent.length - w); }
   groupCollapsed(...args) { this.group(...args); }
   dirxml(...args) { this.log(...args); }
 }
