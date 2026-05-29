@@ -1148,7 +1148,9 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
             // Load through module system for CommonJS semantics (top-level return, module/exports)
             var runCode: [u8; 4096] = [0; 4096]
             let rPrefix = "(function(){const p=require('path');const f=p.resolve('"
-            let rMiddle = "');require.main={id:'.',filename:f,loaded:false,paths:[]};require(f);})()"
+            // route top-level throws through process._fatalException so capture callbacks
+            // / 'uncaughtException' listeners fire (native would otherwise just print + exit)
+            let rMiddle = "');require.main={id:'.',filename:f,loaded:false,paths:[]};try{require(f);}catch(e){process._fatalException(e);}})()"
             var wi: i64 = 0
             var wj: i64 = 0
             while wj < strlen(rPrefix) {

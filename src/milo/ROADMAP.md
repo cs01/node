@@ -13,26 +13,45 @@ We use their curated subset as our primary compat benchmark.
 Run: `zsh src/milo/test-compat.sh [N|all] [timeout] [module]`
 List: `src/milo/bun-curated-tests.txt` (2,143 tests present in our repo)
 
-### current pass rates (2026-05-27)
+### current pass rates (2026-05-28)
 
-On bun's curated subset: **bun 99%, milo 40.5%** (full run: 868/2143 pass, 1061 fail, 208 timeout, 6 OOM)
-Full runs on process (57 tests) and module (26 tests) below; others from 200-sample.
+On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM)
 
 | module     | pass/total | rate | priority | top blockers |
 |------------|-----------|------|----------|--------------|
-| dgram      | ~6/9      | 67%  | —        | mostly passing |
-| fs         | ~8/14     | 57%  | high     | error codes, write-stream edge cases |
-| crypto     | ~4/8      | 50%  | med      | DH/ECDH, sign/verify gaps |
-| net        | ~3/7      | 43%  | high     | Socket not extending Duplex |
-| child      | ~3/7      | 43%  | med      | child.send, spawn edge cases |
-| http       | ~11/26    | 42%  | high     | timeout/abort handling, error codes |
-| process    | 22/57     | 38%  | high     | error codes, execve, seteuid, ref/unref, umask |
-| vm         | ~4/11     | 36%  | low      | sandbox isolation, SourceTextModule |
-| buffer     | ~2/6      | 33%  | high     | error codes, missing methods |
-| tls        | ~3/9      | 33%  | med      | connection lifecycle, error codes |
-| stream     | ~4/13     | 31%  | high     | Writable.toWeb, pipeline edge cases |
-| module     | 7/26      | 26%  | high     | _stat, _nodeModulePaths, _resolveLookupPaths, _extensions |
-| zlib       | ~2/9      | 22%  | high     | ZstdDecompress, flush/params |
+| event      | 26/28     | 92%  | —        | mostly passing |
+| next       | 8/9       | 88%  | —        | mostly passing |
+| buffer     | 43/63     | 68%  | high     | error validation, includes/indexOf edge cases |
+| querystring| 2/3       | 66%  | —        | mostly passing |
+| process    | 36/57     | 63%  | high     | error codes, execve, seteuid |
+| url        | 7/11      | 63%  | med      | whatwg url edge cases |
+| readable   | 3/5       | 60%  | med      | destroy/unpipe edge cases |
+| v8         | 3/5       | 60%  | —        | mostly passing |
+| timers     | 31/55     | 56%  | high     | unref, immediate edge cases |
+| require    | 11/19     | 57%  | med      | circular deps, extensions |
+| module     | 14/26     | 53%  | high     | _stat, _nodeModulePaths |
+| console    | 7/14      | 50%  | med      | Console constructor |
+| path       | 8/15      | 53%  | med      | edge cases |
+| diagnostics| 8/17      | 47%  | low      | channel subscribe/unsubscribe |
+| fs         | 92/201    | 45%  | high     | error codes, write-stream edge cases |
+| http       | 91/210    | 43%  | high     | timeout/abort, keep-alive, error codes |
+| net        | 44/106    | 41%  | high     | Socket not extending Duplex |
+| stream     | mixed     | ~35% | high     | pipeline, transform, pipe errors |
+| zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
+| util       | 6/19      | 31%  | med      | inspect edge cases |
+| vm         | 20/71     | 28%  | low      | sandbox isolation, SourceTextModule |
+| whatwg     | 10/41     | 24%  | med      | URL/URLSearchParams edge cases |
+| cluster    | 14/54     | 25%  | low      | worker lifecycle |
+| child      | 17/85     | 20%  | med      | child.send, spawn edge cases |
+| tls        | 18/82     | 21%  | med      | connection lifecycle, error codes |
+| dgram      | 11/64     | 17%  | low      | bind/send permissions, multicast |
+| readline   | 2/17      | 11%  | low      | interface, cursor |
+| crypto     | 13/94     | 13%  | med      | DH/ECDH, sign/verify gaps |
+| dns        | 1/22      | 4%   | low      | Resolver class |
+| http2      | 2/165     | 1%   | low      | essentially unimplemented |
+| worker     | 1/53      | 1%   | low      | needs V8 isolate threading |
+| async      | 0/18      | 0%   | med      | async_hooks, AsyncLocalStorage |
+| webcrypto  | 0/11      | 0%   | low      | subtle crypto gaps |
 
 ## quick wins (biggest compat % gain per effort)
 
@@ -65,9 +84,9 @@ Full runs on process (57 tests) and module (26 tests) below; others from 200-sam
 - [ ] add `makeNodeError(code, type, msg)` helper, use in all validation paths (fs, buffer, net, dgram, crypto, etc.)
 - [ ] covers both "code mismatch" and "Missing expected exception" failure categories
 
-### __dirname resolution (~200 tests)
-- [ ] `__dirname` resolves to repo root instead of script's directory
-- [ ] fix in module loader: set `__dirname = path.dirname(filename)` when wrapping
+### ~~__dirname resolution~~ — VERIFIED WORKING 2026-05-29
+- [x] `__dirname`/`__filename` resolve correctly for main entry AND required submodules
+- claim "resolves to repo root" was stale; `_loadModule` already sets `dname = path.dirname(resolved)`
 
 ### MessagePort EventEmitter (~93 tests)
 - [ ] `MessageChannel` ports lack `.on()`, `.once()`, `.emit()`
@@ -132,6 +151,7 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 
 ## done
 
+- [x] top-level uncaught throws route through process._fatalException — `[main]` runner wraps require(f) in try/catch; capture callbacks + 'uncaughtException' listeners now fire instead of native print+exit (process 68%→71%, broad cross-module win)
 - [x] error codes in toString — Error.prototype.toString brackets ERR_* codes ("TypeError [ERR_X]: msg") so assert.throws(/ERR_X/) matches String(err); cross-module win (buffer 33%→73%)
 - [x] process.ref/unref — symbol-based (nodejs.ref) + legacy api
 - [x] process.setSourceMapsEnabled / getSourceMapsSupport — arg validation
