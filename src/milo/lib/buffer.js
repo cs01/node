@@ -969,13 +969,23 @@ function isAscii(input) {
 function isUtf8(input) {
   _validateBufferLikeInput(input);
   const buf = input instanceof Uint8Array ? input : new Uint8Array(input.buffer || input, input.byteOffset || 0, input.byteLength || input.length);
+  // Well-formed UTF-8 per Unicode Table 3-7: range checks reject overlong
+  // encodings, surrogate code points (U+D800–DFFF), and values > U+10FFFF —
+  // a plain continuation-byte mask would wrongly accept all of these.
+  const cont = (x) => (x & 0xc0) === 0x80;
   let i = 0;
-  while (i < buf.length) {
+  const n = buf.length;
+  while (i < n) {
     const b = buf[i];
-    if (b < 0x80) { i++; }
-    else if ((b & 0xe0) === 0xc0) { if (i + 1 >= buf.length || (buf[i+1] & 0xc0) !== 0x80) return false; i += 2; }
-    else if ((b & 0xf0) === 0xe0) { if (i + 2 >= buf.length || (buf[i+1] & 0xc0) !== 0x80 || (buf[i+2] & 0xc0) !== 0x80) return false; i += 3; }
-    else if ((b & 0xf8) === 0xf0) { if (i + 3 >= buf.length || (buf[i+1] & 0xc0) !== 0x80 || (buf[i+2] & 0xc0) !== 0x80 || (buf[i+3] & 0xc0) !== 0x80) return false; i += 4; }
+    if (b <= 0x7f) { i++; }
+    else if (b >= 0xc2 && b <= 0xdf) { if (i+1 >= n || !cont(buf[i+1])) return false; i += 2; }
+    else if (b === 0xe0) { if (i+2 >= n || buf[i+1] < 0xa0 || buf[i+1] > 0xbf || !cont(buf[i+2])) return false; i += 3; }
+    else if (b >= 0xe1 && b <= 0xec) { if (i+2 >= n || !cont(buf[i+1]) || !cont(buf[i+2])) return false; i += 3; }
+    else if (b === 0xed) { if (i+2 >= n || buf[i+1] < 0x80 || buf[i+1] > 0x9f || !cont(buf[i+2])) return false; i += 3; }
+    else if (b >= 0xee && b <= 0xef) { if (i+2 >= n || !cont(buf[i+1]) || !cont(buf[i+2])) return false; i += 3; }
+    else if (b === 0xf0) { if (i+3 >= n || buf[i+1] < 0x90 || buf[i+1] > 0xbf || !cont(buf[i+2]) || !cont(buf[i+3])) return false; i += 4; }
+    else if (b >= 0xf1 && b <= 0xf3) { if (i+3 >= n || !cont(buf[i+1]) || !cont(buf[i+2]) || !cont(buf[i+3])) return false; i += 4; }
+    else if (b === 0xf4) { if (i+3 >= n || buf[i+1] < 0x80 || buf[i+1] > 0x8f || !cont(buf[i+2]) || !cont(buf[i+3])) return false; i += 4; }
     else return false;
   }
   return true;

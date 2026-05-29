@@ -540,7 +540,42 @@
   if (typeof Error.prepareStackTrace !== 'function') {
     Error.prepareStackTrace = function(error, frames) { return error.toString() + frames.map(f => '\n    at ' + f.toString()).join(''); };
   }
-  if (typeof structuredClone === 'undefined') globalThis.structuredClone = function structuredClone(v) { return JSON.parse(JSON.stringify(v)); };
+  if (typeof structuredClone === 'undefined') {
+    globalThis.structuredClone = function structuredClone(value, options) {
+      const seen = new Map();
+      const clone = (v) => {
+        if (v === null || typeof v !== 'object') {
+          if (typeof v === 'function' || typeof v === 'symbol') {
+            const e = new Error('could not be cloned'); e.name = 'DataCloneError'; e.code = 25; throw e;
+          }
+          return v;
+        }
+        if (seen.has(v)) return seen.get(v);
+        if (v instanceof ArrayBuffer) { const c = v.slice(0); seen.set(v, c); return c; }
+        if (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer) return v;
+        if (ArrayBuffer.isView(v)) {
+          if (v instanceof DataView) { const c = new DataView(clone(v.buffer), v.byteOffset, v.byteLength); seen.set(v, c); return c; }
+          const c = new v.constructor(clone(v.buffer), v.byteOffset, v.length); seen.set(v, c); return c;
+        }
+        if (v instanceof Date) { const c = new Date(v.getTime()); seen.set(v, c); return c; }
+        if (v instanceof RegExp) { const c = new RegExp(v.source, v.flags); seen.set(v, c); return c; }
+        if (v instanceof Map) { const c = new Map(); seen.set(v, c); for (const [k, val] of v) c.set(clone(k), clone(val)); return c; }
+        if (v instanceof Set) { const c = new Set(); seen.set(v, c); for (const val of v) c.add(clone(val)); return c; }
+        if (Array.isArray(v)) { const c = new Array(v.length); seen.set(v, c); for (let i = 0; i < v.length; i++) c[i] = clone(v[i]); return c; }
+        const c = {}; seen.set(v, c);
+        for (const k of Object.keys(v)) c[k] = clone(v[k]);
+        return c;
+      };
+      const result = clone(value);
+      // Honor the transfer list: transferring an ArrayBuffer detaches the original.
+      if (options && options.transfer) {
+        for (const t of options.transfer) {
+          if (t instanceof ArrayBuffer && typeof t.transfer === 'function' && !t.detached) t.transfer();
+        }
+      }
+      return result;
+    };
+  }
   if (typeof CustomEvent === 'undefined') globalThis.CustomEvent = class CustomEvent extends Event { constructor(type, opts) { super(type, opts); this.detail = opts?.detail ?? null; } };
   if (typeof Navigator === 'undefined') {
     class Navigator { get userAgent() { return 'milo-node'; } get language() { return 'en-US'; } get languages() { return ['en-US']; } get hardwareConcurrency() { return 1; } get platform() { return process.platform; } }
