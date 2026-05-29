@@ -10,6 +10,12 @@
 #include <cstring>
 #include <memory>
 #include <vector>
+#include <thread>
+#include <mutex>
+#include <deque>
+#include <atomic>
+#include <string>
+#include <cstdlib>
 
 // ---------------------------------------------------------------------------
 // Handle table — maps int32_t slots to v8::Local<v8::Value>
@@ -1719,4 +1725,86 @@ extern "C" void v8c_register_buffer_fast_ops(v8c_context* ctx, v8c_value exports
     auto ft = v8::FunctionTemplate::New(i, SlowFastApiStats);
     auto key = v8::String::NewFromUtf8(i, "_fastApiStats").ToLocalChecked();
     obj->Set(context, key, ft->GetFunction(context).ToLocalChecked()).Check();
+}
+
+
+// ===========================================================================
+// Structured-clone bridge for worker_threads.
+// v8::ValueSerializer is a V8 C++ class with no C API, so this thin wrapper is
+// unavoidable (same role as the rest of v8capi). Everything else — threads,
+// mutexes, the message queue, the worker lifecycle — lives in Milo.
+// SharedArrayBuffer backing stores travel by reference (shared memory) via an
+// opaque "sab list" handle that Milo carries alongside the serialized bytes.
+// ===========================================================================
+
+struct SabList { std::vector<std::shared_ptr<v8::BackingStore>> v; };
+
+class MnSerDelegate : public v8::ValueSerializer::Delegate {
+public:
+    v8::Isolate* iso;
+    SabList* sabs;
+    void ThrowDataCloneError(v8::Local<v8::String> msg) override {
+        iso->ThrowException(v8::Exception::Error(msg));
+    }
+    v8::Maybe<uint32_t> GetSharedArrayBufferId(
+            v8::Isolate* isolate, v8::Local<v8::SharedArrayBuffer> sab) override {
+        sabs->v.push_back(sab->GetBackingStore());
+        return v8::Just<uint32_t>(static_cast<uint32_t>(sabs->v.size() - 1));
+    }
+};
+
+class MnDeserDelegate : public v8::ValueDeserializer::Delegate {
+public:
+    SabList* sabs;
+    v8::MaybeLocal<v8::SharedArrayBuffer> GetSharedArrayBufferFromId(
+            v8::Isolate* isolate, uint32_t id) override {
+        if (sabs && id < sabs->v.size())
+            return v8::SharedArrayBuffer::New(isolate, sabs->v[id]);
+        return v8::MaybeLocal<v8::SharedArrayBuffer>();
+    }
+};
+
+// Serialize `val` to a malloc'd byte buffer (caller frees via free()).
+// Returns the buffer (or null on failure); writes length to *out_len and an
+// opaque SabList* to *out_sabs (null if no SharedArrayBuffers; free via
+// v8c_sab_free). The SabList keeps SAB memory alive across the thread hop.
+extern "C" uint8_t* v8c_serialize(v8c_isolate* iso, v8c_context* ctx,
+                                  v8c_value val, size_t* out_len, void** out_sabs) {
+    auto* i = ISO(iso);
+    v8::HandleScope hs(i);
+    auto* sabs = new SabList();
+    MnSerDelegate del;
+    del.iso = i;
+    del.sabs = sabs;
+    v8::ValueSerializer ser(i, &del);
+    ser.WriteHeader();
+    bool ok = false;
+    if (!ser.WriteValue(ctx_local(ctx), unwrap(i, val)).To(&ok) || !ok) {
+        delete sabs;
+        *out_len = 0; *out_sabs = nullptr;
+        return nullptr;
+    }
+    std::pair<uint8_t*, size_t> buf = ser.Release();  // malloc'd
+    *out_len = buf.second;
+    if (sabs->v.empty()) { delete sabs; *out_sabs = nullptr; }
+    else { *out_sabs = sabs; }
+    return buf.first;
+}
+
+extern "C" v8c_value v8c_deserialize(v8c_isolate* iso, v8c_context* ctx,
+                                     const uint8_t* data, size_t len, void* sabs) {
+    auto* i = ISO(iso);
+    v8::HandleScope hs(i);
+    MnDeserDelegate del;
+    del.sabs = reinterpret_cast<SabList*>(sabs);
+    v8::ValueDeserializer deser(i, data, len, &del);
+    bool hdr = false;
+    if (!deser.ReadHeader(ctx_local(ctx)).To(&hdr) || !hdr) return V8C_VALUE_INVALID;
+    v8::Local<v8::Value> out;
+    if (!deser.ReadValue(ctx_local(ctx)).ToLocal(&out)) return V8C_VALUE_INVALID;
+    return wrap(i, out);
+}
+
+extern "C" void v8c_sab_free(void* sabs) {
+    delete reinterpret_cast<SabList*>(sabs);
 }

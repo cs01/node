@@ -102,7 +102,7 @@ P2=$!
 (
     if needs_rebuild "$NODE_DIR/deps/v8capi/src/v8capi.cc" "$OUT/v8capi.o" || \
        needs_rebuild "$NODE_DIR/deps/v8capi/include/v8capi.h" "$OUT/v8capi.o"; then
-        clang++ -c -std=c++20 \
+        clang++ -c -std=c++20 -fno-rtti \
           -I"$NODE_DIR/deps/v8/include" -I"$NODE_DIR/deps/v8capi/include" \
           -o "$OUT/v8capi.o" deps/v8capi/src/v8capi.cc
     fi
