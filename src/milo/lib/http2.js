@@ -349,6 +349,7 @@ class Http2ServerRequest extends Readable {
     this.aborted = false;
     this.complete = false;
     this.socket = stream.session && stream.session.socket;
+    this.connection = this.socket;
     stream.on('data', (d) => { if (!this.push(d)) stream.pause && stream.pause(); });
     stream.on('end', () => { this.complete = true; this.push(null); });
     stream.on('close', () => { if (!this.complete) { this.aborted = true; this.emit('aborted'); } });
@@ -392,6 +393,7 @@ class Http2ServerResponse extends EventEmitter {
   _respond(endStream) {
     if (this._sent) return;
     this._sent = true;
+    if (endStream) this._endedViaHeaders = true;
     this.stream.respond({ ':status': this.statusCode, ...this._headers }, { endStream });
   }
   write(chunk, enc, cb) {
@@ -406,15 +408,18 @@ class Http2ServerResponse extends EventEmitter {
     // call's callback still fires exactly once (Node compat semantics).
     if (this.finished) { if (cb) process.nextTick(cb); return this; }
     this.finished = true; this.writableEnded = true;
-    if (!this._sent) this._respond(chunk === undefined || chunk === null);
+    const noBody = chunk === undefined || chunk === null;
+    if (!this._sent) this._respond(noBody);
     const done = () => { if (cb) cb(); };
-    if (chunk !== undefined && chunk !== null) this.stream.end(chunk, enc, done);
+    if (!noBody) this.stream.end(chunk, enc, done);
+    else if (this._endedViaHeaders) process.nextTick(done); // END_STREAM already sent on HEADERS
     else { try { this.stream.end(); } catch {} process.nextTick(done); }
     process.nextTick(() => this.emit('finish'));
     return this;
   }
   setTimeout(ms, cb) { this.stream.setTimeout(ms, cb); return this; }
   get socket() { return this.stream.session && this.stream.session.socket; }
+  get connection() { return this.socket; }
   get writable() { return !this.finished; }
   flushHeaders() { if (!this._sent) this._respond(false); }
 }
