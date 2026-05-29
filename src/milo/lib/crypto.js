@@ -450,8 +450,8 @@ const _DH_GROUPS = {
 function _bufToBig(buf) { let h = ''; for (const b of buf) h += b.toString(16).padStart(2, '0'); return h === '' ? 0n : BigInt('0x' + h); }
 function _bigToBuf(n, len) { let h = n.toString(16); if (h.length % 2) h = '0' + h; let b = Buffer.from(h, 'hex'); if (len && b.length < len) b = Buffer.concat([Buffer.alloc(len - b.length), b]); return b; }
 function _modpow(base, exp, mod) { let r = 1n; base %= mod; while (exp > 0n) { if (exp & 1n) r = (r * base) % mod; exp >>= 1n; base = (base * base) % mod; } return r; }
-function _toBuf(v, enc) { if (Buffer.isBuffer(v) || ArrayBuffer.isView(v)) return Buffer.from(v.buffer || v, v.byteOffset || 0, v.byteLength != null ? v.byteLength : v.length); if (typeof v === 'string') return Buffer.from(v, enc || 'latin1'); if (typeof v === 'number') return _bigToBuf(BigInt(v)); return Buffer.from(v); }
-function _encodeOut(buf, enc) { return enc ? buf.toString(enc) : buf; }
+function _toBuf(v, enc) { if (Buffer.isBuffer(v) || ArrayBuffer.isView(v)) return Buffer.from(v.buffer || v, v.byteOffset || 0, v.byteLength != null ? v.byteLength : v.length); if (typeof v === 'string') return Buffer.from(v, enc && enc !== 'buffer' ? enc : 'latin1'); if (typeof v === 'number') return _bigToBuf(BigInt(v)); return Buffer.from(v); }
+function _encodeOut(buf, enc) { return (enc && enc !== 'buffer') ? buf.toString(enc) : buf; }
 
 class DiffieHellman {
   constructor(prime, a, b, c) {
