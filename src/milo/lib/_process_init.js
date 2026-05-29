@@ -186,6 +186,23 @@ if (!process.setSourceMapsEnabled) {
   };
   if (!process.getSourceMapsSupport) process.getSourceMapsSupport = () => ({ enabled: _sourceMapsEnabled, nodeModules: false, generatedCode: false });
 }
+// process.execve: replace the current process image. Returns only on failure.
+if (!process.execve) {
+  process.execve = function execve(execPath, args, env) {
+    if (typeof execPath !== 'string') throw _ERR_INVALID_ARG_TYPE('execPath', 'string', execPath);
+    if (!Array.isArray(args)) throw _ERR_INVALID_ARG_TYPE('args', 'Array', args);
+    for (const a of args) if (typeof a !== 'string') throw _ERR_INVALID_ARG_TYPE('args', 'string[]', a);
+    const src = env === undefined ? process.env : env;
+    if (src === null || typeof src !== 'object') throw _ERR_INVALID_ARG_TYPE('env', 'object', env);
+    const envArr = Object.keys(src).map((k) => `${k}=${src[k]}`);
+    const errno = internalBinding('process_methods').execve(execPath, args, envArr);
+    // execve only returns on error — surface it the way node does
+    const e = new Error(`execve(2) failed, errno ${errno}`);
+    e.code = errno === 2 ? 'ENOENT' : errno === 13 ? 'EACCES' : 'EINVAL';
+    e.errno = -errno; e.syscall = 'execve';
+    throw e;
+  };
+}
 if (!process.title) process.title = 'milo-node';
 if (!process.execPath) {
   const _ep = process.argv[0] || '';

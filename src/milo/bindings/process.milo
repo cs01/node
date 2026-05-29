@@ -32,6 +32,10 @@ extern fn getrusage(who: i32, usage: *Rusage): i32
 extern fn utimes(path: *u8, times: *Timeval): i32
 extern fn futimes(fd: i32, times: *Timeval): i32
 extern fn chdir(path: *u8): i32
+extern fn execve(path: *u8, argv: *u8, envp: *u8): i32
+extern fn malloc(size: i64): *u8
+extern fn memcpy(dst: *u8, src: *u8, n: i64): *u8
+extern fn __error(): *i32
 
 // --- mach task info for memoryUsage ---
 extern fn mach_task_self(): u32
@@ -162,6 +166,69 @@ fn processChdir(info: *u8, _ud: *u8): void {
     }
 }
 
+// execve(path, argvArray, envArray) — argvArray/envArray are JS string arrays
+// (env pre-formatted as "KEY=VAL"). Replaces the process image; only returns
+// (the positive errno) on failure.
+fn processExecve(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    if ci.length() < 2 {
+        return
+    }
+    unsafe {
+        var pathBuf: [u8; 4096] = [0; 4096]
+        let pathLen = ci.arg(0).writeUtf8(iso, pathBuf as *u8, 4096)
+        if pathLen <= 0 {
+            return
+        }
+        let pathCopy = malloc(pathLen as i64 + 1)
+        memcpy(pathCopy, pathBuf as *u8, pathLen as i64 + 1)
+
+        let argvBuf = malloc(1024 as i64)
+        let argvArr = argvBuf as *i64
+        var argc: i32 = 0
+        let argsArr = ci.arg(1)
+        let alen = argsArr.arrayLength(iso)
+        var ai: i32 = 0
+        while ai < alen && argc < 126 {
+            let elem = ctx.objectGetIndex(argsArr, ai as u32)
+            var aBuf: [u8; 4096] = [0; 4096]
+            let aLen = elem.writeUtf8(iso, aBuf as *u8, 4096)
+            let copy = malloc(aLen as i64 + 1)
+            memcpy(copy, aBuf as *u8, aLen as i64 + 1)
+            argvArr[argc as i64] = copy as i64
+            argc = argc + 1
+            ai = ai + 1
+        }
+        argvArr[argc as i64] = 0
+
+        let envBuf = malloc(8192 as i64)
+        let envArr = envBuf as *i64
+        var envc: i32 = 0
+        if ci.length() > 2 {
+            let ea = ci.arg(2)
+            let elen = ea.arrayLength(iso)
+            var ei: i32 = 0
+            while ei < elen && envc < 1022 {
+                let eelem = ctx.objectGetIndex(ea, ei as u32)
+                var eBuf: [u8; 8192] = [0; 8192]
+                let eLen = eelem.writeUtf8(iso, eBuf as *u8, 8192)
+                let ecopy = malloc(eLen as i64 + 1)
+                memcpy(ecopy, eBuf as *u8, eLen as i64 + 1)
+                envArr[envc as i64] = ecopy as i64
+                envc = envc + 1
+                ei = ei + 1
+            }
+        }
+        envArr[envc as i64] = 0
+
+        execve(pathCopy, argvBuf, envBuf)
+        let ep = __error()
+        ci.retI32(ep[0])
+    }
+}
+
 fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
     let i = Isolate { ptr: iso }
     let c = Context { ptr: ctx }
@@ -173,6 +240,7 @@ fn nm_init_process_methods(iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "cpuUsage" as *u8, processCpuUsage as *u8)
         c.setMethod(exp, "memoryUsage" as *u8, processMemoryUsage as *u8)
         c.setMethod(exp, "chdir" as *u8, processChdir as *u8)
+        c.setMethod(exp, "execve" as *u8, processExecve as *u8)
 
         let ab = i.arraybufferNew(20)
         let u32arr = i.uint32arrayNew(ab, 0, 5)
