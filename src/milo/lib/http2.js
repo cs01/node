@@ -401,15 +401,16 @@ class Http2ServerResponse extends EventEmitter {
   }
   end(chunk, enc, cb) {
     if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
-    if (!this._sent) {
-      if (chunk === undefined || chunk === null) { this._respond(true); }
-      else { this._respond(false); }
-    }
+    if (typeof enc === 'function') { cb = enc; enc = undefined; }
+    // end() may be called repeatedly; only the first actually ends, but every
+    // call's callback still fires exactly once (Node compat semantics).
+    if (this.finished) { if (cb) process.nextTick(cb); return this; }
     this.finished = true; this.writableEnded = true;
-    const done = () => { this.emit('finish'); this.emit('close'); if (cb) cb(); };
+    if (!this._sent) this._respond(chunk === undefined || chunk === null);
+    const done = () => { if (cb) cb(); };
     if (chunk !== undefined && chunk !== null) this.stream.end(chunk, enc, done);
-    else if (!this._localEndedViaRespond) { try { this.stream.end(done); } catch { done(); } }
-    else done();
+    else { try { this.stream.end(); } catch {} process.nextTick(done); }
+    process.nextTick(() => this.emit('finish'));
     return this;
   }
   setTimeout(ms, cb) { this.stream.setTimeout(ms, cb); return this; }
@@ -466,8 +467,81 @@ function connect(authority, options, listener) {
 }
 
 function getDefaultSettings() { return { ...DEFAULT_SETTINGS }; }
-function getPackedSettings(s) { return F.packSettings({ [F.SETTINGS.INITIAL_WINDOW_SIZE]: (s && s.initialWindowSize) || 65535 }); }
-function getUnpackedSettings(buf) { return { ...DEFAULT_SETTINGS, ...F.unpackSettings(buf) }; }
+
+// id, name, kind, min, max — order matches Node's getPackedSettings output.
+const _SETTING_ORDER = [
+  ['headerTableSize', 0x1, 'int', 0, 2 ** 32 - 1],
+  ['enablePush', 0x2, 'bool'],
+  ['maxConcurrentStreams', 0x3, 'int', 0, 2 ** 32 - 1],
+  ['initialWindowSize', 0x4, 'int', 0, 2 ** 31 - 1],
+  ['maxFrameSize', 0x5, 'int', 16384, 2 ** 24 - 1],
+  ['maxHeaderListSize', 0x6, 'int', 0, 2 ** 32 - 1],
+  ['maxHeaderSize', 0x6, 'int', 0, 2 ** 32 - 1],
+  ['enableConnectProtocol', 0x8, 'bool'],
+];
+const _SETTING_BY_ID = { 1: ['headerTableSize'], 2: ['enablePush', true], 3: ['maxConcurrentStreams'], 4: ['initialWindowSize'], 5: ['maxFrameSize'], 6: ['maxHeaderListSize'], 8: ['enableConnectProtocol', true] };
+
+function _invalidSetting(name, value, isType) {
+  const Ctor = isType ? TypeError : RangeError;
+  const e = new Ctor(`Invalid value for setting "${name}": ${value}`);
+  e.code = 'ERR_HTTP2_INVALID_SETTING_VALUE';
+  throw e;
+}
+function getPackedSettings(settings) {
+  settings = settings || {};
+  const entries = [];
+  const emitted = new Set();
+  for (const [name, id, kind, min, max] of _SETTING_ORDER) {
+    const v = settings[name];
+    if (v === undefined) continue;
+    let packed;
+    if (kind === 'bool') { if (typeof v !== 'boolean') _invalidSetting(name, v, true); packed = v ? 1 : 0; }
+    else { if (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max) _invalidSetting(name, v, false); packed = v; }
+    // validate every present key, but emit each setting id only once
+    // (maxHeaderSize is an alias of maxHeaderListSize → same id 6)
+    if (emitted.has(id)) continue;
+    emitted.add(id);
+    entries.push([id, packed]);
+  }
+  if (settings.customSettings) {
+    const keys = Object.keys(settings.customSettings);
+    if (keys.length > 10) { const e = new Error('Number of custom settings exceeds MAX_ADDITIONAL_SETTINGS'); e.code = 'ERR_HTTP2_TOO_MANY_CUSTOM_SETTINGS'; throw e; }
+    for (const k of keys) {
+      const id = Number(k);
+      const val = settings.customSettings[k];
+      if (!Number.isInteger(id) || id < 0 || id > 0xffff) _invalidSetting('customSettings', k, false);
+      if (typeof val !== 'number' || !Number.isInteger(val) || val < 0 || val > 2 ** 32 - 1) _invalidSetting('customSettings', val, false);
+      entries.push([id, val >>> 0]);
+    }
+  }
+  const buf = Buffer.allocUnsafe(entries.length * 6);
+  let o = 0;
+  for (const [id, v] of entries) { buf.writeUInt16BE(id, o); buf.writeUInt32BE(v >>> 0, o + 2); o += 6; }
+  return buf;
+}
+function getUnpackedSettings(buf, opts) {
+  if (!Buffer.isBuffer(buf) && !ArrayBuffer.isView(buf)) {
+    let r;
+    if (buf == null) r = String(buf);
+    else if (typeof buf === 'object') r = 'an instance of ' + (buf.constructor && buf.constructor.name || 'Object');
+    else if (typeof buf === 'string') r = "type string ('" + buf + "')";
+    else r = 'type ' + typeof buf + ' (' + String(buf) + ')';
+    const e = new TypeError(`The "buf" argument must be an instance of Buffer or TypedArray. Received ${r}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength); // wrap TypedArray
+  if (buf.length % 6 !== 0) { const e = new RangeError('Packed settings length must be a multiple of six'); e.code = 'ERR_HTTP2_INVALID_PACKED_SETTINGS_LENGTH'; throw e; }
+  const out = {};
+  const custom = {};
+  for (let o = 0; o + 6 <= buf.length; o += 6) {
+    const id = buf.readUInt16BE(o); const val = buf.readUInt32BE(o + 2);
+    const m = _SETTING_BY_ID[id];
+    if (m) { out[m[0]] = m[1] ? !!val : val; if (id === 6) out.maxHeaderSize = val; }
+    else custom[id] = val;
+  }
+  if (Object.keys(custom).length) out.customSettings = custom;
+  return out;
+}
 
 module.exports = {
   constants, sensitiveHeaders, connect, createServer, createSecureServer,
