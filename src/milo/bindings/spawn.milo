@@ -481,7 +481,15 @@ fn killPidBinding(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let pid = ci.i32Arg(0, -1)
     let sig = ci.i32Arg(1, 15)
-    if pid > 0 { unsafe { kill(pid, sig) } }
+    // return kill(2) result so JS can detect failure (e.g. sig 0 probe on a
+    // dead pid → -1/ESRCH); discarding it made every kill look successful.
+    if pid > 0 {
+        var r: i32 = 0
+        unsafe { r = kill(pid, sig) }
+        ci.retI32(r)
+    } else {
+        ci.retI32(-1)
+    }
 }
 
 // socketpair() → [fd0, fd1] or -1

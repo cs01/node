@@ -264,9 +264,12 @@ if (!process.kill) {
       sig = _signals[signal];
       if (sig === undefined) { const e = new TypeError('Unknown signal: ' + signal); e.code = 'ERR_UNKNOWN_SIGNAL'; throw e; }
     } else { sig = signal; }
-    const r = process._kill(pid, sig);
-    if (r !== 0 && r !== undefined) { const e = new Error('kill EINVAL'); e.code = 'EINVAL'; throw e; }
     if (sig < 0 || sig > 31) { const e = new Error('kill EINVAL'); e.code = 'EINVAL'; throw e; }
+    const r = process._kill(pid, sig);
+    // nonzero errno → process gone / not permitted (ESRCH/EPERM); sig 0 is an
+    // existence probe, so a live process returns success here.
+    if (r !== 0 && r !== undefined) { const e = new Error('kill ESRCH'); e.code = 'ESRCH'; e.errno = -3; e.syscall = 'kill'; throw e; }
+    return true;
   };
 }
 // Validate and wrap process.exitCode as a property
