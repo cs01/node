@@ -356,6 +356,42 @@ win32.win32 = win32;
 
 function toNamespacedPath(p) { return p; }
 
-module.exports = { resolve, normalize, isAbsolute, join, relative, dirname, basename, extname, parse, format, sep, delimiter, toNamespacedPath, posix: null, win32 };
+// Translate a glob to a RegExp and test it. `*` stops at a separator, `**` crosses
+// them, `?` is one non-separator char, `[...]`/`[!...]` are char classes/negation.
+// On win32 both `\` and `/` count as separators.
+function _matchesGlob(pathStr, glob, isWin) {
+  validateString(pathStr, 'path');
+  validateString(glob, 'pattern');
+  const sep = isWin ? '[\\\\/]' : '/';
+  const notSep = isWin ? '[^\\\\/]' : '[^/]';
+  let re = '^';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        re += '.*'; i++;
+        if (glob[i + 1] === '/' || (isWin && glob[i + 1] === '\\')) i++;
+      } else { re += notSep + '*'; }
+    } else if (c === '?') {
+      re += notSep;
+    } else if (c === '[') {
+      let j = i + 1, neg = false;
+      if (glob[j] === '!' || glob[j] === '^') { neg = true; j++; }
+      let cls = '';
+      while (j < glob.length && glob[j] !== ']') { const cc = glob[j]; cls += '\\^]'.includes(cc) ? '\\' + cc : cc; j++; }
+      re += '[' + (neg ? '^' : '') + cls + ']';
+      i = j;
+    } else if (c === '/' || (isWin && c === '\\')) {
+      re += sep;
+    } else {
+      re += '.+^${}()|[]\\'.includes(c) ? '\\' + c : c;
+    }
+  }
+  return new RegExp(re + '$').test(pathStr);
+}
+function matchesGlob(pathStr, glob) { return _matchesGlob(pathStr, glob, false); }
+win32.matchesGlob = (pathStr, glob) => _matchesGlob(pathStr, glob, true);
+
+module.exports = { resolve, normalize, isAbsolute, join, relative, dirname, basename, extname, parse, format, sep, delimiter, toNamespacedPath, matchesGlob, posix: null, win32 };
 module.exports.posix = module.exports;
 win32.posix = module.exports;

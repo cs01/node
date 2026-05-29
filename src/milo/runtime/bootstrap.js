@@ -1072,6 +1072,11 @@
           E('ERR_INVALID_CALLBACK', (v) => `Callback must be a function. Received ${v}`, TypeError);
           E('ERR_UNKNOWN_ENCODING', (enc) => `Unknown encoding: ${enc}`, TypeError);
           stub = { codes: _codesProxy, E, SystemError, isStackOverflowError: (e) => e?.message?.includes?.('Maximum call stack') || false, connResetException: (msg) => { const e = new Error(msg || 'socket hang up'); e.code = 'ECONNRESET'; return e; }, uvExceptionWithHostPort: (err, syscall, address, port) => { const e = new Error(`${syscall} ${err} ${address}:${port}`); e.code = err; e.syscall = syscall; return e; } };
+        } else if (id === 'internal/url') {
+          // isURL must accept only real URL instances — not legacy url.parse() objects
+          // or plain look-alikes (which have href/protocol but aren't branded URLs).
+          const _urlMod = globalThis.require('url');
+          stub = { isURL: (v) => v instanceof globalThis.URL, URL: globalThis.URL, URLSearchParams: globalThis.URLSearchParams, pathToFileURL: _urlMod.pathToFileURL, fileURLToPath: _urlMod.fileURLToPath };
         } else if (id === 'internal/options') {
           stub = { getOptionValue: (name) => { if (name === '--insecure-http-parser') return false; if (name === '--use-env-proxy') return false; if (name === '--force-fips') return false; if (name === '--enable-source-maps') return false; if (name === '--pending-deprecation') return false; return undefined; } };
         } else if (id === 'internal/validators') {
