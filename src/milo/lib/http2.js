@@ -413,12 +413,30 @@ class Http2ServerResponse extends EventEmitter {
     stream.on('close', () => { if (!this.finished) this.emit('close'); });
     stream.on('drain', () => this.emit('drain'));
   }
-  setHeader(name, value) { this._headers[String(name).toLowerCase()] = value; return this; }
-  getHeader(name) { return this._headers[String(name).toLowerCase()]; }
+  _normHeader(name) {
+    if (typeof name !== 'string') { const e = new TypeError(`The "name" argument must be of type string. Received ${name === undefined ? 'undefined' : typeof name}`); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    return name.trim().toLowerCase(); // http2 header names are case-insensitive; trim ws/control
+  }
+  _checkSettable(k, value, rawName) {
+    if (k[0] === ':') { const e = new TypeError('Cannot set HTTP/2 pseudo-headers'); e.code = 'ERR_HTTP2_PSEUDOHEADER_NOT_ALLOWED'; throw e; }
+    // valid HTTP token (RFC 7230) — checked before the value
+    if (!/^[\^_`a-zA-Z\-0-9!#$%&'*+.|~]+$/.test(k)) { const e = new TypeError(`Header name must be a valid HTTP token ["${rawName}"]`); e.code = 'ERR_INVALID_HTTP_TOKEN'; throw e; }
+    if (value === undefined || value === null) { const e = new TypeError(`Invalid value "${value}" for header "${k}"`); e.code = 'ERR_HTTP2_INVALID_HEADER_VALUE'; throw e; }
+  }
+  setHeader(name, value) { const k = this._normHeader(name); this._checkSettable(k, value, name); this._headers[k] = value; return this; }
+  getHeader(name) { return this._headers[this._normHeader(name)]; }
   getHeaders() { return { ...this._headers }; }
   getHeaderNames() { return Object.keys(this._headers); }
-  hasHeader(name) { return String(name).toLowerCase() in this._headers; }
-  removeHeader(name) { delete this._headers[String(name).toLowerCase()]; }
+  hasHeader(name) { return this._normHeader(name) in this._headers; }
+  removeHeader(name) { delete this._headers[this._normHeader(name)]; }
+  appendHeader(name, value) {
+    const k = this._normHeader(name);
+    this._checkSettable(k, value);
+    const cur = this._headers[k];
+    if (cur === undefined) this._headers[k] = value;
+    else if (Array.isArray(cur)) cur.push(value);
+    else this._headers[k] = [cur, value];
+  }
   get headersSent() { return this._sent === true; }
   set headersSent(v) { this._sent = v; }
   writeHead(statusCode, statusMessage, headers) {
