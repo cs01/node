@@ -61,7 +61,9 @@ fn htons(val: i32): i32 {
     return ((val & 0xff) << 8) | ((val >> 8) & 0xff)
 }
 
-var kq_fd: i32 = -1
+// thread_local: each isolate/thread polls its own kqueue (worker threads must not
+// share the main thread's event-loop fd).
+thread_local var kq_fd: i32 = -1
 
 // --- kevent struct layout (macOS arm64, 32 bytes) ---
 // offset 0:  ident  (i64) — fd

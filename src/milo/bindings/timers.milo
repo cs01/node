@@ -9,16 +9,18 @@ extern fn v8c_isolate_run_microtasks(iso: *u8): void
 extern fn nanosleep(req: *u8, rem: *u8): i32
 extern fn calloc(count: i64, size: i64): *u8
 
-var t_id: *i32 = 0 as *i32
-var t_dsec: *i64 = 0 as *i64
-var t_dnsec: *i64 = 0 as *i64
-var t_cb: *i32 = 0 as *i32
-var t_interval: *i32 = 0 as *i32
-var t_active: *i32 = 0 as *i32
-var next_id: i32 = 1
-var timer_count: i32 = 0
-var stored_iso: *u8 = 0 as *u8
-var stored_ctx: *u8 = 0 as *u8
+// thread_local: each worker isolate runs on its own OS thread and needs its own
+// timer queue + bound isolate/context — sharing would corrupt the main thread.
+thread_local var t_id: *i32 = 0 as *i32
+thread_local var t_dsec: *i64 = 0 as *i64
+thread_local var t_dnsec: *i64 = 0 as *i64
+thread_local var t_cb: *i32 = 0 as *i32
+thread_local var t_interval: *i32 = 0 as *i32
+thread_local var t_active: *i32 = 0 as *i32
+thread_local var next_id: i32 = 1
+thread_local var timer_count: i32 = 0
+thread_local var stored_iso: *u8 = 0 as *u8
+thread_local var stored_ctx: *u8 = 0 as *u8
 
 fn deadline_from_delay(delay_ms: i32, out_sec: *i64, out_nsec: *i64): void {
     unsafe {
