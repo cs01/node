@@ -1808,3 +1808,11 @@ extern "C" v8c_value v8c_deserialize(v8c_isolate* iso, v8c_context* ctx,
 extern "C" void v8c_sab_free(void* sabs) {
     delete reinterpret_cast<SabList*>(sabs);
 }
+
+// Cross-thread worker termination: interrupt JS running in another isolate.
+extern "C" void v8c_isolate_terminate(v8c_isolate* iso) {
+    ISO(iso)->TerminateExecution();
+}
+extern "C" void v8c_isolate_cancel_terminate(v8c_isolate* iso) {
+    ISO(iso)->CancelTerminateExecution();
+}

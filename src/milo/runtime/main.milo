@@ -81,6 +81,8 @@ extern fn pthread_mutex_unlock(m: *u8): i32
 extern fn v8c_serialize(iso: *u8, ctx: *u8, val: i32, outLen: *i64, outSabs: *u8): *u8
 extern fn v8c_deserialize(iso: *u8, ctx: *u8, data: *u8, len: i64, sabs: *u8): i32
 extern fn v8c_sab_free(sabs: *u8): void
+extern fn v8c_isolate_terminate(iso: *u8): void
+extern fn v8c_isolate_cancel_terminate(iso: *u8): void
 
 // A cross-thread message queue node. Shared heap (NOT thread_local) — both the
 // parent and worker thread touch the channel under its mutex.
@@ -106,6 +108,7 @@ extern struct WChannel {
     doneFlag: i32,
     terminateFlag: i32,
     exitCode: i32,
+    workerIso: *u8,
 }
 
 fn printStr(s: *u8): void {
@@ -674,7 +677,12 @@ fn workerRequestTerminate(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     unsafe {
         let chan = ci.i64Arg(0, 0) as *WChannel
-        if chan as i64 != 0 { chan.terminateFlag = 1 }
+        if chan as i64 != 0 {
+            chan.terminateFlag = 1
+            // interrupt JS executing in the worker isolate (cross-thread) so a busy
+            // or blocked worker actually stops instead of running to completion.
+            if chan.workerIso as i64 != 0 { v8c_isolate_terminate(chan.workerIso) }
+        }
     }
 }
 fn workerShouldTerminate(info: *u8, _ud: *u8): void {
@@ -725,6 +733,7 @@ fn nm_worker_entry(arg: *u8): *u8 {
             chan.doneFlag = 1
             return 0 as *u8
         }
+        chan.workerIso = isoPtr
         v8c_isolate_enter(isoPtr)
         let hs = v8c_handle_scope_new(isoPtr)
         let ctxPtr = v8c_context_new(isoPtr)
@@ -792,27 +801,28 @@ fn nm_worker_entry(arg: *u8): *u8 {
         v8c_try_catch_delete(tc)
         v8c_isolate_run_microtasks(isoPtr)
 
-        // event loop: drain timers + pump messages until done or terminate
+        // event loop: pump messages + run one timer/tick pass each iteration via
+        // __workerPump (it calls __workerTick); stop on terminate or when not alive.
         let undef = iso.undefined()
-        let runLoop = ctx.objectGet(global, "__runEventLoop" as *u8)
         let pump = ctx.objectGet(global, "__workerPump" as *u8)
         var running: i32 = 1
         while running == 1 {
             if chan.terminateFlag != 0 { running = 0 }
-            else {
-                if runLoop.slot >= 0 { v8c_function_call(ctxPtr, runLoop.slot, undef.slot, 0, 0 as *i32) }
+            else if pump.slot >= 0 {
+                let r = v8c_function_call(ctxPtr, pump.slot, undef.slot, 0, 0 as *i32)
                 v8c_isolate_run_microtasks(isoPtr)
-                if pump.slot >= 0 {
-                    let r = v8c_function_call(ctxPtr, pump.slot, undef.slot, 0, 0 as *i32)
-                    v8c_isolate_run_microtasks(isoPtr)
+                if chan.terminateFlag != 0 { running = 0 }
+                else {
                     var aliveOut: [i32; 1] = [1]
                     v8c_to_bool(isoPtr, r, aliveOut as *i32)
                     if aliveOut[0] == 0 { running = 0 }
+                    else { usleep(1000) }
                 }
-                usleep(1000)
-            }
+            } else { running = 0 }
         }
         chan.doneFlag = 1
+        // clear any pending termination so teardown can run JS (dispose) cleanly
+        v8c_isolate_cancel_terminate(isoPtr)
         v8c_context_exit(ctxPtr)
         v8c_handle_scope_delete(hs)
         v8c_context_dispose(ctxPtr)
