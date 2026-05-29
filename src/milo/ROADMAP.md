@@ -132,6 +132,12 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 
 ## done
 
+- [x] error codes in toString — Error.prototype.toString brackets ERR_* codes ("TypeError [ERR_X]: msg") so assert.throws(/ERR_X/) matches String(err); cross-module win (buffer 33%→73%)
+- [x] process.ref/unref — symbol-based (nodejs.ref) + legacy api
+- [x] process.setSourceMapsEnabled / getSourceMapsSupport — arg validation
+- [x] buffer.isUtf8 — proper unicode well-formed validation (overlong/surrogate/range)
+- [x] buffer writeBigInt64/writeBigUInt64 — bigint type + range validation
+- [x] structuredClone — honors transfer list (detaches), clones typed arrays/map/set/date
 - [x] binary TCP send/recv — WebSocket (ws) package works
 - [x] crypto.randomFillSync, randomFill
 - [x] crypto.createPublicKey, createPrivateKey
