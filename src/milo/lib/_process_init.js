@@ -31,11 +31,14 @@ process.emitWarning = (warning, typeOrOptions, code, ctor) => {
   if (warning instanceof Error) { msg = warning; }
   else { msg = new Error(warning); msg.name = type; if (code) msg.code = code; }
   if (detail) msg.detail = detail;
-  process.nextTick(() => {
-    if (!process.emit('warning', msg)) {
-      console.error(`(${msg.name}) ${msg.message}`);
-    }
-  });
+  // Deprecation flags are honored before the warning is ever emitted:
+  // noDeprecation drops it entirely; throwDeprecation turns it into an
+  // async uncaughtException (must NOT throw synchronously from emitWarning).
+  if (msg.name === 'DeprecationWarning') {
+    if (process.noDeprecation) return;
+    if (process.throwDeprecation) { process.nextTick(() => { throw msg; }); return; }
+  }
+  process.nextTick(() => process.emit('warning', msg));
 };
 
 const _envB = internalBinding('env');
@@ -156,6 +159,19 @@ if (!process.on) {
   Object.setPrototypeOf(process, ProcessProto.prototype);
   EventEmitter.call(process);
 }
+
+// Default 'warning' handler — the ONLY place warnings are printed. Mirrors Node:
+// non-Error payloads (e.g. process.emit('warning', 'str')) produce no output.
+// Registered after EventEmitter is mixed into process (process.on now exists).
+process.on('warning', (warning) => {
+  if (!(warning instanceof Error)) return;
+  let m = `(node:${process.pid}) `;
+  if (warning.code) m += `[${warning.code}] `;
+  m += `${warning.name}: ${warning.message}`;
+  if (warning.detail) m += `\n${warning.detail}`;
+  if (process.stderr && process.stderr.write) process.stderr.write(m + '\n');
+  else console.error(m);
+});
 
 const _startTime = Date.now();
 if (!process.uptime) process.uptime = () => (Date.now() - _startTime) / 1000;
