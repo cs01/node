@@ -853,7 +853,10 @@ class Buffer extends Uint8Array {
     offset = offset !== undefined ? +offset : 0;
     end = end !== undefined ? +end : this.length;
 
-    if (offset < 0 || end > this.length) throw _ERR_OUT_OF_RANGE('value', `>= 0 and <= ${this.length}`, offset < 0 ? offset : end);
+    // both start and end must land within [0, length]; a negative end is just as
+    // out-of-range as one past the end (node throws ERR_OUT_OF_RANGE for fill('',1,-1)).
+    if (offset < 0 || offset > this.length) throw _ERR_OUT_OF_RANGE('start', `>= 0 and <= ${this.length}`, offset);
+    if (end < 0 || end > this.length) throw _ERR_OUT_OF_RANGE('end', `>= 0 and <= ${this.length}`, end);
 
     // guard against spoofed .length exceeding actual buffer
     if (end > this.byteLength) throw _ERR_BUFFER_OUT_OF_BOUNDS();
