@@ -915,8 +915,16 @@ function read(fd, buffer, offset, length, position, cb) {
     }
   } else if (typeof length === 'function') {
     cb = length;
-    length = buffer ? buffer.length - (offset || 0) : 0;
-    position = null;
+    // read(fd, buffer, options, cb): the 3rd arg may be an options object, not a numeric offset.
+    if (offset != null && typeof offset === 'object' && !Buffer.isBuffer(offset) && !ArrayBuffer.isView(offset)) {
+      const opts = offset;
+      offset = opts.offset == null ? 0 : opts.offset;
+      length = opts.length == null ? (buffer ? buffer.length : 0) : opts.length;
+      position = opts.position == null ? null : opts.position;
+    } else {
+      length = buffer ? buffer.length - (offset || 0) : 0;
+      position = null;
+    }
   } else if (cb === undefined && typeof position === 'function') {
     cb = position;
     position = null;
@@ -1214,7 +1222,17 @@ const promises = {
       const handle = {
         fd,
         close() { closeSync(fd); return Promise.resolve(); },
-        read(buf, off, len, pos) { return Promise.resolve({ bytesRead: readSync(fd, buf, off, len, pos), buffer: buf }); },
+        read(buf, off, len, pos) {
+          // mirror fs.read overloads: read(buf, {offset,length,position}) and null offset/len → defaults
+          if (off != null && typeof off === 'object' && !Buffer.isBuffer(off) && !ArrayBuffer.isView(off)) {
+            pos = off.position == null ? null : off.position; len = off.length == null ? buf.length : off.length; off = off.offset == null ? 0 : off.offset;
+          } else {
+            if (off == null) off = 0;
+            if (len == null) len = buf.length - off;
+            if (pos === undefined) pos = null;
+          }
+          return Promise.resolve({ bytesRead: readSync(fd, buf, off, len, pos), buffer: buf });
+        },
         write(buf, off, len, pos) { return Promise.resolve({ bytesWritten: writeSync(fd, buf, off, len, pos), buffer: buf }); },
         stat() { return Promise.resolve(fstatSync(fd)); },
         readFile(opts) { return Promise.resolve(readFileSync('/dev/fd/' + fd, opts)); },
@@ -1223,6 +1241,9 @@ const promises = {
         datasync() { fdatasyncSync(fd); return Promise.resolve(); },
         sync() { fsyncSync(fd); return Promise.resolve(); },
         truncate(len) { ftruncateSync(fd, len); return Promise.resolve(); },
+        // explicit resource management: `await using fh = await open(...)` closes on scope exit
+        [Symbol.asyncDispose]() { try { closeSync(fd); } catch {} return Promise.resolve(); },
+        [Symbol.dispose]() { try { closeSync(fd); } catch {} },
       };
       return Promise.resolve(handle);
     } catch (e) { return Promise.reject(e); }
