@@ -27,7 +27,7 @@ function serializeFrame(type, flags, streamId, payload) {
   buf[3] = type & 0xff;
   buf[4] = flags & 0xff;
   buf.writeUInt32BE((streamId >>> 0) & 0x7fffffff, 5);
-  if (len) payload.copy(buf, 9);
+  if (len) buf.set(payload, 9); // .set works for Buffer and plain Uint8Array (subarray results)
   return buf;
 }
 

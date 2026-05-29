@@ -9,14 +9,50 @@ const HP = require('_http2_hpack');
 
 const constants = {
   NGHTTP2_SESSION_SERVER: 0, NGHTTP2_SESSION_CLIENT: 1,
-  NGHTTP2_FLAG_NONE: 0, NGHTTP2_FLAG_END_STREAM: 1, NGHTTP2_FLAG_END_HEADERS: 4,
+  NGHTTP2_FLAG_NONE: 0, NGHTTP2_FLAG_END_STREAM: 0x1, NGHTTP2_FLAG_ACK: 0x1,
+  NGHTTP2_FLAG_END_HEADERS: 0x4, NGHTTP2_FLAG_PADDED: 0x8, NGHTTP2_FLAG_PRIORITY: 0x20,
+  // RFC 7540 §7 error codes
+  NGHTTP2_NO_ERROR: 0x0, NGHTTP2_PROTOCOL_ERROR: 0x1, NGHTTP2_INTERNAL_ERROR: 0x2,
+  NGHTTP2_FLOW_CONTROL_ERROR: 0x3, NGHTTP2_SETTINGS_TIMEOUT: 0x4, NGHTTP2_STREAM_CLOSED: 0x5,
+  NGHTTP2_FRAME_SIZE_ERROR: 0x6, NGHTTP2_REFUSED_STREAM: 0x7, NGHTTP2_CANCEL: 0x8,
+  NGHTTP2_COMPRESSION_ERROR: 0x9, NGHTTP2_CONNECT_ERROR: 0xa, NGHTTP2_ENHANCE_YOUR_CALM: 0xb,
+  NGHTTP2_INADEQUATE_SECURITY: 0xc, NGHTTP2_HTTP_1_1_REQUIRED: 0xd,
+  NGHTTP2_ERR_FRAME_SIZE_ERROR: -522, NGHTTP2_ERR_NOMEM: -901,
+  NGHTTP2_DEFAULT_WEIGHT: 16,
+  // settings ids
+  NGHTTP2_SETTINGS_HEADER_TABLE_SIZE: 0x1, NGHTTP2_SETTINGS_ENABLE_PUSH: 0x2,
+  NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS: 0x3, NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE: 0x4,
+  NGHTTP2_SETTINGS_MAX_FRAME_SIZE: 0x5, NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE: 0x6,
+  // pseudo + common headers
   HTTP2_HEADER_PATH: ':path', HTTP2_HEADER_STATUS: ':status', HTTP2_HEADER_METHOD: ':method',
-  HTTP2_HEADER_AUTHORITY: ':authority', HTTP2_HEADER_SCHEME: ':scheme',
+  HTTP2_HEADER_AUTHORITY: ':authority', HTTP2_HEADER_SCHEME: ':scheme', HTTP2_HEADER_PROTOCOL: ':protocol',
   HTTP2_HEADER_CONTENT_TYPE: 'content-type', HTTP2_HEADER_CONTENT_LENGTH: 'content-length',
-  HTTP2_METHOD_GET: 'GET', HTTP2_METHOD_POST: 'POST',
-  HTTP_STATUS_OK: 200, HTTP_STATUS_NOT_FOUND: 404, HTTP_STATUS_INTERNAL_SERVER_ERROR: 500,
+  HTTP2_HEADER_CONTENT_ENCODING: 'content-encoding', HTTP2_HEADER_SET_COOKIE: 'set-cookie',
+  HTTP2_HEADER_COOKIE: 'cookie', HTTP2_HEADER_DATE: 'date', HTTP2_HEADER_LOCATION: 'location',
+  HTTP2_HEADER_ACCEPT: 'accept', HTTP2_HEADER_ACCEPT_ENCODING: 'accept-encoding',
+  HTTP2_HEADER_USER_AGENT: 'user-agent', HTTP2_HEADER_HOST: 'host', HTTP2_HEADER_CONNECTION: 'connection',
+  HTTP2_HEADER_TE: 'te', HTTP2_HEADER_KEEP_ALIVE: 'keep-alive', HTTP2_HEADER_TRANSFER_ENCODING: 'transfer-encoding',
+  HTTP2_HEADER_UPGRADE: 'upgrade', HTTP2_HEADER_PROXY_CONNECTION: 'proxy-connection',
+  // methods
+  HTTP2_METHOD_GET: 'GET', HTTP2_METHOD_POST: 'POST', HTTP2_METHOD_PUT: 'PUT',
+  HTTP2_METHOD_DELETE: 'DELETE', HTTP2_METHOD_HEAD: 'HEAD', HTTP2_METHOD_OPTIONS: 'OPTIONS',
+  HTTP2_METHOD_PATCH: 'PATCH', HTTP2_METHOD_CONNECT: 'CONNECT',
+  // statuses
+  HTTP_STATUS_CONTINUE: 100, HTTP_STATUS_OK: 200, HTTP_STATUS_CREATED: 201, HTTP_STATUS_NO_CONTENT: 204,
+  HTTP_STATUS_NOT_MODIFIED: 304, HTTP_STATUS_BAD_REQUEST: 400, HTTP_STATUS_UNAUTHORIZED: 401,
+  HTTP_STATUS_FORBIDDEN: 403, HTTP_STATUS_NOT_FOUND: 404, HTTP_STATUS_INTERNAL_SERVER_ERROR: 500,
+  HTTP_STATUS_NOT_IMPLEMENTED: 501, HTTP_STATUS_BAD_GATEWAY: 502, HTTP_STATUS_SERVICE_UNAVAILABLE: 503,
+  MAX_INITIAL_WINDOW_SIZE: 2147483647, DEFAULT_SETTINGS_HEADER_TABLE_SIZE: 4096,
+  DEFAULT_SETTINGS_ENABLE_PUSH: 1, DEFAULT_SETTINGS_INITIAL_WINDOW_SIZE: 65535,
+  DEFAULT_SETTINGS_MAX_FRAME_SIZE: 16384,
 };
 const sensitiveHeaders = Symbol('nodejs.http2.sensitiveHeaders');
+const RST_CODE_NAMES = {
+  1: 'NGHTTP2_PROTOCOL_ERROR', 2: 'NGHTTP2_INTERNAL_ERROR', 3: 'NGHTTP2_FLOW_CONTROL_ERROR',
+  4: 'NGHTTP2_SETTINGS_TIMEOUT', 5: 'NGHTTP2_STREAM_CLOSED', 6: 'NGHTTP2_FRAME_SIZE_ERROR',
+  7: 'NGHTTP2_REFUSED_STREAM', 9: 'NGHTTP2_COMPRESSION_ERROR', 10: 'NGHTTP2_CONNECT_ERROR',
+  11: 'NGHTTP2_ENHANCE_YOUR_CALM', 12: 'NGHTTP2_INADEQUATE_SECURITY', 13: 'NGHTTP2_HTTP_1_1_REQUIRED',
+};
 const DEFAULT_SETTINGS = { headerTableSize: 4096, enablePush: true, initialWindowSize: 65535, maxFrameSize: 16384, maxConcurrentStreams: 4294967295, maxHeaderListSize: 65535, enableConnectProtocol: false };
 
 function headersToObject(list) {
@@ -84,8 +120,23 @@ class ServerHttp2Stream extends Http2Stream {
     this.session._sendHeaders(this.id, list, !!options.endStream);
     if (options.endStream) this._localEnded = true;
   }
-  respondWithFD() { throw new Error('respondWithFD not supported'); }
-  respondWithFile() { throw new Error('respondWithFile not supported'); }
+  respondWithFD(fd, headers = {}, options = {}) {
+    const fs = require('fs');
+    let data;
+    try { const st = fs.fstatSync(fd); data = Buffer.alloc(st.size); fs.readSync(fd, data, 0, st.size, 0); }
+    catch (e) { if (options.onError) return options.onError(e); this.emit('error', e); return; }
+    this.respond({ ':status': 200, 'content-length': data.length, ...headers });
+    this.end(data);
+  }
+  respondWithFile(path, headers = {}, options = {}) {
+    const fs = require('fs');
+    let st;
+    try { st = fs.statSync(path); } catch (e) { if (options.onError) return options.onError(e); this.emit('error', e); return; }
+    if (!st.isFile()) { const e = new Error('Not a regular file'); e.code = 'ERR_HTTP2_SEND_FILE'; if (options.onError) return options.onError(e); this.emit('error', e); return; }
+    const data = fs.readFileSync(path);
+    this.respond({ ':status': 200, 'content-length': data.length, ...headers });
+    this.end(data);
+  }
   pushStream() { throw new Error('push streams not supported'); }
 }
 
@@ -168,7 +219,17 @@ class Http2Session extends EventEmitter {
       case F.FRAME.WINDOW_UPDATE: break;
       case F.FRAME.RST_STREAM: {
         const s = this.streams.get(fr.streamId);
-        if (s) { s.rstCode = fr.payload.length >= 4 ? fr.payload.readUInt32BE(0) : 0; s._end(); s.emit('close'); this.streams.delete(fr.streamId); }
+        if (s) {
+          const code = fr.payload.length >= 4 ? fr.payload.readUInt32BE(0) : 0;
+          s.rstCode = code;
+          // codes other than NO_ERROR(0)/CANCEL(8) surface as a stream error (Node behavior)
+          if (code !== 0 && code !== 8) {
+            const e = new Error(`Stream closed with error code ${RST_CODE_NAMES[code] || code}`);
+            e.code = 'ERR_HTTP2_STREAM_ERROR';
+            s.emit('error', e);
+          }
+          s._end(); s.emit('close'); this.streams.delete(fr.streamId);
+        }
         break;
       }
       case F.FRAME.GOAWAY:
