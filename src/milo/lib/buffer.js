@@ -328,8 +328,19 @@ class Buffer extends Uint8Array {
       return new Buffer(_utf8Encode(value));
     }
     if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && value instanceof SharedArrayBuffer)) {
-      const offset = encodingOrOffset || 0;
-      const len = length !== undefined ? length : value.byteLength - offset;
+      // A fake AB inherits ArrayBuffer.prototype (instanceof passes) but has no real
+      // slot — its byteLength getter throws "incompatible receiver"; treat as bad arg.
+      let bl;
+      try { bl = value.byteLength; } catch { throw _bufFromTypeError(value); }
+      // byteOffset: coerce to number, non-numeric defaults to 0.
+      let offset = +encodingOrOffset;
+      if (Number.isNaN(offset)) offset = 0;
+      if (offset < 0 || offset > bl) { const e = new RangeError('"offset" is outside of buffer bounds'); e.code = 'ERR_BUFFER_OUT_OF_BOUNDS'; throw e; }
+      // length: undefined → rest of buffer; otherwise coerce, non-numeric → 0.
+      let len;
+      if (length === undefined) len = bl - offset;
+      else { len = +length; if (Number.isNaN(len)) len = 0; }
+      if (len < 0 || offset + len > bl) { const e = new RangeError('"length" is outside of buffer bounds'); e.code = 'ERR_BUFFER_OUT_OF_BOUNDS'; throw e; }
       const view = new Uint8Array(value, offset, len);
       Object.setPrototypeOf(view, Buffer.prototype);
       return view;
