@@ -31,7 +31,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | require    | 14/19     | 73%  | med      | resolve dedup, symlink, exceptions |
 | module     | 21/26     | 80%  | high     | .node dlopen, circular-dep warning, main-fail stderr |
 | console    | 9/14      | 64%  | med      | write-error propagation, tty colors, revoked proxy |
-| path       | 8/15      | 53%  | med      | edge cases |
+| path       | 15/15     | 100% | —        | done (curated) |
 | diagnostics| 10/17     | 58%  | low      | tracingChannel+ALS async propagation, udp |
 | fs         | 99/201    | 49%  | high     | dispose ERR_DIR_CLOSED, readFile+signal, error codes |
 | http       | 91/210    | 43%  | high     | timeout/abort, keep-alive, error codes |
@@ -160,6 +160,8 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 
 ## done
 
+- [x] path win32: ported canonical Node lib/path.js win32 (device-namespace `\\.\`/`\\?\`, reserved-name CON:/COM1 CVE handling, CVE-2024-36139 relative-with-colon, Unicode-case-folding relative via segment-split, toNamespacedPath/_makeLong, UNC-root parse). format validates pathObject (validateObject) + formatExt dot-prefix. path 9->15 (100% curated)
+- [x] FOUNDATIONAL: `_ERR_INVALID_ARG_TYPE` formatter quotes string values (`type string ('x')`) + truncates >28 chars — matches Node inspect; cross-module (every arg-type validation error message)
 - [x] buffer: legacy `new Buffer()` emits DEP0005 once (internal allocs via _newBuffer skip warning); native binding.fill shim range-checks start/end (ERR_OUT_OF_RANGE) — buffer 49->52 (fill, constructor-deprecation-error, pending-deprecation)
 - [x] buffer: byteLength accepts cross-realm ArrayBuffer (toStringTag); compare rejects prototype-only fakes (isView brand) — buffer 46->48
 

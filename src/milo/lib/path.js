@@ -8,6 +8,12 @@ function validateString(value, name) {
   if (typeof value !== 'string') throw _ERR_INVALID_ARG_TYPE(name, 'string', value);
 }
 
+function validateObject(value, name) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw _ERR_INVALID_ARG_TYPE(name, 'object', value);
+  }
+}
+
 function normalizeString(path, allowAboveRoot) {
   let res = '', lastSegLen = 0, lastSlash = -1, dots = 0, code;
   for (let i = 0; i <= path.length; i++) {
@@ -190,8 +196,10 @@ function parse(path) {
 }
 
 function format(pathObject) {
+  validateObject(pathObject, 'pathObject');
   const dir = pathObject.dir || pathObject.root || '';
-  const base = pathObject.base || (pathObject.name || '') + (pathObject.ext || '');
+  const ext = pathObject.ext;
+  const base = pathObject.base || (pathObject.name || '') + (ext ? (ext[0] === '.' ? '' : '.') + ext : '');
   if (!dir) return base;
   return dir === pathObject.root ? dir + base : dir + '/' + base;
 }
@@ -200,9 +208,20 @@ const sep = '/';
 const delimiter = ':';
 
 // --- win32 path internals (faithful port of Node's lib/path.js win32) ---
-const _CC_DOT = 46, _CC_FSLASH = 47, _CC_BSLASH = 92, _CC_COLON = 58;
+const _CC_DOT = 46, _CC_FSLASH = 47, _CC_BSLASH = 92, _CC_COLON = 58, _CC_QMARK = 63;
 function _winIsSep(c) { return c === _CC_FSLASH || c === _CC_BSLASH; }
+function _isPosixSep(c) { return c === _CC_FSLASH; }
 function _isWinDeviceRoot(c) { return (c >= 65 && c <= 90) || (c >= 97 && c <= 122); }
+// Reserved DOS device names — paths like CON:.. must NOT be normalized away (CVE).
+const _WIN_RESERVED = ['CON', 'PRN', 'AUX', 'NUL',
+  'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+  'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+  'COM\xb9', 'COM\xb2', 'COM\xb3', 'LPT\xb9', 'LPT\xb2', 'LPT\xb3'];
+function _isWinReserved(path, colonIndex) {
+  return _WIN_RESERVED.includes(path.slice(0, colonIndex).toUpperCase());
+}
+// lastSegmentLength is tracked across iterations so the parent slice uses
+// res.length - lastSegmentLength - 1 (NOT lastIndexOf) — matches Node exactly.
 function _winNormalizeString(path, allowAboveRoot) {
   let res = '', lastSegmentLength = 0, lastSlash = -1, dots = 0, code = 0;
   for (let i = 0; i <= path.length; ++i) {
@@ -214,7 +233,7 @@ function _winNormalizeString(path, allowAboveRoot) {
       else if (dots === 2) {
         if (res.length < 2 || lastSegmentLength !== 2 || res.charCodeAt(res.length - 1) !== _CC_DOT || res.charCodeAt(res.length - 2) !== _CC_DOT) {
           if (res.length > 2) {
-            const lsi = res.lastIndexOf('\\');
+            const lsi = res.length - lastSegmentLength - 1;
             if (lsi === -1) { res = ''; lastSegmentLength = 0; }
             else { res = res.slice(0, lsi); lastSegmentLength = res.length - 1 - res.lastIndexOf('\\'); }
             lastSlash = i; dots = 0; continue;
@@ -264,7 +283,14 @@ const win32 = {
             if (j < len && j !== last) {
               last = j;
               while (j < len && !_winIsSep(path.charCodeAt(j))) j++;
-              if (j === len || j !== last) { device = '\\\\' + firstPart + '\\' + path.slice(last, j); rootEnd = j; }
+              if (j === len || j !== last) {
+                if (firstPart !== '.' && firstPart !== '?') {
+                  device = '\\\\' + firstPart + '\\' + path.slice(last, j); rootEnd = j;
+                } else {
+                  // device root e.g. \\.\PHYSICALDRIVE0 — keep \\. or \\? as device, rest is tail
+                  device = '\\\\' + firstPart; rootEnd = 4;
+                }
+              }
             }
           }
         } else { rootEnd = 1; }
@@ -292,7 +318,7 @@ const win32 = {
     if (len === 0) return '.';
     let rootEnd = 0, device, isAbsolute = false;
     const code = path.charCodeAt(0);
-    if (len === 1) return _winIsSep(code) ? '\\' : path;
+    if (len === 1) return _isPosixSep(code) ? '\\' : path;
     if (_winIsSep(code)) {
       isAbsolute = true;
       if (_winIsSep(path.charCodeAt(1))) {
@@ -304,20 +330,52 @@ const win32 = {
           if (j < len && j !== last) {
             last = j;
             while (j < len && !_winIsSep(path.charCodeAt(j))) j++;
-            if (j === len) return '\\\\' + firstPart + '\\' + path.slice(last) + '\\';
-            if (j !== last) { device = '\\\\' + firstPart + '\\' + path.slice(last, j); rootEnd = j; }
+            if (j === len || j !== last) {
+              if (firstPart === '.' || firstPart === '?') {
+                device = '\\\\' + firstPart; rootEnd = 4;
+                const colonIndex = path.indexOf(':');
+                const possibleDevice = path.slice(4, colonIndex + 1);
+                if (_isWinReserved(possibleDevice, possibleDevice.length - 1)) {
+                  device = '\\\\?\\' + possibleDevice; rootEnd = 4 + possibleDevice.length;
+                }
+              } else if (j === len) {
+                return '\\\\' + firstPart + '\\' + path.slice(last) + '\\';
+              } else {
+                device = '\\\\' + firstPart + '\\' + path.slice(last, j); rootEnd = j;
+              }
+            }
           }
         }
       } else { rootEnd = 1; }
-    } else if (_isWinDeviceRoot(code) && path.charCodeAt(1) === _CC_COLON) {
-      device = path.slice(0, 2); rootEnd = 2;
-      if (len > 2 && _winIsSep(path.charCodeAt(2))) { isAbsolute = true; rootEnd = 3; }
+    } else {
+      const colonIndex = path.indexOf(':');
+      if (colonIndex > 0) {
+        if (_isWinDeviceRoot(code) && colonIndex === 1) {
+          device = path.slice(0, 2); rootEnd = 2;
+          if (len > 2 && _winIsSep(path.charCodeAt(2))) { isAbsolute = true; rootEnd = 3; }
+        } else if (_isWinReserved(path, colonIndex)) {
+          device = path.slice(0, colonIndex + 1); rootEnd = colonIndex + 1;
+        }
+      }
     }
     let tail = rootEnd < len ? _winNormalizeString(path.slice(rootEnd), !isAbsolute) : '';
     if (tail.length === 0 && !isAbsolute) tail = '.';
     if (tail.length > 0 && _winIsSep(path.charCodeAt(len - 1))) tail += '\\';
-    if (device === undefined) return isAbsolute ? (tail.length > 0 ? '\\' + tail : '\\') : tail;
-    return isAbsolute ? (tail.length > 0 ? device + '\\' + tail : device + '\\') : device + tail;
+    if (!isAbsolute && device === undefined && path.includes(':')) {
+      // CVE-2024-36139: a relative path that normalized to something Windows
+      // could read as absolute (drive letter or colon-segment) must be neutralized.
+      if (tail.length >= 2 && _isWinDeviceRoot(tail.charCodeAt(0)) && tail.charCodeAt(1) === _CC_COLON) {
+        return '.\\' + tail;
+      }
+      let index = path.indexOf(':');
+      do {
+        if (index === len - 1 || _winIsSep(path.charCodeAt(index + 1))) return '.\\' + tail;
+      } while ((index = path.indexOf(':', index + 1)) !== -1);
+    }
+    const colonIndex = path.indexOf(':');
+    if (_isWinReserved(path, colonIndex)) return '.\\' + (device ?? '') + tail;
+    if (device === undefined) return isAbsolute ? '\\' + tail : tail;
+    return isAbsolute ? device + '\\' + tail : device + tail;
   },
   isAbsolute(path) {
     validateString(path, 'path');
@@ -346,6 +404,23 @@ const win32 = {
     if (needsReplace) {
       while (slashCount < joined.length && _winIsSep(joined.charCodeAt(slashCount))) slashCount++;
       if (slashCount >= 2) joined = '\\' + joined.slice(slashCount);
+    }
+    // A reserved device name segment (CON:, COM1:, ...) must survive verbatim —
+    // normalize would strip the colon-segment and enable path traversal (CVE).
+    const parts = [];
+    let part = '';
+    for (let i = 0; i < joined.length; i++) {
+      if (joined[i] === '\\') {
+        if (part) parts.push(part);
+        part = '';
+        while (i + 1 < joined.length && joined[i + 1] === '\\') i++;
+      } else { part += joined[i]; }
+    }
+    if (part) parts.push(part);
+    if (parts.some((p) => { const ci = p.indexOf(':'); return ci !== -1 && _isWinReserved(p, ci); })) {
+      let result = '';
+      for (let i = 0; i < joined.length; i++) result += joined[i] === '/' ? '\\' : joined[i];
+      return result;
     }
     return win32.normalize(joined);
   },
@@ -438,31 +513,45 @@ const win32 = {
     validateString(p, 'path');
     const ret = { root: '', dir: '', base: '', ext: '', name: '' };
     if (p.length === 0) return ret;
-    const isSep = c => c === 47 || c === 92;
-    let start = 0;
-    // drive letter
-    if (p.length >= 2 && p.charCodeAt(1) === 58) {
-      const d = p.charCodeAt(0);
-      if ((d >= 65 && d <= 90) || (d >= 97 && d <= 122)) {
-        start = 2;
-        if (p.length > 2 && isSep(p.charCodeAt(2))) {
-          ret.root = p.slice(0, 3);
-          start = 3;
-        } else {
-          ret.root = p.slice(0, 2);
+    const len = p.length;
+    let rootEnd = 0;
+    let code = p.charCodeAt(0);
+    if (len === 1) {
+      if (_winIsSep(code)) { ret.root = ret.dir = p; return ret; }
+      ret.base = ret.name = p; return ret;
+    }
+    if (_winIsSep(code)) {
+      rootEnd = 1;
+      if (_winIsSep(p.charCodeAt(1))) {
+        // UNC root \\server\share — root spans both components
+        let j = 2, last = j;
+        while (j < len && !_winIsSep(p.charCodeAt(j))) j++;
+        if (j < len && j !== last) {
+          last = j;
+          while (j < len && _winIsSep(p.charCodeAt(j))) j++;
+          if (j < len && j !== last) {
+            last = j;
+            while (j < len && !_winIsSep(p.charCodeAt(j))) j++;
+            if (j === len) rootEnd = j;
+            else if (j !== last) rootEnd = j + 1;
+          }
         }
       }
-    } else if (isSep(p.charCodeAt(0))) {
-      ret.root = '\\';
-      start = 1;
-      if (p.length > 1 && isSep(p.charCodeAt(1))) { start = 2; ret.root = '\\\\'; }
+    } else if (_isWinDeviceRoot(code) && p.charCodeAt(1) === _CC_COLON) {
+      if (len <= 2) { ret.root = ret.dir = p; return ret; }
+      rootEnd = 2;
+      if (_winIsSep(p.charCodeAt(2))) {
+        if (len === 3) { ret.root = ret.dir = p; return ret; }
+        rootEnd = 3;
+      }
     }
-    let startDot = -1, startPart = start, end = -1, matchedSlash = true, preDotState = 0;
-    for (let i = p.length - 1; i >= start; i--) {
-      const code = p.charCodeAt(i);
-      if (isSep(code)) { if (!matchedSlash) { startPart = i + 1; break; } continue; }
+    if (rootEnd > 0) ret.root = p.slice(0, rootEnd);
+    let startDot = -1, startPart = rootEnd, end = -1, matchedSlash = true, preDotState = 0;
+    for (let i = len - 1; i >= rootEnd; i--) {
+      code = p.charCodeAt(i);
+      if (_winIsSep(code)) { if (!matchedSlash) { startPart = i + 1; break; } continue; }
       if (end < 0) { matchedSlash = false; end = i + 1; }
-      if (code === 46) { if (startDot < 0) startDot = i; else if (preDotState !== 1) preDotState = 1; }
+      if (code === _CC_DOT) { if (startDot < 0) startDot = i; else if (preDotState !== 1) preDotState = 1; }
       else if (startDot >= 0) preDotState = -1;
     }
     if (end >= 0) {
@@ -474,32 +563,63 @@ const win32 = {
         ret.ext = p.slice(startDot, end);
       }
     }
-    if (startPart > start) ret.dir = p.slice(0, startPart - 1);
-    else if (ret.root) ret.dir = ret.root;
+    if (startPart > 0 && startPart !== rootEnd) ret.dir = p.slice(0, startPart - 1);
+    else ret.dir = ret.root;
     return ret;
   },
   format(o) {
+    validateObject(o, 'pathObject');
     const dir = o.dir || o.root || '';
-    const base = o.base || (o.name || '') + (o.ext || '');
+    const base = o.base || (o.name || '') + (o.ext ? (o.ext[0] === '.' ? '' : '.') + o.ext : '');
     if (!dir) return base;
     return dir === o.root ? dir + base : dir + '\\' + base;
   },
-  toNamespacedPath(p) { return p; },
+  toNamespacedPath(p) {
+    if (typeof p !== 'string' || p.length === 0) return p;
+    const rp = win32.resolve(p);
+    if (rp.length <= 2) return p;
+    if (rp.charCodeAt(0) === _CC_BSLASH) {
+      if (rp.charCodeAt(1) === _CC_BSLASH) {
+        const code = rp.charCodeAt(2);
+        if (code !== _CC_QMARK && code !== _CC_DOT) return '\\\\?\\UNC\\' + rp.slice(2);
+      }
+    } else if (_isWinDeviceRoot(rp.charCodeAt(0)) && rp.charCodeAt(1) === _CC_COLON && rp.charCodeAt(2) === _CC_BSLASH) {
+      return '\\\\?\\' + rp;
+    }
+    return rp;
+  },
   relative(from, to) {
     validateString(from, 'from'); validateString(to, 'to');
     if (from === to) return '';
     const fromOrig = win32.resolve(from);
     const toOrig = win32.resolve(to);
     if (fromOrig === toOrig) return '';
-    // Case-only differences resolve to the same path (length-changing lowercase is
-    // fine for an equality check since both sides change identically).
-    if (fromOrig.toLowerCase() === toOrig.toLowerCase()) return '';
-    // Compare case-insensitively on the ORIGINAL strings (ASCII only). Pre-lowercasing
-    // the whole string can change its length (e.g. İ→i̇) and misalign the indices used
-    // to slice the original-case result.
-    const _lc = (c) => (c >= 65 && c <= 90) ? c + 32 : c;
-    from = fromOrig;
-    to = toOrig;
+    from = fromOrig.toLowerCase();
+    to = toOrig.toLowerCase();
+    if (from === to) return '';
+    // Unicode case-folding can change string length (e.g. İ→i̇), misaligning
+    // byte indices used to slice the original-case result. Fall back to a
+    // segment-split comparison in that case.
+    if (fromOrig.length !== from.length || toOrig.length !== to.length) {
+      const fromSplit = fromOrig.split('\\');
+      const toSplit = toOrig.split('\\');
+      if (fromSplit[fromSplit.length - 1] === '') fromSplit.pop();
+      if (toSplit[toSplit.length - 1] === '') toSplit.pop();
+      const fLen = fromSplit.length, tLen = toSplit.length;
+      const lengthS = fLen < tLen ? fLen : tLen;
+      let k;
+      for (k = 0; k < lengthS; k++) {
+        if (fromSplit[k].toLowerCase() !== toSplit[k].toLowerCase()) break;
+      }
+      if (k === 0) return toOrig;
+      if (k === lengthS) {
+        if (tLen > lengthS) return toSplit.slice(k).join('\\');
+        if (fLen > lengthS) return '..\\'.repeat(fLen - 1 - k) + '..';
+        return '';
+      }
+      return '..\\'.repeat(fLen - k) + toSplit.slice(k).join('\\');
+    }
+    // from/to remain lowercased here; output slices come from *Orig (original case).
     let fromStart = 0;
     while (fromStart < from.length && from.charCodeAt(fromStart) === _CC_BSLASH) fromStart++;
     let fromEnd = from.length;
@@ -515,7 +635,7 @@ const win32 = {
     let i = 0;
     for (; i < length; i++) {
       const fromCode = from.charCodeAt(fromStart + i);
-      if (_lc(fromCode) !== _lc(to.charCodeAt(toStart + i))) break;
+      if (fromCode !== to.charCodeAt(toStart + i)) break;
       else if (fromCode === _CC_BSLASH) lastCommonSep = i;
     }
     if (i !== length) {

@@ -693,7 +693,12 @@
     else if (typeof actual === 'function') actualStr = 'function ' + (actual.name || '');
     else if (typeof actual === 'object') actualStr = 'an instance of ' + (actual.constructor?.name || 'Object');
     else if (typeof actual === 'symbol') actualStr = 'type symbol (' + String(actual) + ')';
-    else actualStr = 'type ' + typeof actual + ' (' + actual + ')';
+    else {
+      // Node inspects the value: strings get single-quoted, long values truncated to 25 chars.
+      let v = typeof actual === 'string' ? `'${actual}'` : String(actual);
+      if (v.length > 28) v = v.slice(0, 25) + '...';
+      actualStr = 'type ' + typeof actual + ' (' + v + ')';
+    }
     return _makeNodeError(TypeError, 'ERR_INVALID_ARG_TYPE', `The "${name}" argument must be of type ${expected}. Received ${actualStr}`);
   };
   globalThis._ERR_INVALID_ARG_VALUE = function(name, value, reason) {
