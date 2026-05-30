@@ -1,9 +1,62 @@
 // querystring module
 'use strict';
 
+// Port of Node's internal/querystring encodeStr + tables. Unlike
+// encodeURIComponent it combines a high surrogate with the next code unit
+// WITHOUT requiring it to be a low surrogate (only a high surrogate at the very
+// end of the string is an error), matching qs.escape semantics exactly.
+const _hexTable = [];
+for (let i = 0; i < 256; i++) _hexTable[i] = '%' + ((i < 16 ? '0' : '') + i.toString(16)).toUpperCase();
+const _noEscape = new Int8Array(128);
+for (let i = 48; i <= 57; i++) _noEscape[i] = 1;   // 0-9
+for (let i = 65; i <= 90; i++) _noEscape[i] = 1;   // A-Z
+for (let i = 97; i <= 122; i++) _noEscape[i] = 1;  // a-z
+for (const ch of "!'()*-._~") _noEscape[ch.charCodeAt(0)] = 1;
+
+function _encodeStr(str) {
+  const len = str.length;
+  if (len === 0) return '';
+  let out = '';
+  let lastPos = 0;
+  for (let i = 0; i < len; i++) {
+    let c = str.charCodeAt(i);
+    if (c < 0x80) {
+      if (_noEscape[c] === 1) continue;
+      if (lastPos < i) out += str.slice(lastPos, i);
+      lastPos = i + 1;
+      out += _hexTable[c];
+      continue;
+    }
+    if (lastPos < i) out += str.slice(lastPos, i);
+    if (c < 0x800) {
+      lastPos = i + 1;
+      out += _hexTable[0xC0 | (c >> 6)] + _hexTable[0x80 | (c & 0x3F)];
+      continue;
+    }
+    if (c < 0xD800 || c >= 0xE000) {
+      lastPos = i + 1;
+      out += _hexTable[0xE0 | (c >> 12)] + _hexTable[0x80 | ((c >> 6) & 0x3F)] + _hexTable[0x80 | (c & 0x3F)];
+      continue;
+    }
+    // high surrogate — pair with the next code unit (no low-surrogate check)
+    ++i;
+    if (i >= len) { const e = new URIError('URI malformed'); e.code = 'ERR_INVALID_URI'; throw e; }
+    const c2 = str.charCodeAt(i) & 0x3FF;
+    lastPos = i + 1;
+    c = 0x10000 + (((c & 0x3FF) << 10) | c2);
+    out += _hexTable[0xF0 | (c >> 18)] + _hexTable[0x80 | ((c >> 12) & 0x3F)] + _hexTable[0x80 | ((c >> 6) & 0x3F)] + _hexTable[0x80 | (c & 0x3F)];
+  }
+  if (lastPos === 0) return str;
+  if (lastPos < len) return out + str.slice(lastPos);
+  return out;
+}
+
 function escape(str) {
-  try { return encodeURIComponent(str); }
-  catch (e) { if (e instanceof URIError) e.code = 'ERR_INVALID_URI'; throw e; }
+  if (typeof str !== 'string') {
+    if (typeof str === 'object') str = String(str);
+    else str += '';
+  }
+  return _encodeStr(str);
 }
 function unescape(str) {
   try { return decodeURIComponent(str.replace(/\+/g, ' ')); }
