@@ -710,7 +710,9 @@
     if (_pkgJsonCache[dir] !== undefined) return _pkgJsonCache[dir];
     const p = _path.join(dir, 'package.json');
     if (_fs.existsSync(p)) {
-      try { const pj = JSON.parse(_fs.readFileSync(p)); _pkgJsonCache[dir] = pj; return pj; } catch {}
+      // null-prototype so pj.type/main/exports reads can't trip getters polluted
+      // onto Object.prototype (test-module-prototype-mutation).
+      try { const pj = Object.setPrototypeOf(JSON.parse(_fs.readFileSync(p)), null); _pkgJsonCache[dir] = pj; return pj; } catch {}
     }
     const parent = _path.dirname(dir);
     if (parent === dir) { _pkgJsonCache[dir] = null; return null; }
@@ -931,7 +933,7 @@
         const pkg = _path.join(p, 'package.json');
         if (_fs.existsSync(pkg)) {
           try {
-            const pj = JSON.parse(_fs.readFileSync(pkg));
+            const pj = Object.setPrototypeOf(JSON.parse(_fs.readFileSync(pkg)), null);
             if (pj.exports) {
               const entry = pj.exports['.'] || pj.exports;
               const target = _resolveExport(entry);
