@@ -138,7 +138,10 @@ process._nextTickQueue = [];
 process.processTicksAndRejections = function processTicksAndRejections() {
   while (process._nextTickQueue.length > 0) {
     const entry = process._nextTickQueue.shift();
-    try { entry[0](...entry[1]); }
+    // Extract the fn first: entry[0](...) would call it as a method of `entry`,
+    // binding `this` to the queue tuple instead of undefined.
+    const _fn = entry[0];
+    try { _fn(...entry[1]); }
     catch (e) {
       if (process._fatalException) process._fatalException(e);
       else throw e;

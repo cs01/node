@@ -1099,7 +1099,8 @@
         const compiled = (0, eval)(_wrap[0] + src + _wrap[1]);
         compiled.call(mod.exports, mod.exports, modRequire, mod, resolved, dname);
       } else {
-        (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src))(mod.exports, modRequire, mod, resolved, dname, primordials);
+        // .call(mod.exports, ...) so a module's top-level `this` === module.exports (Node semantics).
+        (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src)).call(mod.exports, mod.exports, modRequire, mod, resolved, dname, primordials);
       }
     }
     mod.loaded = true;
