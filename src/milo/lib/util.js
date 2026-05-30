@@ -402,17 +402,28 @@ function stripVTControlCharacters(str) {
 }
 
 function parseEnv(content) {
-  const result = {};
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq < 0) continue;
-    const key = trimmed.slice(0, eq).trim();
-    let val = trimmed.slice(eq + 1).trim();
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))
-      val = val.slice(1, -1);
-    result[key] = val;
+  // dotenv-compatible parser (matches Node's util.parseEnv): handles export prefix,
+  // single/double/backtick quoting (incl. multiline), inline comments, and \n/\r
+  // escape expansion inside double quotes only.
+  if (typeof content !== 'string') {
+    const e = new TypeError('The "content" argument must be of type string.' + _invalidArgTypeHelper(content));
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  const result = { __proto__: null };
+  const src = content.replace(/\r\n?/g, '\n');
+  const LINE = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\n]+)?\s*(?:#.*)?(?:$|$)/gm;
+  let m;
+  while ((m = LINE.exec(src)) !== null) {
+    const key = m[1];
+    let value = (m[2] || '').trim();
+    if (value.length >= 2) {
+      const f = value[0];
+      if ((f === '"' || f === "'" || f === '`') && value[value.length - 1] === f) {
+        value = value.slice(1, -1);
+        if (f === '"') value = value.replace(/\\n/g, '\n').replace(/\\r/g, '\r');
+      }
+    }
+    result[key] = value;
   }
   return result;
 }
