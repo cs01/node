@@ -930,9 +930,23 @@
     return result;
   }
 
-  function _resolveFile(p) {
-    if (_fs.existsSync(p)) {
-      try { if (_fs.statSync(p).isDirectory()) {
+  function _resolveFile(p, dirOnly) {
+    // Node precedence: exact file → file+extension → directory (so inner.js wins
+    // over a same-named inner/ directory). dirOnly (trailing slash) skips files.
+    if (!dirOnly) {
+      try { if (_fs.existsSync(p) && !_fs.statSync(p).isDirectory()) return p; } catch { try { return _fs.existsSync(p) ? p : null; } catch {} }
+      if (_fs.existsSync(p + '.js')) return p + '.js';
+      if (_fs.existsSync(p + '.json')) return p + '.json';
+      // user-registered extensions (require.extensions / Module._extensions)
+      try {
+        const _ext = globalThis.require('module')._extensions;
+        if (_ext) for (const e of Object.keys(_ext)) {
+          if (e !== '.js' && e !== '.json' && e !== '.node' && _fs.existsSync(p + e)) return p + e;
+        }
+      } catch {}
+    }
+    try {
+      if (_fs.existsSync(p) && _fs.statSync(p).isDirectory()) {
         const pkg = _path.join(p, 'package.json');
         if (_fs.existsSync(pkg)) {
           try {
@@ -947,21 +961,8 @@
         }
         if (_fs.existsSync(_path.join(p, 'index.js'))) return _path.join(p, 'index.js');
         if (_fs.existsSync(_path.join(p, 'index.json'))) return _path.join(p, 'index.json');
-        // directory exists but no entry point — fall through to try .js/.json extensions
-      }} catch {}
-      // only return bare path if it's a file, not an unresolvable directory
-      try { if (!_fs.statSync(p).isDirectory()) return p; } catch { return p; }
-    }
-    if (_fs.existsSync(p + '.js')) return p + '.js';
-    if (_fs.existsSync(p + '.json')) return p + '.json';
-    // user-registered extensions (require.extensions / Module._extensions)
-    try {
-      const _ext = globalThis.require('module')._extensions;
-      if (_ext) for (const e of Object.keys(_ext)) {
-        if (e !== '.js' && e !== '.json' && e !== '.node' && _fs.existsSync(p + e)) return p + e;
       }
     } catch {}
-    if (_fs.existsSync(p + '/index.js')) return p + '/index.js';
     return null;
   }
 
@@ -1003,7 +1004,11 @@
   function _resolve(id, parentDir) {
     if (id === '.' || id === '..' || id.startsWith('./') || id.startsWith('../') || id.startsWith('/')) {
       const base = parentDir ? _path.resolve(parentDir, id) : _path.resolve(id);
-      return _resolveFile(base);
+      // A trailing slash, or a final '.'/'..' component (e.g. require('inner/fake/..')),
+      // forces directory resolution — file+ext attempts are skipped so it can't pick
+      // up a same-named foo.json.
+      const dirOnly = /[\\/]$/.test(id) || /(?:^|[\\/])\.\.?$/.test(id);
+      return _resolveFile(base, dirOnly);
     }
     // bare specifier — try node_modules walk
     if (parentDir) return _resolveNodeModules(id, parentDir);
