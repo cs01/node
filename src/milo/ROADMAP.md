@@ -38,7 +38,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | net        | 44/106    | 41%  | high     | Socket not extending Duplex |
 | stream     | mixed     | ~35% | high     | pipeline, transform, pipe errors |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
-| util       | 9/19      | 47%  | med      | inspect getters/showHidden, callbackify tick frame |
+| util       | 10/19     | 53%  | med      | inspect getters/showHidden, callbackify, deprecate |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
 | whatwg     | 10/41     | 24%  | med      | URL/URLSearchParams edge cases |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |
