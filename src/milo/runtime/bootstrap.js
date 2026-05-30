@@ -366,6 +366,11 @@
         this.hostname = m?.[3] || ''; this.port = m?.[4] || ''; this.pathname = m?.[5] || '/'; this.search = m?.[6] || ''; this.hash = m?.[7] || '';
         this.host = this.hostname + (this.port ? ':' + this.port : ''); this.origin = this.protocol + '//' + this.host;
         this.href = url; this.searchParams = new URLSearchParams(this.search);
+        // WHATWG URL props are non-enumerable (proto getters in Node); spreading a URL
+        // must NOT copy them ({ ...url } yields no protocol/host/etc). Keep writable.
+        for (const k of ['protocol','username','password','hostname','port','pathname','search','hash','host','origin','href','searchParams']) {
+          Object.defineProperty(this, k, { value: this[k], enumerable: false, writable: true, configurable: true });
+        }
       }
       toString() { return this.href; }
       toJSON() { return this.href; }
