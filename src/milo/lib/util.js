@@ -84,6 +84,36 @@ function _colorize(style, s) {
   return code ? `\x1b[${code[0]}m${s}\x1b[${code[1]}m` : s;
 }
 
+// Port of Node's isBelowBreakLength / reduceToSingleString: decide single-line
+// vs one-entry-per-line based on total width (breakLength) and indentation, with
+// each multiline entry already indented to its own depth so nesting composes.
+const _BREAK_LENGTH = 80;
+// Object keys are bare when valid identifiers, quoted otherwise (Node behavior).
+function _quoteKey(k) {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : "'" + k.replace(/'/g, "\\'") + "'";
+}
+function _belowBreakLength(parts, start) {
+  let total = parts.length + start;
+  if (total + parts.length > _BREAK_LENGTH) return false;
+  for (let i = 0; i < parts.length; i++) {
+    total += parts[i].length;
+    if (total > _BREAK_LENGTH) return false;
+    if (parts[i].includes('\n')) return false;
+  }
+  return true;
+}
+function _reduceToSingleString(parts, prefix, open, close, currentDepth) {
+  if (parts.length === 0) return prefix + open + close;
+  const indentationLvl = currentDepth * 2;
+  const start = parts.length + indentationLvl + open.length + prefix.length + 10;
+  if (_belowBreakLength(parts, start)) {
+    const joined = parts.join(', ');
+    if (!joined.includes('\n')) return prefix + open + ' ' + joined + ' ' + close;
+  }
+  const indent = '\n' + ' '.repeat(indentationLvl);
+  return prefix + open + indent + '  ' + parts.join(',' + indent + '  ') + indent + close;
+}
+
 function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
   if (seen.has(obj)) return '[Circular]';
   seen.add(obj);
@@ -92,7 +122,7 @@ function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
     if (currentDepth >= maxDepth) return '[Array]';
     if (obj.length === 0) return '[]';
     const items = obj.map(v => _inspectValue(v, maxDepth, currentDepth + 1, seen, colors));
-    return '[ ' + items.join(', ') + ' ]';
+    return _reduceToSingleString(items, '', '[', ']', currentDepth);
   }
   if (obj instanceof Date) { const s = obj.toISOString(); return colors ? _colorize('date', s) : s; }
   if (obj instanceof RegExp) { const s = obj.toString(); return colors ? _colorize('regexp', s) : s; }
@@ -102,14 +132,14 @@ function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
     if (obj.size === 0) return 'Map(0) {}';
     const entries = [];
     for (const [k, v] of obj) entries.push(_inspectValue(k, maxDepth, currentDepth + 1, seen, colors) + ' => ' + _inspectValue(v, maxDepth, currentDepth + 1, seen, colors));
-    return 'Map(' + obj.size + ') { ' + entries.join(', ') + ' }';
+    return _reduceToSingleString(entries, 'Map(' + obj.size + ') ', '{', '}', currentDepth);
   }
   if (obj instanceof Set) {
     if (currentDepth >= maxDepth) return '[Set]';
     if (obj.size === 0) return 'Set(0) {}';
     const items = [];
     for (const v of obj) items.push(_inspectValue(v, maxDepth, currentDepth + 1, seen, colors));
-    return 'Set(' + obj.size + ') { ' + items.join(', ') + ' }';
+    return _reduceToSingleString(items, 'Set(' + obj.size + ') ', '{', '}', currentDepth);
   }
 
   // Compute tag prefix for non-plain objects
@@ -127,11 +157,11 @@ function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
   const keys = Object.keys(obj);
   const symKeys = Object.getOwnPropertySymbols(obj);
   if (keys.length === 0 && symKeys.length === 0) return prefix + '{}';
-  const pairs = keys.map(k => k + ': ' + _inspectValue(obj[k], maxDepth, currentDepth + 1, seen, colors));
+  const pairs = keys.map(k => _quoteKey(k) + ': ' + _inspectValue(obj[k], maxDepth, currentDepth + 1, seen, colors));
   for (const s of symKeys) {
     pairs.push('[' + s.toString() + ']: ' + _inspectValue(obj[s], maxDepth, currentDepth + 1, seen, colors));
   }
-  return prefix + '{ ' + pairs.join(', ') + ' }';
+  return _reduceToSingleString(pairs, prefix, '{', '}', currentDepth);
 }
 
 function _inspectValue(val, maxDepth, currentDepth, seen, colors) {
