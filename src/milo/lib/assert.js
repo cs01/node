@@ -459,10 +459,15 @@ function _deepEqual(a, b, strict) {
     return true;
   }
 
-  // Error comparison: compare message and name (non-enumerable props)
+  // Error comparison: message, name, and cause are non-enumerable own props,
+  // so the enumerable-keys pass below misses them — compare explicitly.
   if (a instanceof Error) {
     if (!(b instanceof Error)) return false;
     if (a.message !== b.message || a.name !== b.name) return false;
+    const ac = Object.prototype.hasOwnProperty.call(a, 'cause');
+    const bc = Object.prototype.hasOwnProperty.call(b, 'cause');
+    if (ac !== bc) return false;
+    if (ac && !_deepEqual(a.cause, b.cause, strict)) return false;
   }
 
   if (a instanceof Date) return a.getTime() === b.getTime();
