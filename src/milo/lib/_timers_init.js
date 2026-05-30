@@ -110,7 +110,16 @@ globalThis.setInterval = function setInterval(fn, delay, ...args) {
   _validateTimerCb(fn);
   _warnTimerDelay(delay);
   const t = new Timeout(0, fn, delay, args, true);
-  const wrapped = () => _safeCall(fn, args, t);
+  t._onTimeout = fn;
+  t._idleTimeout = delay;
+  // Honor Node's internal stop signals: clearing _onTimeout (null) or setting
+  // _idleTimeout < 0 from within the callback unenrolls the interval.
+  const wrapped = () => {
+    if (t._destroyed || t._idleTimeout < 0 || typeof t._onTimeout !== 'function') {
+      _tb.clear(t._id); _timerCallbacks.delete(t._id); return;
+    }
+    _safeCall(t._onTimeout, args, t);
+  };
   t._id = _tb.schedule(wrapped, Math.max(0, delay || 0), 1);
   _timerCallbacks.set(t._id, wrapped);
   return t;
