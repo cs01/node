@@ -20,7 +20,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | module     | pass/total | rate | priority | top blockers |
 |------------|-----------|------|----------|--------------|
 | event      | 26/28     | 92%  | —        | mostly passing |
-| next       | 8/9       | 88%  | —        | mostly passing |
+| next       | 9/9       | 100% | —        | done |
 | buffer     | 47/63     | 74%  | high     | ucs2 indexOf alignment, Buffer() DEP0005 dedup, arrayBufferViewHasBuffer (V8) |
 | querystring| 3/3       | 100% | —        | done |
 | process    | 45/57     | 78%  | high     | beforeExit re-emit on server close, execve, --title flag, hrtime natives |
@@ -159,6 +159,8 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
 
 ## done
+
+- [x] nextTick this-binding (was queue tuple) + module top-level this===module.exports; Readable.from validation + async-iter error reject. next 9/9
 
 - [x] require.cache Proxy (Module-object semantics over moduleCache) + _builtinCache for node: bypass; node:-prefix error codes — require 11->13, no load-path risk
 
