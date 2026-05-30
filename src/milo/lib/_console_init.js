@@ -72,17 +72,20 @@ process.stdin = _stdin;
 const _counts = {};
 const _timers = {};
 let _groupIndent = '';
+// Group indentation prefixes EVERY line of the output, not just the first
+// (multi-line strings/objects must each be indented).
+const _applyIndent = (s) => _groupIndent ? _groupIndent + s.replace(/\n/g, '\n' + _groupIndent) : s;
 const _fmtArgs = (args) => {
   if (args.length === 0) return '';
   if (typeof args[0] === 'string' && args.length > 1) return _util.format(...args);
   return args.map(_fmt).join(' ');
 };
 globalThis.console = {
-  log(...args) { process.stdout.write(_groupIndent + _fmtArgs(args) + '\n'); },
-  info(...args) { process.stdout.write(_groupIndent + _fmtArgs(args) + '\n'); },
-  debug(...args) { process.stdout.write(_groupIndent + _fmtArgs(args) + '\n'); },
-  error(...args) { process.stderr.write(_groupIndent + _fmtArgs(args) + '\n'); },
-  warn(...args) { process.stderr.write(_groupIndent + _fmtArgs(args) + '\n'); },
+  log(...args) { process.stdout.write(_applyIndent(_fmtArgs(args)) + '\n'); },
+  info(...args) { process.stdout.write(_applyIndent(_fmtArgs(args)) + '\n'); },
+  debug(...args) { process.stdout.write(_applyIndent(_fmtArgs(args)) + '\n'); },
+  error(...args) { process.stderr.write(_applyIndent(_fmtArgs(args)) + '\n'); },
+  warn(...args) { process.stderr.write(_applyIndent(_fmtArgs(args)) + '\n'); },
   dir(obj, opts) { _con.write(_util.inspect(obj, { depth: 2, ...opts }) + '\n'); },
   clear() { if (process.stdout.isTTY) process.stdout.write('\x1b[1;1H\x1b[0J'); },
   assert(val, ...args) { if (!val) console.error('Assertion failed:', ...args); },
@@ -92,9 +95,9 @@ globalThis.console = {
   timeEnd(label) { label = label === undefined ? 'default' : String(label); if (!(label in _timers)) { console.warn(`Timer '${label}' does not exist`); return; } const d = Date.now() - _timers[label]; delete _timers[label]; console.log(label + ': ' + d + 'ms'); },
   timeLog(label, ...args) { label = label === undefined ? 'default' : String(label); if (!(label in _timers)) { console.warn(`Timer '${label}' does not exist`); return; } const d = Date.now() - _timers[label]; console.log(label + ': ' + d + 'ms', ...args); },
   trace(...args) { const e = new Error(); console.error('Trace:', ...args, '\n' + e.stack); },
-  group(...args) { if (args.length > 0) _con.write(_groupIndent + _fmtArgs(args) + '\n'); _groupIndent += '  '; },
+  group(...args) { if (args.length > 0) _con.write(_applyIndent(_fmtArgs(args)) + '\n'); _groupIndent += '  '; },
   groupEnd() { if (_groupIndent.length >= 2) _groupIndent = _groupIndent.slice(2); },
-  groupCollapsed(...args) { if (args.length > 0) _con.write(_groupIndent + _fmtArgs(args) + '\n'); _groupIndent += '  '; },
+  groupCollapsed(...args) { if (args.length > 0) _con.write(_applyIndent(_fmtArgs(args)) + '\n'); _groupIndent += '  '; },
   table(data, columns) {
     if (columns !== undefined && !Array.isArray(columns)) { const e = new TypeError('"columns" argument must be an instance of Array'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
     if (!data || typeof data !== 'object') { console.log(data); return; }
@@ -110,7 +113,7 @@ globalThis.console = {
     _con.write('|' + sep + '|\n');
     for (const row of rowStrs) _con.write('| ' + row.map((c, i) => pad(c || '', widths[i])).join(' | ') + ' |\n');
   },
-  dirxml(...args) { process.stdout.write(_groupIndent + _fmtArgs(args) + '\n'); },
+  dirxml(...args) { process.stdout.write(_applyIndent(_fmtArgs(args)) + '\n'); },
 };
 // Attach Console class and set prototype for instanceof checks
 // require('console') is called AFTER globalThis.console is set so it picks up the right object
