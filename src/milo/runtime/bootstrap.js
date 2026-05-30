@@ -1196,6 +1196,25 @@
           // or plain look-alikes (which have href/protocol but aren't branded URLs).
           const _urlMod = globalThis.require('url');
           stub = { isURL: (v) => v instanceof globalThis.URL, URL: globalThis.URL, URLSearchParams: globalThis.URLSearchParams, pathToFileURL: _urlMod.pathToFileURL, fileURLToPath: _urlMod.fileURLToPath };
+        } else if (id === 'internal/linkedlist') {
+          // Port of Node's internal/linkedlist (circular doubly-linked, _idleNext/_idlePrev).
+          const remove = (item) => {
+            if (item._idleNext) item._idleNext._idlePrev = item._idlePrev;
+            if (item._idlePrev) item._idlePrev._idleNext = item._idleNext;
+            item._idleNext = null; item._idlePrev = null;
+          };
+          stub = {
+            init: (list) => { list._idleNext = list; list._idlePrev = list; },
+            peek: (list) => (list._idlePrev === list ? null : list._idlePrev),
+            shift: (list) => { const first = list._idlePrev; remove(first); return first; },
+            remove,
+            append: (list, item) => {
+              if (item._idleNext !== null || item._idlePrev !== null) remove(item);
+              item._idleNext = list._idleNext; item._idlePrev = list;
+              list._idleNext._idlePrev = item; list._idleNext = item;
+            },
+            isEmpty: (list) => list._idleNext === list,
+          };
         } else if (id === 'internal/timers') {
           stub = {
             setUnrefTimeout: (callback, after, ...args) => {
