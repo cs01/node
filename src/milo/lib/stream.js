@@ -478,7 +478,33 @@ Readable.prototype.toArray = function() {
   });
 };
 
+// Shared argument validation for the async iterator helpers (map/filter/...).
+function _validateIterHelper(fn, options) {
+  if (typeof fn !== 'function') {
+    const e = new TypeError('The "fn" argument must be of type function. Received ' + (fn === null ? 'null' : 'type ' + typeof fn));
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (options != null) {
+    if (typeof options !== 'object') {
+      const e = new TypeError('The "options" argument must be of type object. Received ' + (typeof options) + ' (' + options + ')');
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    if (options.concurrency != null) {
+      const c = options.concurrency;
+      if (typeof c !== 'number' || !Number.isInteger(c) || c < 1) {
+        const e = new RangeError('The value of "concurrency" is out of range. It must be >= 1. Received ' + (typeof c === 'number' ? c : JSON.stringify(c)));
+        e.code = 'ERR_OUT_OF_RANGE'; throw e;
+      }
+    }
+    if (options.signal != null && !(typeof options.signal === 'object' && 'aborted' in options.signal)) {
+      const e = new TypeError('The "options.signal" argument must be an instance of AbortSignal. Received ' + (typeof options.signal));
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+  }
+}
+
 Readable.prototype.map = function(fn, options) {
+  _validateIterHelper(fn, options);
   const dest = new Readable({ objectMode: true, read() {} });
   this.on('data', (chunk) => dest.push(fn(chunk)));
   this.on('end', () => dest.push(null));
@@ -487,6 +513,7 @@ Readable.prototype.map = function(fn, options) {
 };
 
 Readable.prototype.filter = function(fn, options) {
+  _validateIterHelper(fn, options);
   const dest = new Readable({ objectMode: true, read() {} });
   this.on('data', (chunk) => { if (fn(chunk)) dest.push(chunk); });
   this.on('end', () => dest.push(null));
@@ -508,7 +535,20 @@ Readable.prototype.reduce = function(fn, initial) {
   });
 };
 
-Readable.prototype.forEach = function(fn) {
+// drop()/take() take a numeric limit + options instead of a fn.
+function _validateLimit(number, options) {
+  if (typeof number !== 'number' || !Number.isInteger(number) || number < 0) {
+    const e = new RangeError('The value of "number" is out of range. It must be >= 0. Received ' + (typeof number === 'number' ? number : JSON.stringify(number)));
+    e.code = 'ERR_OUT_OF_RANGE'; throw e;
+  }
+  if (options != null) {
+    if (typeof options !== 'object') { const e = new TypeError('The "options" argument must be of type object. Received ' + typeof options + ' (' + options + ')'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    if (options.signal != null && !(typeof options.signal === 'object' && 'aborted' in options.signal)) { const e = new TypeError('The "options.signal" argument must be an instance of AbortSignal. Received ' + typeof options.signal); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+  }
+}
+
+Readable.prototype.forEach = function(fn, options) {
+  _validateIterHelper(fn, options);
   return new Promise((resolve, reject) => {
     this.on('data', (chunk) => fn(chunk));
     this.on('end', () => resolve());
@@ -517,7 +557,8 @@ Readable.prototype.forEach = function(fn) {
   });
 };
 
-Readable.prototype.some = function(fn) {
+Readable.prototype.some = function(fn, options) {
+  _validateIterHelper(fn, options);
   return new Promise((resolve, reject) => {
     this.on('data', (chunk) => { if (fn(chunk)) { resolve(true); this.destroy(); } });
     this.on('end', () => resolve(false));
@@ -526,7 +567,8 @@ Readable.prototype.some = function(fn) {
   });
 };
 
-Readable.prototype.every = function(fn) {
+Readable.prototype.every = function(fn, options) {
+  _validateIterHelper(fn, options);
   return new Promise((resolve, reject) => {
     this.on('data', (chunk) => { if (!fn(chunk)) { resolve(false); this.destroy(); } });
     this.on('end', () => resolve(true));
@@ -535,7 +577,8 @@ Readable.prototype.every = function(fn) {
   });
 };
 
-Readable.prototype.find = function(fn) {
+Readable.prototype.find = function(fn, options) {
+  _validateIterHelper(fn, options);
   return new Promise((resolve, reject) => {
     this.on('data', (chunk) => { if (fn(chunk)) { resolve(chunk); this.destroy(); } });
     this.on('end', () => resolve(undefined));
@@ -545,6 +588,7 @@ Readable.prototype.find = function(fn) {
 };
 
 Readable.prototype.flatMap = function(fn, options) {
+  _validateIterHelper(fn, options);
   const dest = new Readable({ objectMode: true, read() {} });
   this.on('data', (chunk) => {
     const mapped = fn(chunk);
@@ -559,7 +603,8 @@ Readable.prototype.flatMap = function(fn, options) {
   return dest;
 };
 
-Readable.prototype.take = function(limit) {
+Readable.prototype.take = function(limit, options) {
+  _validateLimit(limit, options);
   const dest = new Readable({ objectMode: true, read() {} });
   let count = 0;
   this.on('data', (chunk) => {
@@ -571,7 +616,8 @@ Readable.prototype.take = function(limit) {
   return dest;
 };
 
-Readable.prototype.drop = function(limit) {
+Readable.prototype.drop = function(limit, options) {
+  _validateLimit(limit, options);
   const dest = new Readable({ objectMode: true, read() {} });
   let count = 0;
   this.on('data', (chunk) => {
