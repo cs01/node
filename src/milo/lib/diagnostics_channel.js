@@ -24,10 +24,12 @@ class Channel {
   }
 
   runStores(data, fn, thisArg, ...args) {
-    if (!this._stores || this._stores.length === 0) return fn.apply(thisArg, args);
+    // Node publishes the message inside the bound store context(s).
+    const inner = () => { this.publish(data); return fn.apply(thisArg, args); };
+    if (!this._stores || this._stores.length === 0) return inner();
     let result;
     const run = (i) => {
-      if (i >= this._stores.length) { result = fn.apply(thisArg, args); return; }
+      if (i >= this._stores.length) { result = inner(); return; }
       const { store, transform } = this._stores[i];
       store.run(transform(data), () => run(i + 1));
     };
@@ -103,31 +105,41 @@ class TracingChannel {
   get hasSubscribers() { return this.start.hasSubscribers || this.end.hasSubscribers || this.asyncStart.hasSubscribers || this.asyncEnd.hasSubscribers || this.error.hasSubscribers; }
   subscribe(handlers) { for (const [k, fn] of Object.entries(handlers)) { if (this[k]) this[k].subscribe(fn); } }
   unsubscribe(handlers) { for (const [k, fn] of Object.entries(handlers)) { if (this[k]) this[k].unsubscribe(fn); } }
-  traceSync(fn, ctx, thisArg, ...args) { this.start.publish(ctx); try { const result = fn.apply(thisArg, args); ctx.result = result; return result; } catch(e) { ctx.error = e; this.error.publish(ctx); throw e; } finally { this.end.publish(ctx); } }
-  tracePromise(fn, ctx) {
-    this.start.publish(ctx);
-    try {
-      const result = fn(ctx);
-      return Promise.resolve(result).then(
-        (v) => { this.asyncStart.publish(ctx); this.asyncEnd.publish(ctx); this.end.publish(ctx); return v; },
-        (e) => { ctx.error = e; this.error.publish(ctx); this.asyncStart.publish(ctx); this.asyncEnd.publish(ctx); this.end.publish(ctx); throw e; }
-      );
-    } catch (e) { ctx.error = e; this.error.publish(ctx); this.end.publish(ctx); throw e; }
+  traceSync(fn, ctx, thisArg, ...args) {
+    if (ctx === undefined) ctx = {};
+    return this.start.runStores(ctx, () => {
+      try { const result = fn.apply(thisArg, args); ctx.result = result; return result; }
+      catch (e) { ctx.error = e; this.error.publish(ctx); throw e; }
+      finally { this.end.publish(ctx); }
+    });
+  }
+  tracePromise(fn, ctx, thisArg, ...args) {
+    if (ctx === undefined) ctx = {};
+    return this.start.runStores(ctx, () => {
+      try {
+        const result = fn.apply(thisArg, args);
+        return Promise.resolve(result).then(
+          (v) => { ctx.result = v; this.asyncStart.publish(ctx); this.asyncEnd.publish(ctx); this.end.publish(ctx); return v; },
+          (e) => { ctx.error = e; this.error.publish(ctx); this.asyncStart.publish(ctx); this.asyncEnd.publish(ctx); this.end.publish(ctx); throw e; }
+        );
+      } catch (e) { ctx.error = e; this.error.publish(ctx); this.end.publish(ctx); throw e; }
+    });
   }
   traceCallback(fn, position, ctx, thisArg, ...args) {
+    if (ctx === undefined) ctx = {};
     const origCb = args[position];
     const self = this;
     args[position] = function(...cbArgs) {
-      if (cbArgs[0]) {
-        ctx.error = cbArgs[0];
-        self.error.publish(ctx);
-      }
+      if (cbArgs[0]) { ctx.error = cbArgs[0]; self.error.publish(ctx); }
+      else if (cbArgs.length > 1) { ctx.result = cbArgs[1]; }
       self.asyncStart.publish(ctx);
       try { if (origCb) return origCb.apply(this, cbArgs); }
       finally { self.asyncEnd.publish(ctx); self.end.publish(ctx); }
     };
-    this.start.publish(ctx);
-    try { return fn.apply(thisArg, args); } catch(e) { ctx.error = e; this.error.publish(ctx); this.end.publish(ctx); throw e; }
+    return this.start.runStores(ctx, () => {
+      try { return fn.apply(thisArg, args); }
+      catch (e) { ctx.error = e; this.error.publish(ctx); this.end.publish(ctx); throw e; }
+    });
   }
 }
 
