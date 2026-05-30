@@ -99,10 +99,36 @@ EventEmitter.prototype.emit = function(type) {
   }
   const args = new Array(arguments.length - 1);
   for (let i = 1; i < arguments.length; i++) args[i - 1] = arguments[i];
-  if (typeof handlers === 'function') { handlers.apply(this, args); }
-  else { const copy = handlers.slice(); for (let i = 0; i < copy.length; i++) copy[i].apply(this, args); }
+  const capture = this._captureRejections;
+  if (typeof handlers === 'function') {
+    const r = handlers.apply(this, args);
+    if (capture && r && typeof r.then === 'function') _addCatch(this, r, type, args);
+  } else {
+    const copy = handlers.slice();
+    for (let i = 0; i < copy.length; i++) {
+      const r = copy[i].apply(this, args);
+      if (capture && r && typeof r.then === 'function') _addCatch(this, r, type, args);
+    }
+  }
   return true;
 };
+
+// captureRejections: a listener returning a rejecting promise routes the error to
+// the emitter's rejection handler, or 'error' (with capture disabled to avoid loops).
+function _addCatch(ee, promise, type, args) {
+  promise.then(undefined, function(err) {
+    process.nextTick(function() {
+      const sym = EventEmitter.captureRejectionSymbol;
+      if (typeof ee[sym] === 'function') {
+        ee[sym](err, type, ...args);
+      } else {
+        const prev = ee._captureRejections;
+        try { ee._captureRejections = false; ee.emit('error', err); }
+        finally { ee._captureRejections = prev; }
+      }
+    });
+  });
+}
 
 EventEmitter.prototype.on = function(type, fn) {
   if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
@@ -414,6 +440,8 @@ module.exports.once = once;
 module.exports.on = EventEmitter.on;
 module.exports.addAbortListener = EventEmitter.addAbortListener;
 module.exports.getEventListeners = EventEmitter.getEventListeners;
+module.exports.captureRejectionSymbol = EventEmitter.captureRejectionSymbol;
+module.exports.errorMonitor = EventEmitter.errorMonitor;
 module.exports.listenerCount = EventEmitter.listenerCount;
 module.exports.captureRejections = EventEmitter.captureRejections;
 module.exports.captureRejectionSymbol = EventEmitter.captureRejectionSymbol;
