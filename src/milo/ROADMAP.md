@@ -19,7 +19,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 
 | module     | pass/total | rate | priority | top blockers |
 |------------|-----------|------|----------|--------------|
-| event      | 26/28     | 92%  | —        | mostly passing |
+| event      | 27/28     | 96%  | —        | captureRejections |
 | next       | 9/9       | 100% | —        | done |
 | buffer     | 47/63     | 74%  | high     | ucs2 indexOf alignment, Buffer() DEP0005 dedup, arrayBufferViewHasBuffer (V8) |
 | querystring| 3/3       | 100% | —        | done |
@@ -159,6 +159,8 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
 
 ## done
+
+- [x] events.removeAllListeners emits removeListener per-listener (Reflect.ownKeys for symbols) — event 27/28
 
 - [x] nextTick this-binding (was queue tuple) + module top-level this===module.exports; Readable.from validation + async-iter error reject. next 9/9
 
