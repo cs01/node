@@ -678,6 +678,9 @@
   const _path = _pathMod.exports;
 
   const moduleCache = { path: _path };
+  // Immutable builtin exports (keyed by id), so node:-prefixed requires can return
+  // the real builtin even after a user replaces moduleCache[id] via require.cache.
+  const _builtinCache = { path: _path };
   const _moduleWrappers = {};
   // Persistent map of resolved-path -> Module object (not just exports) so
   // module.children can be populated. moduleCache holds exports and _moduleWrappers
@@ -1093,6 +1096,7 @@
     mod.loaded = true;
     moduleCache[resolved] = mod.exports;
     if (isBare && id !== resolved) moduleCache[id] = mod.exports;
+    if (isBuiltin && _builtinCache[id] === undefined) _builtinCache[id] = mod.exports;
     delete _moduleWrappers[resolved];
     if (isBare && id !== resolved) delete _moduleWrappers[id];
     return mod.exports;
@@ -1104,6 +1108,9 @@
       if (_hadNodePrefix) id = id.slice(5);
       const flatId = id.replace(/\//g, '_');
       if (_moduleWrappers[id]) return _moduleWrappers[id].exports;
+      // node:-prefixed specifiers resolve to the real builtin from the immutable
+      // builtin cache, bypassing any user-installed require.cache override.
+      if (_hadNodePrefix && _builtinCache[id] !== undefined) return _builtinCache[id];
       if (moduleCache[id]) return moduleCache[id];
 
       // Handle internal/* requires (--expose-internals compatibility)
@@ -1360,7 +1367,28 @@
       }
       return paths;
     };
-    require.cache = moduleCache;
+    // require.cache presents Module-object semantics ({ exports } entries) over the
+    // internal exports-keyed moduleCache, so user code can read/replace/delete cache
+    // entries the Node way (e.g. require.cache[p] = { exports }, delete require.cache[p]).
+    require.cache = new Proxy(moduleCache, {
+      get(t, k) {
+        if (typeof k === 'symbol' || !(k in t)) return undefined;
+        return _moduleObjects[k] || { id: k, exports: t[k], loaded: true };
+      },
+      set(t, k, v) {
+        const exp = (v && typeof v === 'object' && 'exports' in v) ? v.exports : v;
+        t[k] = exp;
+        if (_moduleObjects[k]) _moduleObjects[k].exports = exp;
+        return true;
+      },
+      has(t, k) { return k in t; },
+      deleteProperty(t, k) { delete t[k]; delete _moduleObjects[k]; return true; },
+      ownKeys(t) { return Reflect.ownKeys(t); },
+      getOwnPropertyDescriptor(t, k) {
+        if (!(k in t)) return undefined;
+        return { configurable: true, enumerable: true, value: _moduleObjects[k] || { id: k, exports: t[k], loaded: true } };
+      },
+    });
     Object.defineProperty(require, 'extensions', {
       get() { try { return globalThis.require('module')._extensions; } catch { return {}; } },
       configurable: true,
