@@ -138,9 +138,10 @@ fn timerFireDue(info: *u8, _ud: *u8): void {
         for i in 0..256 {
             if t_active[i as i64] != 0 {
                 if t_dsec[i as i64] < now_s || (t_dsec[i as i64] == now_s && t_dnsec[i as i64] <= now_ns) {
-                    v8c_function_call(stored_ctx, t_cb[i as i64], undef.slot, 0, 0 as *i32)
-                    fired = fired + 1
-
+                    // Update slot state BEFORE invoking the callback: a callback that
+                    // calls timer.refresh() clears this slot and reschedules into it,
+                    // so deactivating after the call would clobber the refreshed timer.
+                    let cb = t_cb[i as i64]
                     if t_interval[i as i64] > 0 {
                         var dsec: i64 = 0
                         var dnsec: i64 = 0
@@ -151,6 +152,8 @@ fn timerFireDue(info: *u8, _ud: *u8): void {
                         t_active[i as i64] = 0
                         timer_count = timer_count - 1
                     }
+                    v8c_function_call(stored_ctx, cb, undef.slot, 0, 0 as *i32)
+                    fired = fired + 1
                 }
             }
         }

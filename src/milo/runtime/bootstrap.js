@@ -1196,6 +1196,18 @@
           // or plain look-alikes (which have href/protocol but aren't branded URLs).
           const _urlMod = globalThis.require('url');
           stub = { isURL: (v) => v instanceof globalThis.URL, URL: globalThis.URL, URLSearchParams: globalThis.URLSearchParams, pathToFileURL: _urlMod.pathToFileURL, fileURLToPath: _urlMod.fileURLToPath };
+        } else if (id === 'internal/timers') {
+          stub = {
+            setUnrefTimeout: (callback, after, ...args) => {
+              if (typeof callback !== 'function') {
+                const e = new TypeError('The "callback" argument must be of type function. Received ' + (callback === null ? 'null' : 'type ' + typeof callback));
+                e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+              }
+              const t = setTimeout(callback, after, ...args); t.unref(); return t;
+            },
+            active: (t) => { if (t && typeof t.refresh === 'function') t.refresh(); return t; },
+            unrefActive: (t) => { if (t && typeof t.refresh === 'function') { t.refresh(); if (t.unref) t.unref(); } return t; },
+          };
         } else if (id === 'internal/options') {
           stub = { getOptionValue: (name) => { if (name === '--insecure-http-parser') return false; if (name === '--use-env-proxy') return false; if (name === '--force-fips') return false; if (name === '--enable-source-maps') return false; if (name === '--pending-deprecation') return false; return undefined; } };
         } else if (id === 'internal/validators') {
