@@ -414,11 +414,19 @@ function fstatSync(fd) {
   return _wrapStats(result);
 }
 
+function _bufferArgError(buffer) {
+  let recv;
+  if (buffer === null) recv = 'null';
+  else if (typeof buffer === 'object') recv = 'an instance of ' + (buffer.constructor && buffer.constructor.name ? buffer.constructor.name : 'Object');
+  else recv = 'type ' + typeof buffer + ' (' + buffer + ')';
+  const e = new TypeError('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received ' + recv);
+  e.code = 'ERR_INVALID_ARG_TYPE'; return e;
+}
+
 function readSync(fd, buffer, offset, length, position) {
   _validateFd(fd);
   if (!Buffer.isBuffer(buffer) && !ArrayBuffer.isView(buffer)) {
-    const e = new TypeError('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received type ' + typeof buffer + ' (' + buffer + ')');
-    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    throw _bufferArgError(buffer);
   }
   if (offset != null && typeof offset === 'object' && !Array.isArray(offset) && !(offset instanceof String)) {
     ({ offset = 0, length = buffer.length, position = null } = offset);
@@ -925,8 +933,11 @@ function read(fd, buffer, offset, length, position, cb) {
       length = opts.length != null ? opts.length : buffer.length - offset;
       position = opts.position != null ? opts.position : null;
     } else {
+      // read(fd, cb) with a null/undefined options arg → default buffer;
+      // read(fd, buffer, cb) → keep the provided buffer.
+      if (buffer == null) buffer = Buffer.alloc(16384);
       offset = 0;
-      length = buffer ? buffer.length : 0;
+      length = buffer.length;
       position = null;
     }
   } else if (typeof length === 'function') {
@@ -985,13 +996,9 @@ function read(fd, buffer, offset, length, position, cb) {
     process.nextTick(() => cb(null, n, buffer));
   } catch (e) { process.nextTick(() => cb(e)); }
 }
-read[Symbol.for('nodejs.util.promisify.custom')] = function(fd, buffer, offset, length, position) {
-  return new Promise((resolve, reject) => {
-    read(fd, buffer, offset, length, position, (err, bytesRead, buf) => {
-      if (err) reject(err); else resolve({ bytesRead, buffer: buf });
-    });
-  });
-};
+// No promisify.custom here — the customArgs tag (set near module.exports) lets
+// util.promisify resolve {bytesRead, buffer} while the callback read() above
+// handles all the option/overload forms (a custom wrapper missed them).
 
 function fstat(fd, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
@@ -1051,13 +1058,7 @@ function write(fd, buffer, offset, length, position, cb) {
     process.nextTick(() => cb(null, n, buffer));
   } catch (e) { process.nextTick(() => cb(e)); }
 }
-write[Symbol.for('nodejs.util.promisify.custom')] = function(fd, buffer, offset, length, position) {
-  return new Promise((resolve, reject) => {
-    write(fd, buffer, offset, length, position, (err, bytesWritten, buf) => {
-      if (err) reject(err); else resolve({ bytesWritten, buffer: buf });
-    });
-  });
-};
+// customArgs tag (near module.exports) handles util.promisify(fs.write).
 
 // --- fs.watch / watchFile / unwatchFile via kqueue EVFILT_VNODE ---
 const EventEmitter = require('events');
@@ -1243,17 +1244,25 @@ const promises = {
       const fd = openSync(p, flags || 'r', mode);
       const handle = {
         fd,
-        close() { closeSync(fd); return Promise.resolve(); },
+        close() { if (!this._closed) { this._closed = true; closeSync(fd); this.emit('close'); } return Promise.resolve(); },
         read(buf, off, len, pos) {
-          // mirror fs.read overloads: read(buf, {offset,length,position}) and null offset/len → defaults
-          if (off != null && typeof off === 'object' && !Buffer.isBuffer(off) && !ArrayBuffer.isView(off)) {
-            const _o = off.offset == null ? 0 : off.offset; len = off.length == null ? buf.length - _o : off.length; pos = off.position == null ? null : off.position; off = _o;
-          } else {
-            if (off == null) off = 0;
-            if (len == null) len = buf.length - off;
-            if (pos === undefined) pos = null;
+          // FileHandle.read overloads: read(buffer,offset,length,position),
+          // read(buffer,{offset,length,position}), and read({buffer,offset,length,position}).
+          if (buf != null && typeof buf === 'object' && !Buffer.isBuffer(buf) && !ArrayBuffer.isView(buf)) {
+            const o = buf;
+            buf = o.buffer === undefined ? Buffer.alloc(16384) : o.buffer;
+            off = o.offset; len = o.length; pos = o.position;
+          } else if (buf == null) {
+            buf = Buffer.alloc(16384);
+          } else if (off != null && typeof off === 'object' && !Buffer.isBuffer(off) && !ArrayBuffer.isView(off)) {
+            const o = off; off = o.offset; len = o.length; pos = o.position;
           }
-          return Promise.resolve({ bytesRead: readSync(fd, buf, off, len, pos), buffer: buf });
+          if (!Buffer.isBuffer(buf) && !ArrayBuffer.isView(buf)) return Promise.reject(_bufferArgError(buf));
+          if (off == null) off = 0;
+          if (len == null) len = buf.byteLength - off;
+          if (pos === undefined) pos = null;
+          try { return Promise.resolve({ bytesRead: readSync(fd, buf, off, len, pos), buffer: buf }); }
+          catch (e) { return Promise.reject(e); }
         },
         write(buf, off, len, pos) { return Promise.resolve({ bytesWritten: writeSync(fd, buf, off, len, pos), buffer: buf }); },
         stat() { return Promise.resolve(fstatSync(fd)); },
@@ -1264,9 +1273,13 @@ const promises = {
         sync() { fsyncSync(fd); return Promise.resolve(); },
         truncate(len) { ftruncateSync(fd, len); return Promise.resolve(); },
         // explicit resource management: `await using fh = await open(...)` closes on scope exit
-        [Symbol.asyncDispose]() { try { closeSync(fd); } catch {} return Promise.resolve(); },
-        [Symbol.dispose]() { try { closeSync(fd); } catch {} },
+        [Symbol.asyncDispose]() { return this.close(); },
+        [Symbol.dispose]() { try { this.close(); } catch {} },
       };
+      // FileHandle is an EventEmitter (emits 'close'); methods stay own props.
+      const _EE = require('events');
+      Object.setPrototypeOf(handle, _EE.prototype);
+      _EE.call(handle);
       return Promise.resolve(handle);
     } catch (e) { return Promise.reject(e); }
   },
@@ -1396,6 +1409,14 @@ function opendirSync(path, options) {
       return { next() { const v = self.readSync(); return Promise.resolve(v ? { value: v, done: false } : { done: true }); } };
     },
   };
+}
+
+// util.promisify(fs.read/write) must resolve with a named object, not just the
+// first callback value — Node tags these with the customArgs symbol.
+{
+  const _cpa = Symbol.for('nodejs.util.promisify.customArgs');
+  read[_cpa] = ['bytesRead', 'buffer'];
+  write[_cpa] = ['bytesWritten', 'buffer'];
 }
 
 module.exports = {
