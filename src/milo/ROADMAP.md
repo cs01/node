@@ -32,7 +32,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | module     | 21/26     | 80%  | high     | .node dlopen, circular-dep warning, main-fail stderr |
 | console    | 8/14      | 57%  | med      | Console constructor, tty colors |
 | path       | 8/15      | 53%  | med      | edge cases |
-| diagnostics| 8/17      | 47%  | low      | channel subscribe/unsubscribe |
+| diagnostics| 10/17     | 58%  | low      | tracingChannel+ALS async propagation, udp |
 | fs         | 99/201    | 49%  | high     | dispose ERR_DIR_CLOSED, readFile+signal, error codes |
 | http       | 91/210    | 43%  | high     | timeout/abort, keep-alive, error codes |
 | net        | 44/106    | 41%  | high     | Socket not extending Duplex |
