@@ -104,6 +104,11 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 ### net
 - [ ] net.Socket should extend Duplex (currently extends EventEmitter with ad-hoc methods)
 
+### vm real V8 contexts (HIGH VALUE — ~50 vm tests + jest/templating packages)
+- [ ] vm.runInNewContext currently uses eval/Function (no realm isolation) — foreign objects share our Function.prototype
+- [ ] v8capi already exposes v8c_context_new; need a vm binding: new context, marshal sandbox<->global, compile+run in context
+- [ ] blocks util-promisify (cross-realm prototype check) + most vm module tests
+
 ### missing APIs (scattered but cumulative)
 - [ ] `dns.Resolver` class (~30 tests)
 - [ ] `crypto.createDiffieHellman/ECDH/getDiffieHellman` (~40 tests)
@@ -151,6 +156,9 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 
 ## done
 
+- [x] util.promisify faithful port — resolve first value (was returning array: real bug breaking packages), customPromisifyArgs->named object, setPrototypeOf+own-descriptors, no cache; util-promisify now blocked ONLY by vm realm isolation (line 102 cross-realm prototype)
+- [x] internal/util sleep (validated msec) + customPromisifyArgs export (util-sleep, timers-nested)
+- [x] timers/promises validation + AbortError cause + promisify.custom wiring (timeout/immediate-promisified)
 - [x] buffer ascii decode masks high bit (byte & 0x7f), separate from latin1 (test-buffer-ascii)
 - [x] process.exit funnels through overridable process.reallyExit; process reports as #<process> (really-exit, exit-code-validation)
 - [x] process.kill returns true + propagates kill(2) errno (dead-pid signal-0 probe throws)
