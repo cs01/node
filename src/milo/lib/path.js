@@ -485,7 +485,61 @@ const win32 = {
     return dir === o.root ? dir + base : dir + '\\' + base;
   },
   toNamespacedPath(p) { return p; },
-  relative(from, to) { validateString(from, 'from'); validateString(to, 'to'); return relative(from.replace(/\\/g, '/'), to.replace(/\\/g, '/')).replace(/\//g, '\\'); },
+  relative(from, to) {
+    validateString(from, 'from'); validateString(to, 'to');
+    if (from === to) return '';
+    const fromOrig = win32.resolve(from);
+    const toOrig = win32.resolve(to);
+    if (fromOrig === toOrig) return '';
+    // Case-only differences resolve to the same path (length-changing lowercase is
+    // fine for an equality check since both sides change identically).
+    if (fromOrig.toLowerCase() === toOrig.toLowerCase()) return '';
+    // Compare case-insensitively on the ORIGINAL strings (ASCII only). Pre-lowercasing
+    // the whole string can change its length (e.g. İ→i̇) and misalign the indices used
+    // to slice the original-case result.
+    const _lc = (c) => (c >= 65 && c <= 90) ? c + 32 : c;
+    from = fromOrig;
+    to = toOrig;
+    let fromStart = 0;
+    while (fromStart < from.length && from.charCodeAt(fromStart) === _CC_BSLASH) fromStart++;
+    let fromEnd = from.length;
+    while (fromEnd - 1 > fromStart && from.charCodeAt(fromEnd - 1) === _CC_BSLASH) fromEnd--;
+    const fromLen = fromEnd - fromStart;
+    let toStart = 0;
+    while (toStart < to.length && to.charCodeAt(toStart) === _CC_BSLASH) toStart++;
+    let toEnd = to.length;
+    while (toEnd - 1 > toStart && to.charCodeAt(toEnd - 1) === _CC_BSLASH) toEnd--;
+    const toLen = toEnd - toStart;
+    const length = fromLen < toLen ? fromLen : toLen;
+    let lastCommonSep = -1;
+    let i = 0;
+    for (; i < length; i++) {
+      const fromCode = from.charCodeAt(fromStart + i);
+      if (_lc(fromCode) !== _lc(to.charCodeAt(toStart + i))) break;
+      else if (fromCode === _CC_BSLASH) lastCommonSep = i;
+    }
+    if (i !== length) {
+      if (lastCommonSep === -1) return toOrig;
+    } else {
+      if (toLen > length) {
+        if (to.charCodeAt(toStart + i) === _CC_BSLASH) return toOrig.slice(toStart + i + 1);
+        if (i === 2) return toOrig.slice(toStart + i);
+      }
+      if (fromLen > length) {
+        if (from.charCodeAt(fromStart + i) === _CC_BSLASH) lastCommonSep = i;
+        else if (i === 2) lastCommonSep = 3;
+      }
+      if (lastCommonSep === -1) lastCommonSep = 0;
+    }
+    let out = '';
+    for (i = fromStart + lastCommonSep + 1; i <= fromEnd; ++i) {
+      if (i === fromEnd || from.charCodeAt(i) === _CC_BSLASH) out += out.length === 0 ? '..' : '\\..';
+    }
+    toStart += lastCommonSep;
+    if (out.length > 0) return out + toOrig.slice(toStart, toEnd);
+    if (toOrig.charCodeAt(toStart) === _CC_BSLASH) ++toStart;
+    return toOrig.slice(toStart, toEnd);
+  },
 };
 win32.posix = null;
 win32.win32 = win32;
