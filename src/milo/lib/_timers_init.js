@@ -138,7 +138,7 @@ globalThis.clearImmediate = function clearImmediate(t) {
 // One event-loop iteration for a worker thread: fire due timers, drain ticks +
 // microtasks + immediates, return whether timer/immediate/tick work remains.
 Object.defineProperty(globalThis, '__workerTick', { value: function __workerTick() {
-  const tick = () => { if (process._tickCallback) process._tickCallback(); };
+  const tick = () => { if (process.processTicksAndRejections) process.processTicksAndRejections(); };
   tick(); _tb.drainMicrotasks(); tick();
   _tb.fireDue();
   _drainImmediates();
@@ -175,7 +175,7 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
   let net = null;
   try { net = require('net'); } catch {}
   const poll = net && net._pollOnce;
-  const tick = () => { if (process._tickCallback) process._tickCallback(); };
+  const tick = () => { if (process.processTicksAndRejections) process.processTicksAndRejections(); };
   const drainAll = () => { tick(); _tb.drainMicrotasks(); tick(); };
 
   for (;;) {

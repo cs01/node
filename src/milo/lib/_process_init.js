@@ -133,7 +133,9 @@ if (!process.hrtime) {
 
 // Proper nextTick queue — runs before promises, drains recursively
 process._nextTickQueue = [];
-process._tickCallback = function() {
+// Named processTicksAndRejections so it shows up under that frame in stack traces
+// (Node tests assert "at process.processTicksAndRejections"). _tickCallback aliases it.
+process.processTicksAndRejections = function processTicksAndRejections() {
   while (process._nextTickQueue.length > 0) {
     const entry = process._nextTickQueue.shift();
     try { entry[0](...entry[1]); }
@@ -143,6 +145,7 @@ process._tickCallback = function() {
     }
   }
 };
+process._tickCallback = process.processTicksAndRejections;
 process.nextTick = (fn, ...args) => {
   if (typeof fn !== 'function') {
     const e = new TypeError('The "callback" argument must be of type function. Received ' +
