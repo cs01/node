@@ -239,7 +239,12 @@ Object.defineProperty(EventEmitter, 'defaultMaxListeners', {
 });
 EventEmitter.EventEmitter = EventEmitter;
 EventEmitter.listenerCount = function(emitter, type) { return emitter.listenerCount(type); };
-EventEmitter.getEventListeners = function(emitter, type) { return emitter.listeners(type); };
+EventEmitter.getEventListeners = function(emitterOrTarget, type) {
+  // EventTarget keeps its own store; EventEmitter exposes .listeners().
+  if (typeof emitterOrTarget.listeners === 'function') return emitterOrTarget.listeners(type);
+  if (typeof emitterOrTarget._eventListeners === 'function') return emitterOrTarget._eventListeners(type);
+  return [];
+};
 // Polyfill getMaxListeners/setMaxListeners on EventTarget so static API works
 if (typeof EventTarget !== 'undefined' && !EventTarget.prototype.getMaxListeners) {
   EventTarget.prototype.getMaxListeners = function() {
@@ -277,25 +282,46 @@ EventEmitter.setMaxListeners = function(n) {
   }
 };
 
-function once(emitter, type) {
-  if (typeof emitter.addEventListener === 'function' && typeof emitter.on !== 'function') {
-    return new Promise(function(resolve) {
-      emitter.addEventListener(type, function onRes(ev) {
-        emitter.removeEventListener(type, onRes);
-        resolve([ev]);
-      });
-    });
+function _onceAbortError(signal) {
+  const e = new Error('The operation was aborted');
+  e.name = 'AbortError'; e.code = 'ABORT_ERR';
+  if (signal && signal.reason !== undefined) e.cause = signal.reason;
+  return e;
+}
+
+function once(emitter, type, options) {
+  const signal = options && options.signal;
+  // validateAbortSignal: accept any object exposing `aborted` (NodeEventTarget
+  // mocks included), reject otherwise. Surface as a rejection, not a sync throw,
+  // so `assert.rejects(once(...))` works.
+  if (signal !== undefined && (signal === null || typeof signal !== 'object' || !('aborted' in signal))) {
+    const e = new TypeError('The "options.signal" argument must be an instance of AbortSignal. Received ' + (signal === null ? 'null' : typeof signal));
+    e.code = 'ERR_INVALID_ARG_TYPE';
+    return Promise.reject(e);
   }
+  if (signal && signal.aborted) return Promise.reject(_onceAbortError(signal));
+
+  const isTarget = typeof emitter.addEventListener === 'function' && typeof emitter.on !== 'function';
   return new Promise(function(resolve, reject) {
-    var onErr = function(e) { emitter.removeListener(type, onRes); reject(e); };
-    var onRes = function() {
-      emitter.removeListener('error', onErr);
-      var args = new Array(arguments.length);
-      for (var i = 0; i < arguments.length; i++) args[i] = arguments[i];
-      resolve(args);
-    };
-    emitter.once(type, onRes);
-    if (type !== 'error') emitter.once('error', onErr);
+    let abortListener = null;
+    const cleanup = () => { if (signal && abortListener) signal.removeEventListener('abort', abortListener); };
+    if (isTarget) {
+      const onRes = function(ev) { emitter.removeEventListener(type, onRes); cleanup(); resolve([ev]); };
+      emitter.addEventListener(type, onRes, { once: true });
+      abortListener = () => { emitter.removeEventListener(type, onRes); reject(_onceAbortError(signal)); };
+    } else {
+      const onRes = function() {
+        emitter.removeListener('error', onErr); cleanup();
+        const args = new Array(arguments.length);
+        for (let i = 0; i < arguments.length; i++) args[i] = arguments[i];
+        resolve(args);
+      };
+      const onErr = function(e) { emitter.removeListener(type, onRes); cleanup(); reject(e); };
+      emitter.once(type, onRes);
+      if (type !== 'error') emitter.once('error', onErr);
+      abortListener = () => { emitter.removeListener(type, onRes); if (type !== 'error') emitter.removeListener('error', onErr); reject(_onceAbortError(signal)); };
+    }
+    if (signal) signal.addEventListener('abort', abortListener, { once: true });
   });
 }
 
