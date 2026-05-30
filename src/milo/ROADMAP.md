@@ -29,7 +29,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | v8         | 3/5       | 60%  | —        | mostly passing |
 | timers     | 31/55     | 56%  | high     | unref, immediate edge cases |
 | require    | 11/19     | 57%  | med      | circular deps, extensions |
-| module     | 14/26     | 53%  | high     | _stat, _nodeModulePaths |
+| module     | 17/26     | 65%  | high     | _extensions custom ext, deprecation warnings |
 | console    | 8/14      | 57%  | med      | Console constructor, tty colors |
 | path       | 8/15      | 53%  | med      | edge cases |
 | diagnostics| 8/17      | 47%  | low      | channel subscribe/unsubscribe |
@@ -38,7 +38,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | net        | 44/106    | 41%  | high     | Socket not extending Duplex |
 | stream     | mixed     | ~35% | high     | pipeline, transform, pipe errors |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
-| util       | 6/19      | 31%  | med      | inspect edge cases |
+| util       | 9/19      | 47%  | med      | inspect getters/showHidden, callbackify tick frame |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
 | whatwg     | 10/41     | 24%  | med      | URL/URLSearchParams edge cases |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |
@@ -159,6 +159,9 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
 
 ## done
+
+- [x] module loader honors customized Module.wrapper (non-builtin); null-proto package.json (proto-pollution safe) — module 14->17
+- [x] util.parseEnv dotenv-compatible parser (quotes/multiline/comments/export/escapes); process.processTicksAndRejections named frame
 
 - [x] util.inspect breakLength multiline wrapping (reduceToSingleString port) — foundational, unblocks console/util/assert-message tests; console-group passes; console 50->57%
 
