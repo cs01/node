@@ -653,7 +653,8 @@ function createReadStream(path, opts) {
   const autoClose = opts && opts.autoClose !== undefined ? opts.autoClose : true;
   let ownFd = false;
   let fd;
-  if (opts && opts.fd != null) { fd = opts.fd; } else { fd = openSync(path, (opts && opts.flags) || 'r'); ownFd = true; }
+  // opts.fd may be a numeric fd OR a FileHandle (use its underlying .fd).
+  if (opts && opts.fd != null) { fd = (typeof opts.fd === 'object' && opts.fd.fd != null) ? opts.fd.fd : opts.fd; } else { fd = openSync(path, (opts && opts.flags) || 'r'); ownFd = true; }
   let pos = (opts && opts.start) || 0;
   const end = opts && opts.end;
   if (globalThis.__ref) globalThis.__ref();
@@ -1264,9 +1265,13 @@ const promises = {
           try { return Promise.resolve({ bytesRead: readSync(fd, buf, off, len, pos), buffer: buf }); }
           catch (e) { return Promise.reject(e); }
         },
-        write(buf, off, len, pos) { return Promise.resolve({ bytesWritten: writeSync(fd, buf, off, len, pos), buffer: buf }); },
-        stat() { return Promise.resolve(fstatSync(fd)); },
-        readFile(opts) { return Promise.resolve(readFileSync('/dev/fd/' + fd, opts)); },
+        write(buf, off, len, pos) {
+          // writeSync validates+throws synchronously; surface as a rejection.
+          try { return Promise.resolve({ bytesWritten: writeSync(fd, buf, off, len, pos), buffer: buf }); }
+          catch (e) { return Promise.reject(e); }
+        },
+        stat() { try { return Promise.resolve(fstatSync(fd)); } catch (e) { return Promise.reject(e); } },
+        readFile(opts) { try { return Promise.resolve(readFileSync('/dev/fd/' + fd, opts)); } catch (e) { return Promise.reject(e); } },
         writeFile(data) { writeSync(fd, data); return Promise.resolve(); },
         chmod(m) { fchmodSync(fd, m); return Promise.resolve(); },
         datasync() { fdatasyncSync(fd); return Promise.resolve(); },

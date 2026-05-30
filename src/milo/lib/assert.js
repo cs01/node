@@ -821,7 +821,15 @@ async function rejects(fn, expected, message) {
       }
     } else if (typeof expected === 'object' && expected !== null) {
       for (const key of Object.keys(expected)) {
-        if (!_deepEqual(e[key], expected[key], true)) {
+        // RegExp values match via .test() against the property (like throws()),
+        // not deep-equality — {message: /foo/} must regex-match e.message.
+        if (expected[key] instanceof RegExp) {
+          if (!expected[key].test(e[key])) {
+            fail(e[key], expected[key],
+              message || `rejects: ${key} mismatch (actual: ${_inspect(e[key])}, expected: ${expected[key]})`,
+              'rejects');
+          }
+        } else if (!_deepEqual(e[key], expected[key], true)) {
           fail(e[key], expected[key],
             message || `rejects: ${key} mismatch (actual: ${_inspect(e[key])}, expected: ${_inspect(expected[key])})`,
             'rejects');
