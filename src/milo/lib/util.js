@@ -249,8 +249,28 @@ function deprecate(fn, msg, code) {
 // Functions can opt into resolving with a named-object instead of a single value
 // by setting this symbol to an array of names (e.g. fs.read → { bytesRead, buffer }).
 const kCustomPromisifyArgs = Symbol.for('nodejs.util.promisify.customArgs');
+// Mirrors Node's internal invalidArgTypeHelper — the " Received ..." suffix that
+// assert.throws matchers compare against verbatim.
+function _invalidArgTypeHelper(input) {
+  if (input == null) return ` Received ${input}`;
+  if (typeof input === 'function' && input.name) return ` Received function ${input.name}`;
+  if (typeof input === 'object') {
+    if (input.constructor && input.constructor.name) return ` Received an instance of ${input.constructor.name}`;
+    return ` Received ${inspect(input, { depth: -1 })}`;
+  }
+  let inspected = inspect(input, { colors: false });
+  if (inspected.length > 28) inspected = `${inspected.slice(0, 25)}...`;
+  return ` Received type ${typeof input} (${inspected})`;
+}
+const _AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
 function promisify(original) {
-  if (typeof original !== 'function') { const e = new TypeError('The "original" argument must be of type Function'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+  if (typeof original !== 'function') { const e = new TypeError('The "original" argument must be of type function.' + _invalidArgTypeHelper(original)); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+  // instanceof (not .constructor, which is spoofable) detects real async fns —
+  // promisifying one that already returns a Promise is almost always a mistake.
+  if (original instanceof _AsyncFunction) {
+    process.emitWarning('Calling promisify on a function that returns a Promise is likely a mistake.',
+      { type: 'DeprecationWarning', code: 'DEP0174' });
+  }
   if (original[promisify.custom]) {
     const custom = original[promisify.custom];
     if (typeof custom !== 'function') { const e = new TypeError('The "util.promisify.custom" argument must be of type Function. Received ' + typeof custom); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
