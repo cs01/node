@@ -199,20 +199,156 @@ function format(pathObject) {
 const sep = '/';
 const delimiter = ':';
 
-// win32 — minimal implementation for test compatibility
+// --- win32 path internals (faithful port of Node's lib/path.js win32) ---
+const _CC_DOT = 46, _CC_FSLASH = 47, _CC_BSLASH = 92, _CC_COLON = 58;
+function _winIsSep(c) { return c === _CC_FSLASH || c === _CC_BSLASH; }
+function _isWinDeviceRoot(c) { return (c >= 65 && c <= 90) || (c >= 97 && c <= 122); }
+function _winNormalizeString(path, allowAboveRoot) {
+  let res = '', lastSegmentLength = 0, lastSlash = -1, dots = 0, code = 0;
+  for (let i = 0; i <= path.length; ++i) {
+    if (i < path.length) code = path.charCodeAt(i);
+    else if (_winIsSep(code)) break;
+    else code = _CC_FSLASH;
+    if (_winIsSep(code)) {
+      if (lastSlash === i - 1 || dots === 1) { /* noop */ }
+      else if (dots === 2) {
+        if (res.length < 2 || lastSegmentLength !== 2 || res.charCodeAt(res.length - 1) !== _CC_DOT || res.charCodeAt(res.length - 2) !== _CC_DOT) {
+          if (res.length > 2) {
+            const lsi = res.lastIndexOf('\\');
+            if (lsi === -1) { res = ''; lastSegmentLength = 0; }
+            else { res = res.slice(0, lsi); lastSegmentLength = res.length - 1 - res.lastIndexOf('\\'); }
+            lastSlash = i; dots = 0; continue;
+          } else if (res.length !== 0) { res = ''; lastSegmentLength = 0; lastSlash = i; dots = 0; continue; }
+        }
+        if (allowAboveRoot) { res += res.length > 0 ? '\\..' : '..'; lastSegmentLength = 2; }
+      } else {
+        if (res.length > 0) res += '\\' + path.slice(lastSlash + 1, i);
+        else res = path.slice(lastSlash + 1, i);
+        lastSegmentLength = i - lastSlash - 1;
+      }
+      lastSlash = i; dots = 0;
+    } else if (code === _CC_DOT && dots !== -1) { ++dots; }
+    else { dots = -1; }
+  }
+  return res;
+}
+
 const win32 = {
   sep: '\\', delimiter: ';',
-  resolve(...args) { for (const a of args) validateString(a, 'path'); return resolve(...args).replace(/\//g, '\\'); },
-  normalize(p) {
-    validateString(p, 'path');
-    if (p.length === 0) return '.';
-    const isUnc = p.length >= 2 && (p.charCodeAt(0) === 92 || p.charCodeAt(0) === 47) && (p.charCodeAt(1) === 92 || p.charCodeAt(1) === 47);
-    let result = normalize(p.replace(/\\/g, '/')).replace(/\//g, '\\');
-    if (isUnc && !result.startsWith('\\\\')) result = '\\' + result;
-    return result;
+  resolve(...args) {
+    let resolvedDevice = '', resolvedTail = '', resolvedAbsolute = false;
+    for (let i = args.length - 1; i >= -1; i--) {
+      let path;
+      if (i >= 0) {
+        path = args[i]; validateString(path, `paths[${i}]`);
+        if (path.length === 0) continue;
+      } else if (resolvedDevice.length === 0) { path = process.cwd(); }
+      else {
+        path = process.env['=' + resolvedDevice] || process.cwd();
+        if (path === undefined || (path.slice(0, 2).toLowerCase() !== resolvedDevice.toLowerCase() && path.charCodeAt(2) === _CC_BSLASH)) {
+          path = resolvedDevice + '\\';
+        }
+      }
+      const len = path.length;
+      let rootEnd = 0, device = '', isAbsolute = false;
+      const code = path.charCodeAt(0);
+      if (len === 1) { if (_winIsSep(code)) { rootEnd = 1; isAbsolute = true; } }
+      else if (_winIsSep(code)) {
+        isAbsolute = true;
+        if (_winIsSep(path.charCodeAt(1))) {
+          let j = 2, last = j;
+          while (j < len && !_winIsSep(path.charCodeAt(j))) j++;
+          if (j < len && j !== last) {
+            const firstPart = path.slice(last, j); last = j;
+            while (j < len && _winIsSep(path.charCodeAt(j))) j++;
+            if (j < len && j !== last) {
+              last = j;
+              while (j < len && !_winIsSep(path.charCodeAt(j))) j++;
+              if (j === len || j !== last) { device = '\\\\' + firstPart + '\\' + path.slice(last, j); rootEnd = j; }
+            }
+          }
+        } else { rootEnd = 1; }
+      } else if (_isWinDeviceRoot(code) && path.charCodeAt(1) === _CC_COLON) {
+        device = path.slice(0, 2); rootEnd = 2;
+        if (len > 2 && _winIsSep(path.charCodeAt(2))) { isAbsolute = true; rootEnd = 3; }
+      }
+      if (device.length > 0) {
+        if (resolvedDevice.length > 0) { if (device.toLowerCase() !== resolvedDevice.toLowerCase()) continue; }
+        else { resolvedDevice = device; }
+      }
+      if (resolvedAbsolute) { if (resolvedDevice.length > 0) break; }
+      else {
+        resolvedTail = path.slice(rootEnd) + '\\' + resolvedTail;
+        resolvedAbsolute = isAbsolute;
+        if (isAbsolute && resolvedDevice.length > 0) break;
+      }
+    }
+    resolvedTail = _winNormalizeString(resolvedTail, !resolvedAbsolute);
+    return resolvedAbsolute ? resolvedDevice + '\\' + resolvedTail : (resolvedDevice + resolvedTail) || '.';
   },
-  isAbsolute(p) { validateString(p, 'path'); return p.length > 0 && (p.charCodeAt(0) === 47 || p.charCodeAt(0) === 92 || /^[a-zA-Z]:[\\/]/.test(p)); },
-  join(...args) { if (args.length === 0) return '.'; for (const a of args) validateString(a, 'path'); const joined = args.filter(a => a !== '').map(a => a.replace(/\\/g, '/')).join('/'); if (!joined) return '.'; return normalize(joined).replace(/\//g, '\\'); },
+  normalize(path) {
+    validateString(path, 'path');
+    const len = path.length;
+    if (len === 0) return '.';
+    let rootEnd = 0, device, isAbsolute = false;
+    const code = path.charCodeAt(0);
+    if (len === 1) return _winIsSep(code) ? '\\' : path;
+    if (_winIsSep(code)) {
+      isAbsolute = true;
+      if (_winIsSep(path.charCodeAt(1))) {
+        let j = 2, last = j;
+        while (j < len && !_winIsSep(path.charCodeAt(j))) j++;
+        if (j < len && j !== last) {
+          const firstPart = path.slice(last, j); last = j;
+          while (j < len && _winIsSep(path.charCodeAt(j))) j++;
+          if (j < len && j !== last) {
+            last = j;
+            while (j < len && !_winIsSep(path.charCodeAt(j))) j++;
+            if (j === len) return '\\\\' + firstPart + '\\' + path.slice(last) + '\\';
+            if (j !== last) { device = '\\\\' + firstPart + '\\' + path.slice(last, j); rootEnd = j; }
+          }
+        }
+      } else { rootEnd = 1; }
+    } else if (_isWinDeviceRoot(code) && path.charCodeAt(1) === _CC_COLON) {
+      device = path.slice(0, 2); rootEnd = 2;
+      if (len > 2 && _winIsSep(path.charCodeAt(2))) { isAbsolute = true; rootEnd = 3; }
+    }
+    let tail = rootEnd < len ? _winNormalizeString(path.slice(rootEnd), !isAbsolute) : '';
+    if (tail.length === 0 && !isAbsolute) tail = '.';
+    if (tail.length > 0 && _winIsSep(path.charCodeAt(len - 1))) tail += '\\';
+    if (device === undefined) return isAbsolute ? (tail.length > 0 ? '\\' + tail : '\\') : tail;
+    return isAbsolute ? (tail.length > 0 ? device + '\\' + tail : device + '\\') : device + tail;
+  },
+  isAbsolute(path) {
+    validateString(path, 'path');
+    const len = path.length;
+    if (len === 0) return false;
+    const code = path.charCodeAt(0);
+    return _winIsSep(code) || (len > 2 && _isWinDeviceRoot(code) && path.charCodeAt(1) === _CC_COLON && _winIsSep(path.charCodeAt(2)));
+  },
+  join(...args) {
+    if (args.length === 0) return '.';
+    let joined, firstPart;
+    for (let i = 0; i < args.length; ++i) {
+      const arg = args[i]; validateString(arg, 'path');
+      if (arg.length > 0) { if (joined === undefined) joined = firstPart = arg; else joined += '\\' + arg; }
+    }
+    if (joined === undefined) return '.';
+    let needsReplace = true, slashCount = 0;
+    if (_winIsSep(firstPart.charCodeAt(0))) {
+      ++slashCount;
+      const firstLen = firstPart.length;
+      if (firstLen > 1 && _winIsSep(firstPart.charCodeAt(1))) {
+        ++slashCount;
+        if (firstLen > 2) { if (_winIsSep(firstPart.charCodeAt(2))) ++slashCount; else needsReplace = false; }
+      }
+    }
+    if (needsReplace) {
+      while (slashCount < joined.length && _winIsSep(joined.charCodeAt(slashCount))) slashCount++;
+      if (slashCount >= 2) joined = '\\' + joined.slice(slashCount);
+    }
+    return win32.normalize(joined);
+  },
   dirname(p) {
     validateString(p, 'path');
     if (p.length === 0) return '.';
