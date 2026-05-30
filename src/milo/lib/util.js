@@ -76,8 +76,16 @@ function inspect(obj, opts) {
   }
 
   const depth = (opts && opts.depth !== undefined) ? opts.depth : 2;
-  return _inspectObject(obj, depth, 0, new Set(), colors);
+  // Module-level active opts so the property loop can honor showHidden/getters
+  // without threading them through every recursive call. Safe: inspect recursion
+  // shares one opts; nested inspect() (via custom) saves/restores below.
+  const prevSH = _inspShowHidden, prevG = _inspGetters;
+  _inspShowHidden = !!(opts && opts.showHidden);
+  _inspGetters = opts && opts.getters;
+  try { return _inspectObject(obj, depth, 0, new Set(), colors); }
+  finally { _inspShowHidden = prevSH; _inspGetters = prevG; }
 }
+let _inspShowHidden = false, _inspGetters = false;
 
 function _colorize(style, s) {
   const code = inspect.colors[inspect.styles[style]];
@@ -154,14 +162,60 @@ function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
   }
 
   if (currentDepth >= maxDepth) return prefix ? `[${prefix.trim()}]` : '[Object]';
-  const keys = Object.keys(obj);
-  const symKeys = Object.getOwnPropertySymbols(obj);
-  if (keys.length === 0 && symKeys.length === 0) return prefix + '{}';
-  const pairs = keys.map(k => _quoteKey(k) + ': ' + _inspectValue(obj[k], maxDepth, currentDepth + 1, seen, colors));
-  for (const s of symKeys) {
-    pairs.push('[' + s.toString() + ']: ' + _inspectValue(obj[s], maxDepth, currentDepth + 1, seen, colors));
+  // String keys: enumerable-only by default; all own (incl non-enumerable) with showHidden.
+  const strKeys = _inspShowHidden ? Object.getOwnPropertyNames(obj) : Object.keys(obj);
+  const symKeys = (_inspShowHidden ? Object.getOwnPropertySymbols(obj)
+    : Object.getOwnPropertySymbols(obj).filter(s => Object.getOwnPropertyDescriptor(obj, s).enumerable));
+  const pairs = [];
+  for (const k of strKeys) {
+    const d = Object.getOwnPropertyDescriptor(obj, k);
+    // Non-enumerable own keys are bracketed (Node: [key]) to distinguish from enumerable.
+    const keyStr = d.enumerable ? _quoteKey(k) : '[' + _quoteKey(k) + ']';
+    pairs.push(keyStr + ': ' + _formatDescVal(obj, k, d, maxDepth, currentDepth, seen, colors));
   }
+  for (const s of symKeys) {
+    const d = Object.getOwnPropertyDescriptor(obj, s);
+    pairs.push('[' + s.toString() + ']: ' + _formatDescVal(obj, s, d, maxDepth, currentDepth, seen, colors));
+  }
+  // showHidden also surfaces getters defined on the prototype chain (Node protoProps),
+  // shown bracketed since they are non-own. Skip keys already present as own props.
+  if (_inspShowHidden) {
+    const ownSet = new Set(strKeys);
+    let p = Object.getPrototypeOf(obj);
+    while (p && p !== Object.prototype) {
+      for (const k of Object.getOwnPropertyNames(p)) {
+        if (k === 'constructor' || ownSet.has(k)) continue;
+        const d = Object.getOwnPropertyDescriptor(p, k);
+        if (typeof d.get !== 'function') continue;
+        ownSet.add(k);
+        pairs.push('[' + _quoteKey(k) + ']: ' + _formatDescVal(obj, k, d, maxDepth, currentDepth, seen, colors));
+      }
+      p = Object.getPrototypeOf(p);
+    }
+  }
+  if (pairs.length === 0) return prefix + '{}';
   return _reduceToSingleString(pairs, prefix, '{', '}', currentDepth);
+}
+
+// Format a property value from its descriptor. Accessors render as
+// [Getter]/[Setter]/[Getter/Setter], and with the `getters` option the getter
+// is invoked: [Getter: <value>] (or the thrown error if it throws).
+function _formatDescVal(obj, key, d, maxDepth, currentDepth, seen, colors) {
+  if (d.get || d.set) {
+    const label = d.get && d.set ? 'Getter/Setter' : d.get ? 'Getter' : 'Setter';
+    if (d.get && (_inspGetters === true || _inspGetters === 'get' || (_inspGetters === 'set' && d.set))) {
+      try {
+        const v = d.get.call(obj);
+        return colors ? _colorize('special', '[' + label + ':') + ' ' + _inspectValue(v, maxDepth, currentDepth + 1, seen, colors) + _colorize('special', ']')
+          : '[' + label + ': ' + _inspectValue(v, maxDepth, currentDepth + 1, seen, colors) + ']';
+      } catch (e) {
+        return '[' + label + ': <Inspection threw (' + (e && e.message) + ')>]';
+      }
+    }
+    const s = '[' + label + ']';
+    return colors ? _colorize('special', s) : s;
+  }
+  return _inspectValue(d.value, maxDepth, currentDepth + 1, seen, colors);
 }
 
 function _inspectValue(val, maxDepth, currentDepth, seen, colors) {
