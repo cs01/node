@@ -677,6 +677,7 @@
   (new Function('exports', 'module', 'primordials', _pathSrc))(_pathMod.exports, _pathMod, primordials);
   const _path = _pathMod.exports;
 
+  const _experimentalWarned = new Set();
   const moduleCache = { path: _path };
   // Immutable builtin exports (keyed by id), so node:-prefixed requires can return
   // the real builtin even after a user replaces moduleCache[id] via require.cache.
@@ -1267,7 +1268,7 @@
           stub = { CustomEvent: globalThis.CustomEvent, Event: globalThis.Event, EventTarget: globalThis.EventTarget, NodeEventTarget: globalThis.EventTarget };
         } else if (id === 'internal/util') {
           stub = {
-            emitExperimentalWarning: (feature) => { process.emitWarning(`${feature} is an experimental feature`, 'ExperimentalWarning'); },
+            emitExperimentalWarning: (feature) => { if (_experimentalWarned.has(feature)) return; _experimentalWarned.add(feature); process.emitWarning(`${feature} is an experimental feature`, 'ExperimentalWarning'); },
             getSystemErrorName: (err) => `ERRNO_${err}`,
             promisify: require('util').promisify,
             customPromisifyArgs: Symbol.for('nodejs.util.promisify.customArgs'),
