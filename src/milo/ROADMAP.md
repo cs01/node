@@ -40,7 +40,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
 | util       | 10/19     | 53%  | med      | inspect getters/showHidden, callbackify, deprecate |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
-| whatwg     | 11/41     | 26%  | med      | URLSearchParams brand/args DONE but BLOCKED (see below); URL live-sync, TextDecoder |
+| whatwg     | 19/41     | 46%  | med      | URLSearchParams brand/args DONE; remaining: URL↔searchParams live-sync, TextDecoder, webstreams |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |
 | child      | 17/85     | 20%  | med      | child.send, spawn edge cases |
 | tls        | 18/82     | 21%  | med      | connection lifecycle, error codes |
@@ -77,23 +77,21 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 - [ ] `zlib.params()` — dynamic compression level change
 - [ ] flush mode edge cases
 
-## BLOCKED by milo bug
+## milo loader bug (FLAGGED + worked around — fix in $HOME/git/milo to remove workaround)
 
-### URLSearchParams enhancement → Object.prototype pollution (whatwg 11→20 ready)
-- Working impl in `src/milo/whatwg-urlsearchparams.wip.patch` (brand-checks ERR_INVALID_THIS,
-  arg-count ERR_MISSING_ARGS, USVString `_toStr` symbol-throw, form-urlencoded `+`/percent codec,
-  branded URLSearchParamsIterator). Takes whatwg 11→20.
-- BLOCKER: applying it makes `require('url')` load the REAL `lib/internal/url.js`; its line 308
-  (`ObjectDefineProperties(proto, { [SymbolToStringTag]: {value:'URLSearchParams Iterator'} })`)
-  leaks onto `Object.prototype` in milo → `String({})` becomes `'[object URLSearchParams Iterator]'`
-  → cascades, breaking url/querystring/event suites (net regression). Confirmed: the polluting
-  string is internal/url:308, NOT our code (unique-marker test); real internal/url is NOT in
-  require.cache (loaded via native builtin path). Pre-change `require('url')` does NOT pull it.
-- ROOT CAUSE (needs milo access): (a) why do our bootstrap edits make `require('url')` newly load
-  real internal/url, and/or (b) why does milo's `ObjectDefineProperties` with a computed Symbol key
-  define on `Object.prototype` instead of the target. Fix either, then re-apply the patch.
-- NOTE: milo also miscompiles a computed `get [Symbol.toStringTag]()` in an OBJECT LITERAL (leaks
-  to Object.prototype) — use `Object.defineProperty` for iterator tags as a workaround.
+### Object.prototype Symbol.toStringTag pollution on require('url')
+- `require('url')` makes milo's native internal-lib loader load REAL `lib/internal/url.js`; its
+  line 307 `ObjectDefineProperties(URLSearchParamsIterator.prototype, { [SymbolToStringTag]: ... })`
+  is mis-applied by milo (injected `_patchIterTag` helper) onto `Object.prototype`, globally
+  breaking `Object.prototype.toString` (`String({})` → `'[object URLSearchParams Iterator]'`).
+- `_patchIterTag` is in NO source file — injected by milo's native loader (confirmed via
+  non-configurable-lock stack trace). NOT reproducible in plain `-e` eval; only via internal-lib load.
+- WORKAROUND (live, `src/milo/lib/url.js` end): delete the bogus `Object.prototype[Symbol.toStringTag]`
+  (it's `configurable:true`; milo url.js runs after the leak in the same require). This unblocked
+  URLSearchParams (whatwg 11→19).
+- TRUE FIX (milo repo): make `ObjectDefineProperties(Ctor.prototype, {[computedSymbol]:...})` target
+  the function's `.prototype` (not Object.prototype), esp. after `delete Ctor.prototype.constructor`
+  + `ObjectSetPrototypeOf`. Then remove the url.js scrub. See memory project_milo_object_proto_pollution.
 
 ## critical
 
