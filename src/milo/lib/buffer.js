@@ -442,8 +442,10 @@ class Buffer extends Uint8Array {
   }
 
   static compare(a, b) {
-    if (!(a instanceof Uint8Array)) throw _ERR_INVALID_ARG_TYPE_INSTANCE('buf1', 'Buffer or Uint8Array', a);
-    if (!(b instanceof Uint8Array)) throw _ERR_INVALID_ARG_TYPE_INSTANCE('buf2', 'Buffer or Uint8Array', b);
+    // ArrayBuffer.isView is a real-brand check; a fake that merely inherits
+    // Buffer.prototype passes `instanceof` but isn't an actual typed array.
+    if (!(a instanceof Uint8Array) || !ArrayBuffer.isView(a)) throw _ERR_INVALID_ARG_TYPE_INSTANCE('buf1', 'Buffer or Uint8Array', a);
+    if (!(b instanceof Uint8Array) || !ArrayBuffer.isView(b)) throw _ERR_INVALID_ARG_TYPE_INSTANCE('buf2', 'Buffer or Uint8Array', b);
     if (_nativeCompare) return _nativeCompare(a, b);
     const len = Math.min(a.length, b.length);
     for (let i = 0; i < len; i++) { if (a[i] < b[i]) return -1; if (a[i] > b[i]) return 1; }
