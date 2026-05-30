@@ -1,0 +1,114 @@
+// vm binding — real V8 contexts so vm.runInNewContext/runInContext give true realm
+// isolation (foreign objects get the new context's own globals/prototypes).
+//
+// Sandbox<->global marshaling MUST happen with the target context as the operative
+// context: writes to a foreign context's global proxy from the *main* context are
+// silently dropped by V8 and never become resolvable global variables. So vmRun
+// copies props using the target context for the global side.
+
+from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
+
+extern fn v8c_context_new(iso: *u8): *u8
+extern fn v8c_context_global(ctx: *u8): i32
+extern fn v8c_script_compile_run(ctx: *u8, source: *u8, sourceLen: i32, filename: *u8): i32
+extern fn malloc(size: i64): *u8
+extern fn free(ptr: *u8): void
+
+// own enumerable only (matches util binding's ONLY_ENUMERABLE)
+let ONLY_ENUMERABLE: i32 = 2
+
+// Persistent context handles (v8c_context_new returns a heap ContextWrapper that
+// owns a v8::Global<Context>, so these survive across calls). Never disposed —
+// vm contexts live for process lifetime, matching typical vm usage.
+var gVmContexts: [i64; 256] = [0; 256]
+var gVmCount: i32 = 0
+
+// Copy own-enumerable props of src (read with readCtx) onto dst (written with
+// writeCtx). The operative context per side is what makes global writes "stick".
+fn copyProps(iso: Isolate, readCtx: Context, writeCtx: Context, src: Value, dst: Value): void {
+    let names = readCtx.getPropertyNames(src, ONLY_ENUMERABLE)
+    let n = names.arrayLength(iso)
+    var i: i32 = 0
+    while i < n {
+        let nameVal = readCtx.objectGetIndex(names, i as u32)
+        var keyBuf: [u8; 256] = [0; 256]
+        unsafe {
+            nameVal.writeUtf8(iso, keyBuf as *u8, 256)
+            let val = readCtx.objectGet(src, keyBuf as *u8)
+            writeCtx.objectSet(dst, keyBuf as *u8, val)
+        }
+        i = i + 1
+    }
+}
+
+fn vmCreateContext(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    if gVmCount >= 256 {
+        ci.retI32(-1)
+        return
+    }
+    let handle = gVmCount
+    unsafe {
+        let ctx = v8c_context_new(iso.ptr)
+        gVmContexts[handle as i64] = ctx as i64
+    }
+    gVmCount = gVmCount + 1
+    ci.retI32(handle)
+}
+
+// vmRun(handle, sandbox, code, filename) -> result
+fn vmRun(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let mainCtx = ci.context()
+    let handle = ci.i32Arg(0, -1)
+    if handle < 0 || handle >= gVmCount {
+        ci.retUndefined()
+        return
+    }
+    let sandbox = ci.arg(1)
+    let codeArg = ci.arg(2)
+
+    var ctxPtr: *u8 = 0 as *u8
+    var globalSlot: i32 = -1
+    unsafe {
+        ctxPtr = gVmContexts[handle as i64] as *u8
+        globalSlot = v8c_context_global(ctxPtr)
+    }
+    let targetCtx = Context { ptr: ctxPtr }
+    let global = Value { slot: globalSlot }
+
+    // sandbox -> global (read via main context, write via target context)
+    copyProps(iso, mainCtx, targetCtx, sandbox, global)
+
+    var need: i32 = -1
+    unsafe { need = codeArg.writeUtf8(iso, 0 as *u8, 0) }
+    if need < 0 {
+        ci.retUndefined()
+        return
+    }
+    var fnameBuf: [u8; 1024] = [0; 1024]
+    var result: i32 = -1
+    unsafe {
+        ci.arg(3).writeUtf8(iso, fnameBuf as *u8, 1024)
+        let codeBuf = malloc((need + 1) as i64)
+        codeArg.writeUtf8(iso, codeBuf, need + 1)
+        result = v8c_script_compile_run(ctxPtr, codeBuf, need, fnameBuf as *u8)
+        free(codeBuf)
+    }
+
+    // global -> sandbox (read via target context, write via main context)
+    copyProps(iso, targetCtx, mainCtx, global, sandbox)
+
+    ci.ret(Value { slot: result })
+}
+
+fn nm_init_vm(iso: *u8, ctx: *u8, exports: i32): void {
+    let c = Context { ptr: ctx }
+    let exp = Value { slot: exports }
+    unsafe {
+        c.setMethod(exp, "createContext" as *u8, vmCreateContext as *u8)
+        c.setMethod(exp, "run" as *u8, vmRun as *u8)
+    }
+}

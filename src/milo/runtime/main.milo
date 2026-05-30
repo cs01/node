@@ -41,6 +41,7 @@ extern fn nm_init_crypto(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_spawn(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_dns(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_init_zlib(iso: *u8, ctx: *u8, exports: i32): void
+extern fn nm_init_vm(iso: *u8, ctx: *u8, exports: i32): void
 
 // V8 lifecycle (not wrapped in v8.milo types — used at top-level init/shutdown)
 extern fn v8c_set_flags_from_string(flags: *u8): void
@@ -302,6 +303,7 @@ fn registerBuiltinBindings(): void {
         nm_binding_register("spawn" as *u8, nm_init_spawn as *u8)
         nm_binding_register("dns" as *u8, nm_init_dns as *u8)
         nm_binding_register("zlib" as *u8, nm_init_zlib as *u8)
+        nm_binding_register("vm" as *u8, nm_init_vm as *u8)
         nm_binding_register("worker" as *u8, nm_init_worker as *u8)
     }
 }

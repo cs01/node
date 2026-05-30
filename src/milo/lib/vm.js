@@ -1,64 +1,63 @@
-// vm module — Script, createContext, runInContext via eval/Function
+// vm module — real V8 contexts via the native vm binding (realm isolation).
 'use strict';
 
-class Script {
-  constructor(code, options) {
-    this._code = code;
-    this._filename = (options && options.filename) || 'evalmachine.<anonymous>';
-  }
+const _vmB = internalBinding('vm');
 
-  runInThisContext(options) {
-    return (0, eval)(this._code);
-  }
+// sandbox object -> native context handle
+const _ctxHandles = new WeakMap();
 
-  runInNewContext(sandbox, options) {
-    return runInNewContext(this._code, sandbox, options);
-  }
+function _filename(options) {
+  return (options && typeof options === 'object' && options.filename) || 'evalmachine.<anonymous>';
+}
 
-  runInContext(context, options) {
-    return runInContext(this._code, context, options);
-  }
+function _newHandle() {
+  const h = _vmB.createContext();
+  if (h < 0) throw new Error('vm: too many contexts');
+  return h;
 }
 
 function createContext(sandbox) {
-  if (!sandbox) sandbox = Object.create(null);
-  sandbox._isVMContext = true;
+  if (sandbox === undefined || sandbox === null) sandbox = {};
+  if (_ctxHandles.has(sandbox)) return sandbox;
+  _ctxHandles.set(sandbox, _newHandle());
   return sandbox;
 }
 
 function isContext(sandbox) {
-  return !!(sandbox && sandbox._isVMContext);
+  return _ctxHandles.has(sandbox);
+}
+
+// The native run() marshals sandbox<->global using the target context as the
+// operative context (the only way foreign-global writes stick), runs the code,
+// then syncs script-created globals back onto the sandbox.
+function runInNewContext(code, sandbox, options) {
+  if (sandbox === undefined || sandbox === null) sandbox = {};
+  return _vmB.run(_newHandle(), sandbox, String(code), _filename(options));
+}
+
+function runInContext(code, contextifiedSandbox, options) {
+  const h = _ctxHandles.get(contextifiedSandbox);
+  if (h === undefined) { const e = new TypeError('contextifiedObject argument must be a vm.Context'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+  return _vmB.run(h, contextifiedSandbox, String(code), _filename(options));
 }
 
 function runInThisContext(code, options) {
-  return (0, eval)(code);
-}
-
-function runInNewContext(code, sandbox, options) {
-  sandbox = sandbox || Object.create(null);
-  // Proxy traps bare name reads/writes to sandbox, providing context isolation
-  // Proxy intercepts all reads/writes — sandbox-first, then globalThis fallback
-  const proxy = new Proxy(sandbox, {
-    has() { return true; },
-    get(target, key) {
-      if (key === Symbol.unscopables) return undefined;
-      if (key in target) return target[key];
-      if (key in globalThis) return globalThis[key];
-      return undefined;
-    },
-    set(target, key, value) { target[key] = value; return true; },
-  });
-  const fn = new Function('__ctx__', `with (__ctx__) { return eval(${JSON.stringify(code)}); }`);
-  return fn(proxy);
-}
-
-function runInContext(code, context, options) {
-  return runInNewContext(code, context, options);
+  return (0, eval)(String(code));
 }
 
 function compileFunction(code, params, options) {
   params = params || [];
   return new Function(...params, code);
+}
+
+class Script {
+  constructor(code, options) {
+    this._code = code;
+    this._filename = _filename(options);
+  }
+  runInThisContext(options) { return (0, eval)(String(this._code)); }
+  runInNewContext(sandbox, options) { return runInNewContext(this._code, sandbox, options || { filename: this._filename }); }
+  runInContext(context, options) { return runInContext(this._code, context, options || { filename: this._filename }); }
 }
 
 module.exports = {

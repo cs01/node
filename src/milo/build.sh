@@ -55,6 +55,7 @@ MILO_SOURCES=(
     "src/milo/bindings/spawn.milo:milo_spawn"
     "src/milo/bindings/dns.milo:milo_dns"
     "src/milo/bindings/zlib.milo:milo_zlib"
+    "src/milo/bindings/vm.milo:milo_vm"
 )
 
 echo "=== compiling milo sources ==="
@@ -130,6 +131,7 @@ clang++ -o "$OUT/milo-node" \
   "$OUT/milo_spawn.o" \
   "$OUT/milo_dns.o" \
   "$OUT/milo_zlib.o" \
+  "$OUT/milo_vm.o" \
   "$OUT/v8capi.o" \
   -L"$OUT" -L"$OUT/gen/release" \
   -lv8_base_without_compiler -lv8_compiler -lv8_libplatform -lv8_libbase \
