@@ -28,7 +28,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | readable   | 3/5       | 60%  | med      | destroy/unpipe edge cases |
 | v8         | 3/5       | 60%  | —        | mostly passing |
 | timers     | 31/55     | 56%  | high     | unref, immediate edge cases |
-| require    | 13/19     | 68%  | med      | resolve, symlink, exceptions |
+| require    | 14/19     | 73%  | med      | resolve dedup, symlink, exceptions |
 | module     | 21/26     | 80%  | high     | .node dlopen, circular-dep warning, main-fail stderr |
 | console    | 8/14      | 57%  | med      | Console constructor, tty colors |
 | path       | 8/15      | 53%  | med      | edge cases |
