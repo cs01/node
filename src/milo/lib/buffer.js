@@ -356,7 +356,10 @@ class Buffer extends Uint8Array {
 
   static byteLength(str, encoding) {
     if (typeof str !== 'string') {
-      if (ArrayBuffer.isView(str) || str instanceof ArrayBuffer || str instanceof SharedArrayBuffer) return str.byteLength;
+      // toStringTag brand check also accepts ArrayBuffers from another realm (vm).
+      const _tag = str != null && typeof str === 'object' ? Object.prototype.toString.call(str) : '';
+      if (ArrayBuffer.isView(str) || str instanceof ArrayBuffer || str instanceof SharedArrayBuffer ||
+          _tag === '[object ArrayBuffer]' || _tag === '[object SharedArrayBuffer]') return str.byteLength;
       if (typeof str !== 'string') {
         throw _ERR_INVALID_ARG_TYPE('string', 'string or an instance of Buffer or ArrayBuffer', str);
       }
