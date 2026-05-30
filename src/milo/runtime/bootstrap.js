@@ -985,16 +985,20 @@
     const pkgName = slashIdx >= 0 ? (id.startsWith('@') ? id.slice(0, id.indexOf('/', slashIdx + 1)) : id.slice(0, slashIdx)) : id;
     const subpath = slashIdx >= 0 ? id.slice(pkgName.length + 1) : null;
     while (dir && dir !== '/') {
-      const pkgDir = _path.join(dir, 'node_modules', pkgName);
-      if (subpath && _fs.existsSync(pkgDir)) {
-        const exported = _resolveExportSubpath(pkgDir, subpath);
-        if (exported) return exported;
-        const direct = _resolveFile(_path.join(pkgDir, subpath));
-        if (direct) return direct;
-      }
-      if (!subpath) {
-        const resolved = _resolveFile(_path.join(dir, 'node_modules', id));
-        if (resolved) return resolved;
+      // Don't append node_modules to a directory that is itself node_modules
+      // (Node's _nodeModulePaths skips these → no node_modules/node_modules/...).
+      if (_path.basename(dir) !== 'node_modules') {
+        const pkgDir = _path.join(dir, 'node_modules', pkgName);
+        if (subpath && _fs.existsSync(pkgDir)) {
+          const exported = _resolveExportSubpath(pkgDir, subpath);
+          if (exported) return exported;
+          const direct = _resolveFile(_path.join(pkgDir, subpath));
+          if (direct) return direct;
+        }
+        if (!subpath) {
+          const resolved = _resolveFile(_path.join(dir, 'node_modules', id));
+          if (resolved) return resolved;
+        }
       }
       dir = _path.dirname(dir);
     }
