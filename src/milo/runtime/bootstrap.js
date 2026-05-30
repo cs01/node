@@ -1100,12 +1100,18 @@
 
   function _makeRequire(parentDir, parentMod) {
     function require(id) {
-      if (id.startsWith('node:')) id = id.slice(5);
+      const _hadNodePrefix = typeof id === 'string' && id.startsWith('node:');
+      if (_hadNodePrefix) id = id.slice(5);
       const flatId = id.replace(/\//g, '_');
       if (_moduleWrappers[id]) return _moduleWrappers[id].exports;
       if (moduleCache[id]) return moduleCache[id];
 
       // Handle internal/* requires (--expose-internals compatibility)
+      // node:internal/* is not a public builtin — reject like an unknown one.
+      if (_hadNodePrefix && id.startsWith('internal/')) {
+        const _ube = new Error('No such built-in module: node:' + id);
+        _ube.code = 'ERR_UNKNOWN_BUILTIN_MODULE'; throw _ube;
+      }
       if (id.startsWith('internal/')) {
         let stub;
         if (id === 'internal/test/binding') {
@@ -1303,6 +1309,12 @@
       }
 
       try { const b = _nativeBinding(id); moduleCache[id] = b; return b; } catch {}
+      // node:-prefixed specifier that isn't a real builtin → distinct error code.
+      if (_hadNodePrefix) {
+        const _ube = new Error('No such built-in module: node:' + id);
+        _ube.code = 'ERR_UNKNOWN_BUILTIN_MODULE';
+        throw _ube;
+      }
       const _mnfErr = new Error("Cannot find module '" + id + "'");
       _mnfErr.code = 'MODULE_NOT_FOUND';
       throw _mnfErr;
