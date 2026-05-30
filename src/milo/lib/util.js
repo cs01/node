@@ -246,25 +246,39 @@ function deprecate(fn, msg, code) {
   return wrapped;
 }
 
-const _promisifyCache = new WeakMap();
-function promisify(fn) {
-  if (typeof fn !== 'function') { const e = new TypeError('The "original" argument must be of type Function'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
-  if (fn[promisify.custom]) {
-    const custom = fn[promisify.custom];
-    if (typeof custom !== 'function') { const e = new TypeError('The "util.promisify.custom" argument must be of type Function'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
-    Object.defineProperty(custom, promisify.custom, { value: custom, enumerable: false, configurable: true, writable: true });
-    return custom;
+// Functions can opt into resolving with a named-object instead of a single value
+// by setting this symbol to an array of names (e.g. fs.read → { bytesRead, buffer }).
+const kCustomPromisifyArgs = Symbol.for('nodejs.util.promisify.customArgs');
+function promisify(original) {
+  if (typeof original !== 'function') { const e = new TypeError('The "original" argument must be of type Function'); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+  if (original[promisify.custom]) {
+    const custom = original[promisify.custom];
+    if (typeof custom !== 'function') { const e = new TypeError('The "util.promisify.custom" argument must be of type Function. Received ' + typeof custom); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+    return Object.defineProperty(custom, promisify.custom, { value: custom, enumerable: false, writable: false, configurable: true });
   }
-  if (_promisifyCache.has(fn)) return _promisifyCache.get(fn);
-  const promisified = function(...args) {
+  const argumentNames = original[kCustomPromisifyArgs];
+  function fn(...args) {
     return new Promise((resolve, reject) => {
-      fn.call(this, ...args, (err, ...vals) => err ? reject(err) : resolve(vals.length > 1 ? vals : vals[0]));
+      args.push((err, ...values) => {
+        if (err) return reject(err);
+        // Default resolves with the single value; customArgs maps multiple values
+        // onto a named object — Node never resolves with a bare array.
+        if (argumentNames !== undefined && values.length > 1) {
+          const obj = {};
+          for (let i = 0; i < argumentNames.length; i++) obj[argumentNames[i]] = values[i];
+          resolve(obj);
+        } else {
+          resolve(values[0]);
+        }
+      });
+      Reflect.apply(original, this, args);
     });
-  };
-  Object.defineProperty(promisified, 'name', { value: fn.name });
-  Object.defineProperty(promisified, promisify.custom, { value: promisified, enumerable: false });
-  _promisifyCache.set(fn, promisified);
-  return promisified;
+  }
+  // Inherit the original's prototype (preserves cross-realm identity) and copy its
+  // own properties (name, length, custom props) so the wrapper mirrors the original.
+  Object.setPrototypeOf(fn, Object.getPrototypeOf(original));
+  Object.defineProperty(fn, promisify.custom, { value: fn, enumerable: false, writable: false, configurable: true });
+  return Object.defineProperties(fn, Object.getOwnPropertyDescriptors(original));
 }
 promisify.custom = Symbol.for('nodejs.util.promisify.custom');
 

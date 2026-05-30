@@ -1182,6 +1182,7 @@
             emitExperimentalWarning: (feature) => { process.emitWarning(`${feature} is an experimental feature`, 'ExperimentalWarning'); },
             getSystemErrorName: (err) => `ERRNO_${err}`,
             promisify: require('util').promisify,
+            customPromisifyArgs: Symbol.for('nodejs.util.promisify.customArgs'),
             deprecate: require('util').deprecate,
             // pendingDeprecate only warns under --pending-deprecation; without flag
             // support, mirror Node's no-flag behavior: wrap but don't warn.
