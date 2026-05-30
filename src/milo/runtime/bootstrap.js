@@ -951,6 +951,13 @@
     }
     if (_fs.existsSync(p + '.js')) return p + '.js';
     if (_fs.existsSync(p + '.json')) return p + '.json';
+    // user-registered extensions (require.extensions / Module._extensions)
+    try {
+      const _ext = globalThis.require('module')._extensions;
+      if (_ext) for (const e of Object.keys(_ext)) {
+        if (e !== '.js' && e !== '.json' && e !== '.node' && _fs.existsSync(p + e)) return p + e;
+      }
+    } catch {}
     if (_fs.existsSync(p + '/index.js')) return p + '/index.js';
     return null;
   }
@@ -1032,6 +1039,36 @@
     const dname = _path.dirname(resolved);
     const modRequire = _makeRequire(dname, mod);
     mod.require = modRequire;
+    // require.extensions custom handler dispatch — the longest registered extension
+    // matching the filename wins (findLongestRegisteredExtension), and its handler
+    // owns compilation instead of the default new Function path.
+    let _customExt = null;
+    if (!isBuiltin) {
+      try {
+        const _ext = globalThis.require('module')._extensions;
+        if (_ext) {
+          // findLongestRegisteredExtension: scan dots left-to-right, skipping a
+          // leading dot (dotfiles like .bar have no extension → default .js).
+          const _base = resolved.slice(resolved.lastIndexOf('/') + 1);
+          let si = 0, idx;
+          while ((idx = _base.indexOf('.', si)) !== -1) {
+            si = idx + 1;
+            if (idx === 0) continue;
+            const ce = _base.slice(idx);
+            if (_ext[ce] && ce !== '.js' && ce !== '.json' && ce !== '.node') { _customExt = ce; break; }
+          }
+        }
+      } catch {}
+    }
+    if (_customExt) {
+      globalThis.require('module')._extensions[_customExt](mod, resolved);
+      mod.loaded = true;
+      moduleCache[resolved] = mod.exports;
+      if (isBare && id !== resolved) moduleCache[id] = mod.exports;
+      delete _moduleWrappers[resolved];
+      if (isBare && id !== resolved) delete _moduleWrappers[id];
+      return mod.exports;
+    }
     if (resolved.endsWith('.json')) {
       try { mod.exports = JSON.parse(fileSrc); }
       catch (e) { e.message = resolved + ': ' + e.message; throw e; }
