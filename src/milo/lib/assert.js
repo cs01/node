@@ -796,9 +796,33 @@ function doesNotThrow(fn, expected, message) {
   }
 }
 
+function _recvType(v) {
+  if (v === null) return 'null';
+  if (typeof v === 'object') return 'an instance of ' + ((v.constructor && v.constructor.name) || 'Object');
+  if (typeof v === 'string') return `type string ('${v}')`;
+  return `type ${typeof v} (${v})`;
+}
+
 async function rejects(fn, expected, message) {
+  // promiseFn must be a function or a thenable.
+  if (typeof fn !== 'function' && (fn === null || typeof fn !== 'object' || typeof fn.then !== 'function')) {
+    const e = new TypeError(`The "promiseFn" argument must be of type function or an instance of Promise. Received ${_recvType(fn)}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  let _p;
+  if (typeof fn === 'function') {
+    // A synchronous throw from fn propagates as the rejection (Node never
+    // validates it against `expected`); a non-Promise return is an error.
+    _p = fn();
+    if (_p === null || typeof _p !== 'object' || typeof _p.then !== 'function') {
+      const e = new TypeError(`Expected instance of Promise to be returned from the "promiseFn" function but got ${_p === null ? 'null' : typeof _p}.`);
+      e.code = 'ERR_INVALID_RETURN_VALUE'; throw e;
+    }
+  } else {
+    _p = fn;
+  }
   let threw = false;
-  try { await (typeof fn === 'function' ? fn() : fn); } catch (e) {
+  try { await _p; } catch (e) {
     threw = true;
     if (expected instanceof RegExp) {
       if (!expected.test(String(e))) {
@@ -808,15 +832,21 @@ async function rejects(fn, expected, message) {
           'rejects');
       }
     } else if (typeof expected === 'function') {
-      if (expected.prototype !== undefined && !(e instanceof expected)) {
+      // Distinguish an Error-constructor (instanceof check) from a validation
+      // function. A plain function has a .prototype too, so only treat it as a
+      // constructor when it's actually an Error subclass — otherwise call it.
+      const isErrorCtor = expected === Error || (typeof expected === 'function' && Error.isPrototypeOf(expected));
+      if (e instanceof expected) {
+        // matched constructor — ok
+      } else if (isErrorCtor) {
         const expectedName = expected.name || 'unknown';
         const actualName = e && e.constructor ? e.constructor.name : typeof e;
         fail(e, expected,
           message || `The error is expected to be an instance of "${expectedName}". ` +
           `Received "${actualName}"\n\nError message:\n\n${e.message || String(e)}`,
           'rejects');
-      } else if (expected.prototype === undefined) {
-        const r = expected(e);
+      } else {
+        const r = expected.call({}, e);
         if (r !== true) fail(e, expected, message, 'rejects');
       }
     } else if (typeof expected === 'object' && expected !== null) {
@@ -853,8 +883,30 @@ async function rejects(fn, expected, message) {
 }
 
 async function doesNotReject(fn, expected, message) {
-  try { await (typeof fn === 'function' ? fn() : fn); } catch (e) {
-    fail(e, undefined, message || 'Got unwanted rejection', 'doesNotReject');
+  if (typeof fn !== 'function' && (fn === null || typeof fn !== 'object' || typeof fn.then !== 'function')) {
+    const e = new TypeError(`The "promiseFn" argument must be of type function or an instance of Promise. Received ${_recvType(fn)}`);
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  let _p;
+  if (typeof fn === 'function') {
+    _p = fn();
+    if (_p === null || typeof _p !== 'object' || typeof _p.then !== 'function') {
+      const e = new TypeError(`Expected instance of Promise to be returned from the "promiseFn" function but got ${_p === null ? 'null' : typeof _p}.`);
+      e.code = 'ERR_INVALID_RETURN_VALUE'; throw e;
+    }
+  } else { _p = fn; }
+  // `expected` (when a function/constructor) filters WHICH rejection is unwanted.
+  if (typeof expected === 'string' && message === undefined) { message = expected; expected = undefined; }
+  let caught, threw = false;
+  try { await _p; } catch (e) { threw = true; caught = e; }
+  if (threw) {
+    if (typeof expected === 'function') {
+      const isErrorCtor = expected === Error || Error.isPrototypeOf(expected);
+      if (isErrorCtor) { if (!(caught instanceof expected)) throw caught; }
+      else { expected.call({}, caught); } // validation/spy fn (e.g. mustCall)
+    }
+    const m = message ? `${message}\n` : 'Got unwanted rejection.\n';
+    fail(caught, undefined, `${m}Actual message: "${caught && caught.message}"`, 'doesNotReject');
   }
 }
 
