@@ -25,7 +25,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | querystring| 3/3       | 100% | —        | done |
 | process    | 45/57     | 78%  | high     | beforeExit re-emit on server close, execve, --title flag, hrtime natives |
 | url        | 11/11     | 100% | —        | done (curated); full glob: parse-deprecation DEP0169, pathToFileURL backslash, relative |
-| readable   | 3/5       | 60%  | med      | destroy/unpipe edge cases |
+| readable   | 4/5       | 80%  | med      | destroy/unpipe edge cases |
 | v8         | 3/5       | 60%  | —        | mostly passing |
 | timers     | 49/55     | 89%  | low      | refresh ordering, getLibuvNow (native syntax), ALS, domain |
 | require    | 14/19     | 73%  | med      | resolve dedup, symlink, exceptions |

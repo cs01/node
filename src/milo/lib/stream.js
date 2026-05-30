@@ -197,6 +197,13 @@ class Readable extends Stream {
       ret = state.buffer.shift();
       state.length -= ret.length || 1;
     }
+    // Draining the last buffered chunk while already at EOF must schedule 'end';
+    // otherwise a read() inside a 'readable' handler consumes the tail and the
+    // stream never ends.
+    if (state.length === 0 && state.ended && !state.endEmitted && !state._destroyed) {
+      state.endEmitted = true;
+      process.nextTick(() => { this.readable = false; this.emit('end'); if (state.autoDestroy && (!this._writableState || this._writableState.finished)) this.destroy(); });
+    }
     if (state.length === 0 && !state.ended) {
       state.needReadable = true;
       if (!state.reading && !state._readScheduled) {
@@ -409,7 +416,9 @@ class Readable extends Stream {
   get destroyed() { return !!(this._readableState && this._readableState._destroyed); }
   set destroyed(v) { if (this._readableState) this._readableState._destroyed = v; }
   get errored() { return this._readableState.errored || null; }
-  get readableEnded() { return this._readableState.ended; }
+  // readableEnded is true only after the 'end' event has fired (EOF consumed),
+  // NOT merely when push(null) set state.ended.
+  get readableEnded() { return this._readableState.endEmitted; }
   get readableFlowing() { return this._readableState.flowing; }
   get readableBuffer() { return this._readableState.buffer; }
   get readableHighWaterMark() { return this._readableState.highWaterMark; }
