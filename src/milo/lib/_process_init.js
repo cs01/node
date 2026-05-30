@@ -249,6 +249,15 @@ if (process.argv[0] && !process.argv[0].startsWith('/')) {
   process.argv[0] = process.execPath;
 }
 if (!process.execArgv) process.execArgv = [];
+// Derive deprecation flags from the command line (runtime flags currently leak
+// into argv rather than execArgv). pendingDeprecation enables "pending" (opt-in)
+// deprecation warnings like DEP0005/DEP0144.
+{
+  const _hasFlag = (f) => process.argv.indexOf(f) > 0 || process.execArgv.indexOf(f) >= 0;
+  if (process.pendingDeprecation === undefined && _hasFlag('--pending-deprecation')) process.pendingDeprecation = true;
+  if (process.noDeprecation === undefined && _hasFlag('--no-deprecation')) process.noDeprecation = true;
+  if (process.throwDeprecation === undefined && _hasFlag('--throw-deprecation')) process.throwDeprecation = true;
+}
 if (!process.allowedNodeEnvironmentFlags) process.allowedNodeEnvironmentFlags = new Set();
 if (!process.kill) {
   const _signals = { SIGHUP:1, SIGINT:2, SIGQUIT:3, SIGILL:4, SIGTRAP:5, SIGABRT:6, SIGBUS:10, SIGFPE:8, SIGKILL:9, SIGUSR1:30, SIGSEGV:11, SIGUSR2:31, SIGPIPE:13, SIGALRM:14, SIGTERM:15, SIGCHLD:20, SIGCONT:19, SIGSTOP:17, SIGTSTP:18, SIGTTIN:21, SIGTTOU:22, SIGURG:16, SIGXCPU:24, SIGXFSZ:25, SIGVTALRM:26, SIGPROF:27, SIGWINCH:28, SIGIO:23, SIGINFO:29, SIGSYS:12 };

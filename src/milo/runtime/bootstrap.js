@@ -1000,8 +1000,23 @@
     return null;
   }
 
+  let _dep0144Emitted = false;
+  function _depModuleParent() {
+    if (_dep0144Emitted || !process.pendingDeprecation) return;
+    _dep0144Emitted = true;
+    process.emitWarning('module.parent is deprecated due to accuracy issues. Please use require.main to find program entry point instead.',
+      { type: 'DeprecationWarning', code: 'DEP0144' });
+  }
   function _loadModule(id, resolved, fileSrc, parentMod, isBuiltin) {
-    const mod = { id: resolved, exports: {}, filename: resolved, loaded: false, children: [], parent: parentMod || null, paths: [] };
+    const mod = { id: resolved, exports: {}, filename: resolved, loaded: false, children: [], paths: [] };
+    // module.parent is deprecated (DEP0144). Expose it as a getter/setter that emits
+    // the pending deprecation once when --pending-deprecation is set.
+    let _parentVal = parentMod || null;
+    Object.defineProperty(mod, 'parent', {
+      configurable: true, enumerable: true,
+      get() { _depModuleParent(); return _parentVal; },
+      set(v) { _depModuleParent(); _parentVal = v; },
+    });
     // Link require.main to actual module object so `module === require.main` works
     if (require.main && require.main.filename === resolved) {
       mod.id = require.main.id;
