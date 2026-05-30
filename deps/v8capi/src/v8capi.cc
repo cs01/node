@@ -33,6 +33,7 @@ static v8::MaybeLocal<v8::Promise> DynamicImportCallback(
     v8::Local<v8::Context>, v8::Local<v8::Data>,
     v8::Local<v8::Value>, v8::Local<v8::String>,
     v8::Local<v8::FixedArray>);
+static void PromiseRejectCallback(v8::PromiseRejectMessage message);
 
 struct HandleTable {
     v8::Isolate* isolate;
@@ -196,6 +197,7 @@ extern "C" v8c_isolate* v8c_isolate_new(void) {
     iso->SetData(kHandleTableSlot + 1, tt);
     iso->SetData(kPrivateTableSlot, pt);
     iso->SetHostImportModuleDynamicallyCallback(DynamicImportCallback);
+    iso->SetPromiseRejectCallback(PromiseRejectCallback);
 
     return reinterpret_cast<v8c_isolate*>(iso);
 }
@@ -214,6 +216,7 @@ extern "C" v8c_isolate* v8c_isolate_new_with_heap_limit(size_t max_heap_mb) {
     iso->SetData(kHandleTableSlot + 1, tt);
     iso->SetData(kPrivateTableSlot, pt);
     iso->SetHostImportModuleDynamicallyCallback(DynamicImportCallback);
+    iso->SetPromiseRejectCallback(PromiseRejectCallback);
 
     return reinterpret_cast<v8c_isolate*>(iso);
 }
@@ -1331,6 +1334,37 @@ static v8::MaybeLocal<v8::Promise> DynamicImportCallback(
     }
 
     return promise;
+}
+
+// Routes V8 promise-rejection events to JS globals so the runtime can implement
+// process 'unhandledRejection' / 'rejectionHandled'.
+static void PromiseRejectCallback(v8::PromiseRejectMessage message) {
+    auto event = message.GetEvent();
+    const char* handlerName;
+    if (event == v8::kPromiseRejectWithNoHandler) handlerName = "__onPromiseReject";
+    else if (event == v8::kPromiseHandlerAddedAfterReject) handlerName = "__onPromiseHandled";
+    else return;  // resolve-after-resolved / reject-after-resolved: ignore
+
+    auto promise = message.GetPromise();
+    auto* iso = v8::Isolate::GetCurrent();
+    v8::HandleScope scope(iso);
+    auto context = iso->GetCurrentContext();
+    if (context.IsEmpty()) return;
+    auto global = context->Global();
+    auto key = v8::String::NewFromUtf8(iso, handlerName).ToLocalChecked();
+    v8::Local<v8::Value> handler_val;
+    if (!global->Get(context, key).ToLocal(&handler_val) || !handler_val->IsFunction()) return;
+
+    v8::TryCatch tc(iso);
+    if (event == v8::kPromiseRejectWithNoHandler) {
+        auto value = message.GetValue();
+        if (value.IsEmpty()) value = v8::Undefined(iso);
+        v8::Local<v8::Value> argv[2] = { promise, value };
+        (void)handler_val.As<v8::Function>()->Call(context, global, 2, argv);
+    } else {
+        v8::Local<v8::Value> argv[1] = { promise };
+        (void)handler_val.As<v8::Function>()->Call(context, global, 1, argv);
+    }
 }
 
 // ---------------------------------------------------------------------------

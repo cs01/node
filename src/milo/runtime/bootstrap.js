@@ -157,6 +157,37 @@
     globalThis.AbortSignal = AbortSignal;
     globalThis.AbortController = class AbortController { #signal = new AbortSignal(); get signal() { return this.#signal; } abort(reason) { this.#signal._abort(reason); } };
   }
+
+  // Unhandled promise rejection tracking (driven by v8capi's PromiseRejectCallback).
+  // A rejected-with-no-handler promise is queued; if no .catch is attached before the
+  // next tick, process emits 'unhandledRejection' (or warns by default).
+  {
+    const _pendingRejections = new Map();
+    const _handledAfter = new Set();
+    globalThis.__onPromiseReject = function(promise, reason) {
+      _pendingRejections.set(promise, reason);
+      Promise.resolve().then(() => process.nextTick(() => {
+        if (!_pendingRejections.has(promise)) return;
+        const r = _pendingRejections.get(promise);
+        _pendingRejections.delete(promise);
+        if (process.listenerCount && process.listenerCount('unhandledRejection') > 0) {
+          process.emit('unhandledRejection', r, promise);
+        } else {
+          try {
+            const msg = r && r.stack ? r.stack : String(r);
+            if (process.stderr && process.stderr.write) process.stderr.write('Uncaught (in promise) ' + msg + '\n');
+          } catch {}
+        }
+      }));
+    };
+    globalThis.__onPromiseHandled = function(promise) {
+      if (_pendingRejections.delete(promise)) return;
+      // Handler attached after we already emitted 'unhandledRejection'.
+      if (process.listenerCount && process.listenerCount('rejectionHandled') > 0) {
+        if (!_handledAfter.has(promise)) { _handledAfter.add(promise); process.nextTick(() => process.emit('rejectionHandled', promise)); }
+      }
+    };
+  }
   if (typeof DOMException === 'undefined') globalThis.DOMException = class DOMException extends Error {
     constructor(msg, nameOrOpts) {
       super(msg);

@@ -32,6 +32,8 @@ function EventEmitter(opts) {
     }
     this._captureRejections = opts.captureRejections;
   }
+  // else: inherit EventEmitter.prototype._captureRejections (the global default),
+  // so even subclasses that skip super() pick up EventEmitter.captureRejections.
 }
 
 EventEmitter.prototype.setMaxListeners = function(n) {
@@ -102,12 +104,12 @@ EventEmitter.prototype.emit = function(type) {
   const capture = this._captureRejections;
   if (typeof handlers === 'function') {
     const r = handlers.apply(this, args);
-    if (capture && r && typeof r.then === 'function') _addCatch(this, r, type, args);
+    if (capture && r != null) _addCatch(this, r, type, args);
   } else {
     const copy = handlers.slice();
     for (let i = 0; i < copy.length; i++) {
       const r = copy[i].apply(this, args);
-      if (capture && r && typeof r.then === 'function') _addCatch(this, r, type, args);
+      if (capture && r != null) _addCatch(this, r, type, args);
     }
   }
   return true;
@@ -115,19 +117,23 @@ EventEmitter.prototype.emit = function(type) {
 
 // captureRejections: a listener returning a rejecting promise routes the error to
 // the emitter's rejection handler, or 'error' (with capture disabled to avoid loops).
-function _addCatch(ee, promise, type, args) {
-  promise.then(undefined, function(err) {
-    process.nextTick(function() {
-      const sym = EventEmitter.captureRejectionSymbol;
-      if (typeof ee[sym] === 'function') {
-        ee[sym](err, type, ...args);
-      } else {
-        const prev = ee._captureRejections;
-        try { ee._captureRejections = false; ee.emit('error', err); }
-        finally { ee._captureRejections = prev; }
-      }
-    });
+function _emitRejection(ee, err, type, args) {
+  process.nextTick(function() {
+    const sym = EventEmitter.captureRejectionSymbol;
+    if (typeof ee[sym] === 'function') {
+      ee[sym](err, type, ...args);
+    } else {
+      const prev = ee._captureRejections;
+      try { ee._captureRejections = false; ee.emit('error', err); }
+      finally { ee._captureRejections = prev; }
+    }
   });
+}
+function _addCatch(ee, promise, type, args) {
+  let then;
+  try { then = promise.then; } catch (err) { _emitRejection(ee, err, type, args); return; }
+  if (typeof then !== 'function') return;  // single .then access (Promises/A+)
+  then.call(promise, undefined, function(err) { _emitRejection(ee, err, type, args); });
 }
 
 EventEmitter.prototype.on = function(type, fn) {
@@ -371,7 +377,15 @@ function once(emitter, type, options) {
 }
 
 EventEmitter.once = once;
-EventEmitter.captureRejections = false;
+// Default lives on the prototype (instances inherit it); the static accessor
+// reads/writes it so `EventEmitter.captureRejections = true` affects all instances,
+// including subclasses created without calling super().
+EventEmitter.prototype._captureRejections = false;
+Object.defineProperty(EventEmitter, 'captureRejections', {
+  get() { return EventEmitter.prototype._captureRejections; },
+  set(v) { if (typeof v !== 'boolean') { const e = new TypeError('The "options.captureRejections" property must be of type boolean.' + _invalidArgTypeHelper(v)); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; } EventEmitter.prototype._captureRejections = v; },
+  enumerable: true, configurable: true,
+});
 EventEmitter.captureRejectionSymbol = Symbol.for('nodejs.rejection');
 EventEmitter.errorMonitor = Symbol('events.errorMonitor');
 
