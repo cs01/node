@@ -1024,7 +1024,17 @@
       // Strip shebang lines — V8 doesn't handle them, Node's C++ loader normally does this
       if (src.charCodeAt(0) === 0x23 && src.charCodeAt(1) === 0x21) src = src.replace(/^#!.*\n/, '');
       if (_isESM(resolved)) src = _esmToCjs(src, resolved);
-      (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src))(mod.exports, modRequire, mod, resolved, dname, primordials);
+      // Honor a user-customized Module.wrapper (some tests prepend to it); otherwise
+      // use the fast new Function path so default loading/stack-lines stay unchanged.
+      // Skip for builtins — requiring 'module' here would recurse while loading it.
+      let _wrap;
+      if (!isBuiltin) { try { _wrap = globalThis.require('module').wrapper; } catch {} }
+      if (_wrap && _wrap[0] !== '(function (exports, require, module, __filename, __dirname) { ') {
+        const compiled = (0, eval)(_wrap[0] + src + _wrap[1]);
+        compiled.call(mod.exports, mod.exports, modRequire, mod, resolved, dname);
+      } else {
+        (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src))(mod.exports, modRequire, mod, resolved, dname, primordials);
+      }
     }
     mod.loaded = true;
     moduleCache[resolved] = mod.exports;
