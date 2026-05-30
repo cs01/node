@@ -30,7 +30,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | timers     | 49/55     | 89%  | low      | refresh ordering, getLibuvNow (native syntax), ALS, domain |
 | require    | 14/19     | 73%  | med      | resolve dedup, symlink, exceptions |
 | module     | 21/26     | 80%  | high     | .node dlopen, circular-dep warning, main-fail stderr |
-| console    | 8/14      | 57%  | med      | Console constructor, tty colors |
+| console    | 9/14      | 64%  | med      | write-error propagation, tty colors, revoked proxy |
 | path       | 8/15      | 53%  | med      | edge cases |
 | diagnostics| 10/17     | 58%  | low      | tracingChannel+ALS async propagation, udp |
 | fs         | 99/201    | 49%  | high     | dispose ERR_DIR_CLOSED, readFile+signal, error codes |
