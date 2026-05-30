@@ -1,0 +1,126 @@
+# WIP: URLSearchParams brand-checks + arg-validation + form-urlencoded codec
+# Status: BLOCKED — functionally correct (whatwg 11->20 curated) but applying it
+# makes require('url') load the REAL lib/internal/url.js, whose line 308
+# (ObjectDefineProperties with computed [SymbolToStringTag]) leaks 'URLSearchParams
+# Iterator' onto Object.prototype in milo, globally breaking Object.prototype.toString
+# (String({}) -> '[object URLSearchParams Iterator]'). Root cause is a milo
+# loader/compiler issue, NOT this JS. Pre-change require('url') does NOT load real
+# internal/url; these bootstrap edits trigger it via a mechanism not visible in
+# require.cache (likely native builtin load). Re-apply once milo bug is fixed.
+# Diff is ed-style against HEAD:src/milo/runtime/bootstrap.js.
+337a338,387
+>     // application/x-www-form-urlencoded codec (WHATWG): '+' is space; percent
+>     // sequences are decoded leniently (invalid '%xx' kept verbatim, unlike
+>     // decodeURIComponent which throws). Serializer emits '+' for space.
+>     // WHATWG USVString coercion: toString-hint (so {toString} throws before valueOf),
+>     // and Symbols throw (String(sym) does NOT throw in this V8, unlike spec ToString).
+>     const _toStr = (v) => { if (typeof v === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string'); return String(v); };
+>     // Branded iterator so .next.call(wrongThis) throws ERR_INVALID_THIS like Node.
+>     const _spIterBrand = new WeakSet();
+>     function _spIterator(arr) {
+>       let i = 0;
+>       // NOTE: a computed `get [Symbol.toStringTag]` in an object literal is
+>       // miscompiled here and leaks the accessor onto Object.prototype — so
+>       // define toStringTag explicitly with defineProperty instead.
+>       const it = {
+>         next() {
+>           if (!_spIterBrand.has(this)) throw _ERR_INVALID_THIS('URLSearchParamsIterator');
+>           if (i >= arr.length) return { value: undefined, done: true };
+>           return { value: arr[i++], done: false };
+>         },
+>         [Symbol.iterator]() { return this; },
+>       };
+>       Object.defineProperty(it, Symbol.toStringTag, { value: 'URLSearchParams Iterator', configurable: true });
+>       _spIterBrand.add(it);
+>       return it;
+>     }
+>     // Lazy — TextEncoder/TextDecoder globals are registered later in bootstrap.
+>     let _formEnc, _formDec;
+>     const _enc = () => (_formEnc ??= new TextEncoder());
+>     const _dec = () => (_formDec ??= new TextDecoder());
+>     function _formDecode(s) {
+>       s = s.replace(/\+/g, ' ');
+>       const bytes = [];
+>       for (let i = 0; i < s.length; i++) {
+>         const c = s[i];
+>         if (c === '%' && i + 2 < s.length && /^[0-9A-Fa-f]{2}$/.test(s.slice(i + 1, i + 3))) {
+>           bytes.push(parseInt(s.slice(i + 1, i + 3), 16)); i += 2;
+>         } else { for (const b of _enc().encode(c)) bytes.push(b); }
+>       }
+>       return _dec().decode(new Uint8Array(bytes));
+>     }
+>     function _formEncode(s) {
+>       let out = '';
+>       for (const b of _enc().encode(s)) {
+>         if (b === 0x20) out += '+';
+>         else if ((b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a) ||
+>                  b === 0x2a || b === 0x2d || b === 0x2e || b === 0x5f) out += String.fromCharCode(b);
+>         else out += '%' + b.toString(16).toUpperCase().padStart(2, '0');
+>       }
+>       return out;
+>     }
+341,342c391,407
+<         if (typeof init === 'string') { for (const p of init.replace(/^\?/,'').split('&').filter(Boolean)) { const [k,...v] = p.split('='); this.#p.push([decodeURIComponent(k), decodeURIComponent(v.join('='))]); } }
+<         else if (init && typeof init === 'object') { for (const [k,v] of (Array.isArray(init) ? init : Object.entries(init))) this.#p.push([String(k), String(v)]); }
+---
+>         if (init === undefined || init === null) return;
+>         if (typeof init === 'string') {
+>           for (const p of init.replace(/^\?/, '').split('&')) {
+>             if (p === '') continue;
+>             const eq = p.indexOf('=');
+>             if (eq === -1) this.#p.push([_formDecode(p), '']);
+>             else this.#p.push([_formDecode(p.slice(0, eq)), _formDecode(p.slice(eq + 1))]);
+>           }
+>         } else if (typeof init === 'object') {
+>           if (typeof init[Symbol.iterator] === 'function') {
+>             for (const pair of init) {
+>               const a = [...pair];
+>               if (a.length !== 2) throw _makeNodeError(TypeError, 'ERR_INVALID_TUPLE', 'Each query pair must be an iterable [name, value] tuple');
+>               this.#p.push([String(a[0]), String(a[1])]);
+>             }
+>           } else { for (const k of Object.keys(init)) this.#p.push([String(k), String(init[k])]); }
+>         }
+344,353c409,418
+<       get(k) { const e = this.#p.find(([a])=>a===k); return e ? e[1] : null; }
+<       getAll(k) { return this.#p.filter(([a])=>a===k).map(([,v])=>v); }
+<       has(k) { return this.#p.some(([a])=>a===k); }
+<       set(k, v) { let found = false; this.#p = this.#p.filter(([a]) => { if (a===k && !found) { found = true; return true; } return a!==k; }); if (found) this.#p.find(([a])=>a===k)[1] = String(v); else this.#p.push([k, String(v)]); }
+<       append(k, v) { this.#p.push([String(k), String(v)]); }
+<       delete(k) { this.#p = this.#p.filter(([a])=>a!==k); }
+<       forEach(fn) { for (const [k,v] of this.#p) fn(v, k, this); }
+<       keys() { return this.#p.map(([k])=>k)[Symbol.iterator](); }
+<       values() { return this.#p.map(([,v])=>v)[Symbol.iterator](); }
+<       entries() { return this.#p[Symbol.iterator](); }
+---
+>       get(k) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 1) throw _ERR_MISSING_ARGS('name'); k = _toStr(k); const e = this.#p.find(([a]) => a === k); return e ? e[1] : null; }
+>       getAll(k) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 1) throw _ERR_MISSING_ARGS('name'); k = _toStr(k); return this.#p.filter(([a]) => a === k).map(([, v]) => v); }
+>       has(k) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 1) throw _ERR_MISSING_ARGS('name'); k = _toStr(k); return this.#p.some(([a]) => a === k); }
+>       set(k, v) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 2) throw _ERR_MISSING_ARGS('name', 'value'); k = _toStr(k); v = _toStr(v); let found = false; this.#p = this.#p.filter(([a]) => { if (a === k) { if (!found) { found = true; return true; } return false; } return true; }); if (found) this.#p.find(([a]) => a === k)[1] = v; else this.#p.push([k, v]); }
+>       append(k, v) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 2) throw _ERR_MISSING_ARGS('name', 'value'); this.#p.push([_toStr(k), _toStr(v)]); }
+>       delete(k, v) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 1) throw _ERR_MISSING_ARGS('name'); k = _toStr(k); if (arguments.length > 1 && v !== undefined) { v = _toStr(v); this.#p = this.#p.filter(([a, b]) => !(a === k && b === v)); } else { this.#p = this.#p.filter(([a]) => a !== k); } }
+>       forEach(fn, thisArg) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('callback', 'function', fn); for (const [k, v] of this.#p.slice()) fn.call(thisArg, v, k, this); }
+>       keys() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); return _spIterator(this.#p.map(([k]) => k)); }
+>       values() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); return _spIterator(this.#p.map(([, v]) => v)); }
+>       entries() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); return _spIterator(this.#p.map(([k, v]) => [k, v])); }
+355,356c420,422
+<       toString() { return this.#p.map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&'); }
+<       get size() { return this.#p.length; }
+---
+>       sort() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); this.#p.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0); }
+>       toString() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); return this.#p.map(([k, v]) => _formEncode(k) + '=' + _formEncode(v)).join('&'); }
+>       get size() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); return this.#p.length; }
+722a789,791
+>   globalThis._ERR_INVALID_THIS = function(type) {
+>     return _makeNodeError(TypeError, 'ERR_INVALID_THIS', `Value of "this" must be of type ${type}`);
+>   };
+724,725c793,799
+<     const msg = args.length === 1 ? `The "${args[0]}" argument must be specified` : `The ${args.map(a => `"${a}"`).join(', ')} arguments must be specified`;
+<     return _makeNodeError(TypeError, 'ERR_MISSING_ARGS', msg);
+---
+>     const q = args.map(a => `"${a}"`);
+>     let list;
+>     if (q.length === 1) list = q[0];
+>     else if (q.length === 2) list = `${q[0]} and ${q[1]}`;
+>     else list = q.slice(0, -1).join(', ') + ', and ' + q[q.length - 1];
+>     const noun = args.length === 1 ? 'argument' : 'arguments';
+>     return _makeNodeError(TypeError, 'ERR_MISSING_ARGS', `The ${list} ${noun} must be specified`);
