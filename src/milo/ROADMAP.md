@@ -22,9 +22,9 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | event      | 26/28     | 92%  | —        | mostly passing |
 | next       | 8/9       | 88%  | —        | mostly passing |
 | buffer     | 47/63     | 74%  | high     | ucs2 indexOf alignment, Buffer() DEP0005 dedup, arrayBufferViewHasBuffer (V8) |
-| querystring| 2/3       | 66%  | —        | mostly passing |
+| querystring| 3/3       | 100% | —        | done |
 | process    | 45/57     | 78%  | high     | beforeExit re-emit on server close, execve, --title flag, hrtime natives |
-| url        | 7/11      | 63%  | med      | whatwg url edge cases |
+| url        | 10/11     | 91%  | med      | URL props own-enumerable vs getters (urltooptions) |
 | readable   | 3/5       | 60%  | med      | destroy/unpipe edge cases |
 | v8         | 3/5       | 60%  | —        | mostly passing |
 | timers     | 31/55     | 56%  | high     | unref, immediate edge cases |
@@ -33,7 +33,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | console    | 7/14      | 50%  | med      | Console constructor |
 | path       | 8/15      | 53%  | med      | edge cases |
 | diagnostics| 8/17      | 47%  | low      | channel subscribe/unsubscribe |
-| fs         | 92/201    | 45%  | high     | error codes, write-stream edge cases |
+| fs         | 97/201    | 48%  | high     | createReadStream+FileHandle, error codes, write-stream |
 | http       | 91/210    | 43%  | high     | timeout/abort, keep-alive, error codes |
 | net        | 44/106    | 41%  | high     | Socket not extending Duplex |
 | stream     | mixed     | ~35% | high     | pipeline, transform, pipe errors |
@@ -159,6 +159,11 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
 
 ## done
+
+- [x] fs.read/readSync/FileHandle option-form + customPromisifyArgs; FileHandle is EventEmitter (read cluster, fs 94->97)
+- [x] querystring.escape node encodeStr port (surrogate combine, lone-end throws) — querystring 3/3
+- [x] url.format type validation (ERR_INVALID_ARG_TYPE) — url 10/11
+- [x] events/AbortSignal: real Event on abort, stopImmediatePropagation halts dispatch, listenerCount, once({signal})
 
 - [x] util.promisify faithful port — resolve first value (was returning array: real bug breaking packages), customPromisifyArgs->named object, setPrototypeOf+own-descriptors, no cache; util-promisify now blocked ONLY by vm realm isolation (line 102 cross-realm prototype)
 - [x] internal/util sleep (validated msec) + customPromisifyArgs export (util-sleep, timers-nested)
