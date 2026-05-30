@@ -39,7 +39,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | stream     | mixed     | ~35% | high     | pipeline, transform, pipe errors |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
 | util       | 6/19      | 31%  | med      | inspect edge cases |
-| vm         | 20/71     | 28%  | low      | sandbox isolation, SourceTextModule |
+| vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
 | whatwg     | 10/41     | 24%  | med      | URL/URLSearchParams edge cases |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |
 | child      | 17/85     | 20%  | med      | child.send, spawn edge cases |
@@ -104,10 +104,14 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 ### net
 - [ ] net.Socket should extend Duplex (currently extends EventEmitter with ad-hoc methods)
 
-### vm real V8 contexts (HIGH VALUE — ~50 vm tests + jest/templating packages)
-- [ ] vm.runInNewContext currently uses eval/Function (no realm isolation) — foreign objects share our Function.prototype
-- [ ] v8capi already exposes v8c_context_new; need a vm binding: new context, marshal sandbox<->global, compile+run in context
-- [ ] blocks util-promisify (cross-realm prototype check) + most vm module tests
+### vm real V8 contexts — DONE (foundation), needs marshaling fidelity
+- [x] vm binding (bindings/vm.milo): createContext + run via v8c_context_new/v8c_script_compile_run
+- [x] true realm isolation — foreign objects get the new context's own Function.prototype (solved util-promisify line 102)
+- [x] sandbox<->global marshaling done INSIDE the target context (writes to a foreign global proxy from the main context are silently dropped by V8 — key gotcha)
+- [ ] TRADEOFF: curated vm 20->18 — shallow value-copy marshaling is lossy vs Node's interceptor contextify:
+      loses property descriptors/getters and Symbol.toStringTag (test-vm-basic wants '[object process]'),
+      and new contexts lack Node globals (console etc) the old eval/with(proxy) fake exposed via globalThis fallback.
+- [ ] NEXT: marshal with full descriptors (getOwnPropertyDescriptors) + seed standard globals -> should exceed 20
 
 ### missing APIs (scattered but cumulative)
 - [ ] `dns.Resolver` class (~30 tests)

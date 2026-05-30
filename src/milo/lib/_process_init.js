@@ -163,6 +163,12 @@ if (!process.on) {
   EventEmitter.call(process);
 }
 
+// Node tags the process object so Object.prototype.toString.call(process) is
+// '[object process]' (some libs and vm tests rely on this).
+if (!process[Symbol.toStringTag]) {
+  Object.defineProperty(process, Symbol.toStringTag, { value: 'process', writable: false, enumerable: false, configurable: true });
+}
+
 // Default 'warning' handler — the ONLY place warnings are printed. Mirrors Node:
 // non-Error payloads (e.g. process.emit('warning', 'str')) produce no output.
 // Registered after EventEmitter is mixed into process (process.on now exists).
