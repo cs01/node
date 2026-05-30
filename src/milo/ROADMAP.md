@@ -21,7 +21,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 |------------|-----------|------|----------|--------------|
 | event      | 27/28     | 96%  | —        | captureRejections |
 | next       | 9/9       | 100% | —        | done |
-| buffer     | 47/63     | 74%  | high     | ucs2 indexOf alignment, Buffer() DEP0005 dedup, arrayBufferViewHasBuffer (V8) |
+| buffer     | 48/63     | 76%  | high     | ucs2 indexOf alignment, DEP0005, inspect extra-props |
 | querystring| 3/3       | 100% | —        | done |
 | process    | 45/57     | 78%  | high     | beforeExit re-emit on server close, execve, --title flag, hrtime natives |
 | url        | 10/11     | 91%  | med      | URL props own-enumerable vs getters (urltooptions) |
@@ -159,6 +159,8 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
 
 ## done
+
+- [x] buffer: byteLength accepts cross-realm ArrayBuffer (toStringTag); compare rejects prototype-only fakes (isView brand) — buffer 46->48
 
 - [x] FOUNDATIONAL: AsyncLocalStorage async propagation via V8 ContinuationPreservedEmbedderData — context survives await/.then/timers/nextTick. Curated async tests still need createHook tracking, but ALS works for real frameworks
 
