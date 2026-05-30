@@ -28,7 +28,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | readable   | 3/5       | 60%  | med      | destroy/unpipe edge cases |
 | v8         | 3/5       | 60%  | —        | mostly passing |
 | timers     | 31/55     | 56%  | high     | unref, immediate edge cases |
-| require    | 11/19     | 57%  | med      | circular deps, extensions |
+| require    | 13/19     | 68%  | med      | resolve, symlink, exceptions |
 | module     | 21/26     | 80%  | high     | .node dlopen, circular-dep warning, main-fail stderr |
 | console    | 8/14      | 57%  | med      | Console constructor, tty colors |
 | path       | 8/15      | 53%  | med      | edge cases |
@@ -159,6 +159,8 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
 
 ## done
+
+- [x] require.cache Proxy (Module-object semantics over moduleCache) + _builtinCache for node: bypass; node:-prefix error codes — require 11->13, no load-path risk
 
 - [x] module: require.extensions custom handlers + Module.runMain entry (monkey-patchable via --require) — module 19->21 (53->80% this session)
 
