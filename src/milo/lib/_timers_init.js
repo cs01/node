@@ -80,7 +80,16 @@ globalThis.setTimeout = function setTimeout(fn, delay, ...args) {
   _validateTimerCb(fn);
   _warnTimerDelay(delay);
   const t = new Timeout(0, fn, delay, args, false);
-  const wrapped = () => { _timerCallbacks.delete(t._id); t._destroyed = true; _safeCall(fn, args, t); };
+  const wrapped = () => {
+    const before = t._id;
+    _timerCallbacks.delete(before);
+    _safeCall(fn, args, t);
+    // A callback may turn a one-shot into a repeating timer by setting _repeat
+    // (Node's listOnTimeout re-arms in that case); otherwise mark it done unless
+    // the callback already refreshed it (changing _id).
+    if (t._repeat && !t._destroyed) t.refresh();
+    else if (t._id === before) t._destroyed = true;
+  };
   t._id = _tb.schedule(wrapped, Math.max(0, delay || 0), 0);
   _timerCallbacks.set(t._id, wrapped);
   return t;
@@ -157,7 +166,9 @@ function _hasRefImmediate() {
 function _drainImmediates() {
   const batch = _immediateQueue.splice(0, _immediateQueue.length);
   for (const item of batch) {
-    if (_activeImmediates.has(item.id)) {
+    // Skip immediates cleared (clearImmediate) or disposed ([Symbol.dispose] →
+    // clearTimeout, which marks _destroyed without touching _activeImmediates).
+    if (_activeImmediates.has(item.id) && !(item.timeout && item.timeout._destroyed)) {
       _activeImmediates.delete(item.id);
       _safeCall(item.fn, item.args, item.timeout);
     }
