@@ -36,7 +36,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | fs         | 99/201    | 49%  | high     | dispose ERR_DIR_CLOSED, readFile+signal, error codes |
 | http       | 91/210    | 43%  | high     | timeout/abort, keep-alive, error codes |
 | net        | 44/106    | 41%  | high     | Socket not extending Duplex |
-| stream     | mixed     | ~35% | high     | pipeline, transform, pipe errors |
+| stream     | 73/156    | 46%  | high     | async-fn map/flatMap, web streams, pipe edge cases |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
 | util       | 10/19     | 53%  | med      | inspect getters/showHidden, callbackify, deprecate |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
@@ -159,6 +159,8 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
 
 ## done
+
+- [x] stream iterator-helper arg validation (map/filter/drop/take/...) — stream 70->73
 
 - [x] timers: interval _onTimeout/_idleTimeout stop signals + internal/linkedlist port — timers 47->49 (40->49 this session, 89%)
 
