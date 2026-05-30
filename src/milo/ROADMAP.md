@@ -50,7 +50,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | dns        | 1/22      | 4%   | low      | Resolver class |
 | http2      | 27/165    | 16%  | low      | frame codec + HPACK exist; stream/session edge cases |
 | worker     | 1/53      | 1%   | low      | needs V8 isolate threading |
-| async      | 0/18      | 0%   | med      | async_hooks, AsyncLocalStorage |
+| async      | 1/18      | 5%   | med      | async_hooks createHook tracking (ALS propagation DONE) |
 | webcrypto  | 0/11      | 0%   | low      | subtle crypto gaps |
 
 ## quick wins (biggest compat % gain per effort)
@@ -159,6 +159,8 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
 
 ## done
+
+- [x] FOUNDATIONAL: AsyncLocalStorage async propagation via V8 ContinuationPreservedEmbedderData — context survives await/.then/timers/nextTick. Curated async tests still need createHook tracking, but ALS works for real frameworks
 
 - [x] stream iterator-helper arg validation (map/filter/drop/take/...) — stream 70->73
 
