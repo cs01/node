@@ -1152,7 +1152,8 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
             let rPrefix = "(function(){const p=require('path');const f=p.resolve('"
             // route top-level throws through process._fatalException so capture callbacks
             // / 'uncaughtException' listeners fire (native would otherwise just print + exit)
-            let rMiddle = "');require.main={id:'.',filename:f,loaded:false,paths:[]};try{require(f);}catch(e){process._fatalException(e);}})()"
+            // run via Module.runMain so a --require preload can monkey-patch it
+            let rMiddle = "');require.main={id:'.',filename:f,loaded:false,paths:[]};try{require('module').runMain();}catch(e){process._fatalException(e);}})()"
             var wi: i64 = 0
             var wj: i64 = 0
             while wj < strlen(rPrefix) {

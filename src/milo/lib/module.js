@@ -151,4 +151,11 @@ Module._initPaths = function() {
 };
 Module._initPaths();
 
+// Entry point runner — the native [main] bootstrap calls this so it can be
+// monkey-patched (e.g. by a --require preload) before the main module loads.
+Module.runMain = function() {
+  const main = globalThis.require && globalThis.require.main;
+  if (main && main.filename) globalThis.require(main.filename);
+};
+
 module.exports = Module;
