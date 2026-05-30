@@ -482,6 +482,14 @@ function _deepEqual(a, b, strict) {
     for (const v of a) { if (!b.has(v)) return false; }
     return true;
   }
+  // ArrayBuffer/SharedArrayBuffer: compare bytes (no enumerable keys to diff).
+  // Prototype check above already separates the two buffer kinds.
+  if (a instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && a instanceof SharedArrayBuffer)) {
+    if (a.byteLength !== b.byteLength) return false;
+    const ua = new Uint8Array(a), ub = new Uint8Array(b);
+    for (let i = 0; i < ua.length; i++) { if (ua[i] !== ub[i]) return false; }
+    return true;
+  }
 
   const keysA = Object.keys(a), keysB = Object.keys(b);
   if (keysA.length !== keysB.length) return false;
@@ -554,6 +562,12 @@ function notDeepStrictEqual(actual, expected, message, ...extra) {
 function _partialDeepEqual(a, b) {
   if (Object.is(a, b)) return true;
   if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+  // Buffers, typed arrays, Date, RegExp, Map, Set, Error compare by full strict
+  // equality — "partial" only relaxes plain objects/arrays.
+  if (ArrayBuffer.isView(b) || b instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && b instanceof SharedArrayBuffer) ||
+      b instanceof Date || b instanceof RegExp || b instanceof Map || b instanceof Set || b instanceof Error) {
+    return _deepEqual(a, b, true);
+  }
   if (Array.isArray(b)) {
     if (!Array.isArray(a) || a.length < b.length) return false;
     for (let i = 0; i < b.length; i++) { if (!_partialDeepEqual(a[i], b[i])) return false; }
