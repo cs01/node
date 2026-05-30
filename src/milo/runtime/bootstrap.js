@@ -135,6 +135,15 @@
     heap_utils: { createHeapSnapshotStream() { throw new Error('heap snapshot not available'); } },
   };
   const _nativeBinding = internalBinding;
+  // The JS util shim above shadows the native util binding; surface the native
+  // async-context (continuation-preserved data) accessors through it.
+  try {
+    const _natUtil = _nativeBinding('util');
+    if (_natUtil && _natUtil.asyncContextGet) {
+      _jsBindings.util.asyncContextGet = _natUtil.asyncContextGet;
+      _jsBindings.util.asyncContextSet = _natUtil.asyncContextSet;
+    }
+  } catch {}
   globalThis.internalBinding = function(name) {
     if (_jsBindings[name]) return _jsBindings[name];
     try { return _nativeBinding(name); } catch { return Object.create(null); }

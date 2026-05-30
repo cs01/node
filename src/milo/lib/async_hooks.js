@@ -1,8 +1,15 @@
 // async_hooks module — AsyncLocalStorage with real async propagation
 'use strict';
 
-// Global registry of all active AsyncLocalStorage instances and their current stores
-const _stores = new Map();
+// The async-context "frame" is a Map of ALS-id -> store, stored in V8's
+// continuation-preserved embedder data so it propagates across await/promise
+// continuations automatically. Timers/immediates/nextTick are NOT continuations,
+// so those are still wrapped explicitly below.
+const _acs = internalBinding('util');
+function _getFrame() { return _acs.asyncContextGet(); }
+function _setFrame(f) { _acs.asyncContextSet(f); }
+function _withStore(id, store) { const f = new Map(_getFrame() || undefined); f.set(id, store); return f; }
+function _withoutStore(id) { const p = _getFrame(); if (!p || !p.has(id)) return p; const f = new Map(p); f.delete(id); return f; }
 
 class AsyncLocalStorage {
   constructor(opts) {
@@ -16,58 +23,42 @@ class AsyncLocalStorage {
     }
     if (opts && opts.name !== undefined) this.name = opts.name;
   }
-  getStore() { return _stores.has(this._id) ? _stores.get(this._id) : (this._hasDefault ? this._defaultValue : undefined); }
+  getStore() {
+    const f = _getFrame();
+    if (f && f.has(this._id)) return f.get(this._id);
+    return this._hasDefault ? this._defaultValue : undefined;
+  }
   run(store, fn, ...args) {
-    const prev = _stores.get(this._id);
-    _stores.set(this._id, store);
-    try { return fn(...args); }
-    finally {
-      if (prev === undefined) _stores.delete(this._id);
-      else _stores.set(this._id, prev);
-    }
+    const prev = _getFrame();
+    _setFrame(_withStore(this._id, store));
+    try { return fn(...args); } finally { _setFrame(prev); }
   }
   exit(fn, ...args) {
-    const prev = _stores.get(this._id);
-    _stores.delete(this._id);
-    try { return fn(...args); }
-    finally {
-      if (prev === undefined) _stores.delete(this._id);
-      else _stores.set(this._id, prev);
-    }
+    const prev = _getFrame();
+    _setFrame(_withoutStore(this._id));
+    try { return fn(...args); } finally { _setFrame(prev); }
   }
-  enterWith(store) { _stores.set(this._id, store); }
-  disable() { _stores.delete(this._id); }
+  enterWith(store) { _setFrame(_withStore(this._id, store)); }
+  disable() { _setFrame(_withoutStore(this._id)); }
   static snapshot() {
-    const snapshot = new Map(_stores);
+    const snapshot = _getFrame();
     return (fn, ...args) => {
-      const prev = new Map(_stores);
-      for (const [k, v] of snapshot) _stores.set(k, v);
-      for (const k of _stores.keys()) { if (!snapshot.has(k)) _stores.delete(k); }
-      try { return fn(...args); }
-      finally {
-        _stores.clear();
-        for (const [k, v] of prev) _stores.set(k, v);
-      }
+      const prev = _getFrame();
+      _setFrame(snapshot);
+      try { return fn(...args); } finally { _setFrame(prev); }
     };
   }
 }
 AsyncLocalStorage._nextId = 1;
 
-// Capture current async context as a snapshot
-function _captureContext() {
-  return new Map(_stores);
-}
-
-// Restore a captured context, run fn, then put back previous
-function _runInContext(snapshot, fn, args) {
-  const prev = new Map(_stores);
-  _stores.clear();
-  for (const [k, v] of snapshot) _stores.set(k, v);
+// Capture/restore the current async-context frame (used to carry context onto
+// scheduled callbacks that V8 doesn't treat as continuations).
+function _captureContext() { return _getFrame(); }
+function _runInContext(frame, fn, args) {
+  const prev = _getFrame();
+  _setFrame(frame);
   try { return fn.apply(undefined, args); }
-  finally {
-    _stores.clear();
-    for (const [k, v] of prev) _stores.set(k, v);
-  }
+  finally { _setFrame(prev); }
 }
 
 // Wrap a callback to carry its creation-time async context
@@ -98,14 +89,16 @@ if (typeof process !== 'undefined' && process.nextTick) {
   };
 }
 
-// Patch Promise.prototype.then/catch/finally to propagate context
-const _origThen = Promise.prototype.then;
-Promise.prototype.then = function(onFulfilled, onRejected) {
-  return _origThen.call(this,
-    onFulfilled ? _wrapCallback(onFulfilled) : onFulfilled,
-    onRejected ? _wrapCallback(onRejected) : onRejected
-  );
-};
+// setImmediate is a scheduled callback (not a promise continuation), so wrap it.
+// Promise .then/await are continuations — V8 propagates the frame automatically,
+// so they are NOT patched here.
+if (typeof globalThis.setImmediate === 'function') {
+  const _origSetImmediate = globalThis.setImmediate;
+  globalThis.setImmediate = function setImmediate(fn, ...args) {
+    return _origSetImmediate.call(globalThis, _wrapCallback(fn), ...args);
+  };
+  globalThis.setImmediate.__proto__ = _origSetImmediate;
+}
 
 class AsyncResource {
   constructor(type, opts) {
@@ -122,14 +115,10 @@ class AsyncResource {
     this._snapshot = _captureContext();
   }
   runInAsyncScope(fn, thisArg, ...args) {
-    const prev = new Map(_stores);
-    _stores.clear();
-    for (const [k, v] of this._snapshot) _stores.set(k, v);
+    const prev = _getFrame();
+    _setFrame(this._snapshot);
     try { return fn.apply(thisArg, args); }
-    finally {
-      _stores.clear();
-      for (const [k, v] of prev) _stores.set(k, v);
-    }
+    finally { _setFrame(prev); }
   }
   emitDestroy() { return this; }
   asyncId() { return this._asyncId; }

@@ -246,6 +246,26 @@ extern "C" void v8c_isolate_run_microtasks(v8c_isolate* iso) {
     ISO(iso)->PerformMicrotaskCheckpoint();
 }
 
+// Continuation-preserved embedder data — V8 automatically propagates this across
+// promise continuations (await), which is exactly the substrate AsyncLocalStorage
+// needs. Stores/reads a single JS Value (an async-context frame object).
+extern "C" v8c_value v8c_isolate_get_continuation_data(v8c_isolate* iso) {
+    auto* i = ISO(iso);
+    v8::HandleScope scope(i);
+    auto data = i->GetContinuationPreservedEmbedderDataV2();
+    if (data.IsEmpty()) return V8C_VALUE_INVALID;
+    auto val = data.As<v8::Value>();
+    if (val->IsUndefined()) return V8C_VALUE_INVALID;
+    return wrap(i, val);
+}
+
+extern "C" void v8c_isolate_set_continuation_data(v8c_isolate* iso, v8c_value v) {
+    auto* i = ISO(iso);
+    v8::HandleScope scope(i);
+    if (v.slot < 0) { i->SetContinuationPreservedEmbedderDataV2(v8::Local<v8::Data>()); return; }
+    i->SetContinuationPreservedEmbedderDataV2(unwrap(i, v));
+}
+
 extern "C" void v8c_isolate_request_gc(v8c_isolate* iso) {
     ISO(iso)->RequestGarbageCollectionForTesting(
         v8::Isolate::kFullGarbageCollection);

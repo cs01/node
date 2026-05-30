@@ -2,6 +2,33 @@
 
 from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
 
+extern fn v8c_isolate_get_continuation_data(iso: *u8): i32
+extern fn v8c_isolate_set_continuation_data(iso: *u8, v: i32): void
+
+// AsyncLocalStorage substrate: read/write V8's continuation-preserved embedder
+// data, which V8 propagates across await/promise continuations.
+fn asyncContextGet(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    var slot: i32 = -1
+    unsafe { slot = v8c_isolate_get_continuation_data(iso.ptr) }
+    if slot < 0 {
+        ci.retUndefined()
+    } else {
+        ci.ret(Value { slot: slot })
+    }
+}
+
+fn asyncContextSet(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    var slot: i32 = -1
+    if ci.length() > 0 {
+        slot = ci.arg(0).slot
+    }
+    unsafe { v8c_isolate_set_continuation_data(iso.ptr, slot) }
+}
+
 fn utilGetOwnNonIndexProperties(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     if ci.length() < 2 { return }
@@ -102,5 +129,7 @@ fn nm_init_util(iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "isInsideNodeModules" as *u8, utilIsInsideNodeModules as *u8)
         c.setMethod(exp, "getCallerLocation" as *u8, utilGetCallerLocation as *u8)
         c.setMethod(exp, "sleep" as *u8, utilSleep as *u8)
+        c.setMethod(exp, "asyncContextGet" as *u8, asyncContextGet as *u8)
+        c.setMethod(exp, "asyncContextSet" as *u8, asyncContextSet as *u8)
     }
 }
