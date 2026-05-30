@@ -33,7 +33,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | console    | 7/14      | 50%  | med      | Console constructor |
 | path       | 8/15      | 53%  | med      | edge cases |
 | diagnostics| 8/17      | 47%  | low      | channel subscribe/unsubscribe |
-| fs         | 97/201    | 48%  | high     | createReadStream+FileHandle, error codes, write-stream |
+| fs         | 99/201    | 49%  | high     | dispose ERR_DIR_CLOSED, readFile+signal, error codes |
 | http       | 91/210    | 43%  | high     | timeout/abort, keep-alive, error codes |
 | net        | 44/106    | 41%  | high     | Socket not extending Duplex |
 | stream     | mixed     | ~35% | high     | pipeline, transform, pipe errors |
@@ -159,6 +159,9 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
 
 ## done
+
+- [x] assert.rejects/doesNotReject: regex matchers via .test(), validator-vs-Error-ctor, promiseFn type + non-Promise-return validation, doesNotReject message (CASCADE — affects throws/rejects across suite)
+- [x] fs: createReadStream accepts FileHandle as opts.fd; FileHandle is EventEmitter; read/write option-forms + reject-not-throw (fs 94->99)
 
 - [x] fs.read/readSync/FileHandle option-form + customPromisifyArgs; FileHandle is EventEmitter (read cluster, fs 94->97)
 - [x] querystring.escape node encodeStr port (surrogate combine, lone-end throws) — querystring 3/3
