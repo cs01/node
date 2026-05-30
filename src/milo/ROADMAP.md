@@ -21,7 +21,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 |------------|-----------|------|----------|--------------|
 | event      | 27/28     | 96%  | —        | captureRejections |
 | next       | 9/9       | 100% | —        | done |
-| buffer     | 48/63     | 76%  | high     | ucs2 indexOf alignment, DEP0005, inspect extra-props |
+| buffer     | 49/63     | 77%  | high     | ucs2 indexOf alignment, DEP0005, inspect extra-props, resizable |
 | querystring| 3/3       | 100% | —        | done |
 | process    | 45/57     | 78%  | high     | beforeExit re-emit on server close, execve, --title flag, hrtime natives |
 | url        | 10/11     | 91%  | med      | URL props own-enumerable vs getters (urltooptions) |
