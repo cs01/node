@@ -27,7 +27,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | url        | 10/11     | 91%  | med      | URL props own-enumerable vs getters (urltooptions) |
 | readable   | 3/5       | 60%  | med      | destroy/unpipe edge cases |
 | v8         | 3/5       | 60%  | —        | mostly passing |
-| timers     | 31/55     | 56%  | high     | unref, immediate edge cases |
+| timers     | 40/55     | 72%  | high     | unref, immediate edge cases |
 | require    | 14/19     | 73%  | med      | resolve dedup, symlink, exceptions |
 | module     | 21/26     | 80%  | high     | .node dlopen, circular-dep warning, main-fail stderr |
 | console    | 8/14      | 57%  | med      | Console constructor, tty colors |
@@ -159,6 +159,8 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
 
 ## done
+
+- [x] FOUNDATIONAL: process unhandledRejection/rejectionHandled (V8 PromiseRejectCallback in v8capi -> bootstrap tracker); EventEmitter captureRejections (prototype-backed default, async listener rejections -> error). timers +1, broadly used
 
 - [x] events.removeAllListeners emits removeListener per-listener (Reflect.ownKeys for symbols) — event 27/28
 
