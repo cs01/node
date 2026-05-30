@@ -148,6 +148,12 @@ Object.defineProperty(globalThis, '__workerTick', { value: function __workerTick
   return hasTimers || _immediateQueue.length > 0 || (process._nextTickQueue && process._nextTickQueue.length > 0);
 }, enumerable: false });
 
+// Only ref'd immediates keep the loop alive; an unref'd-only queue lets the
+// process exit without running them (setImmediate(fn).unref()).
+function _hasRefImmediate() {
+  for (const item of _immediateQueue) { if (!_unrefTimers.has(item.id)) return true; }
+  return false;
+}
 function _drainImmediates() {
   const batch = _immediateQueue.splice(0, _immediateQueue.length);
   for (const item of batch) {
@@ -198,7 +204,7 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     }
     const hasIO = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
     const hasTicks = process._nextTickQueue && process._nextTickQueue.length > 0;
-    const hasImmediates = _immediateQueue.length > 0;
+    const hasImmediates = _hasRefImmediate();
     const hasPendingClose = _pendingCloseRefs > 0;
     if (!hasTimers && !hasIO && !hasTicks && !hasImmediates && !hasPendingClose && !hasWorkers) {
       if (process._emitBeforeExit) process._emitBeforeExit();
@@ -208,14 +214,14 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
       const hasTimers2 = _tb.hasPending() && (() => { for (const id of _timerCallbacks.keys()) { if (!_unrefTimers.has(id)) return true; } return false; })();
       const hasIO2 = poll ? (globalThis.__hasIO && globalThis.__hasIO()) : false;
       const hasTicks2 = process._nextTickQueue && process._nextTickQueue.length > 0;
-      const hasImmediates2 = _immediateQueue.length > 0;
+      const hasImmediates2 = _hasRefImmediate();
       const hasPendingClose2 = _pendingCloseRefs > 0;
       const hasWorkers2 = globalThis.__hasActiveWorkers ? globalThis.__hasActiveWorkers() : false;
       if (!hasTimers2 && !hasIO2 && !hasTicks2 && !hasImmediates2 && !hasPendingClose2 && !hasWorkers2) break;
     }
 
     let waitMs = 100;
-    if (hasImmediates || hasPendingClose) {
+    if (_immediateQueue.length > 0 || hasPendingClose) {
       waitMs = 0;
     } else if (hasTimers) {
       const ms = _tb.msUntilNext();
