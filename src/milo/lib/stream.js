@@ -444,15 +444,21 @@ class Readable extends Stream {
     };
     return {
       next() {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
+          const err = self._readableState && self._readableState.errored;
+          if (err !== undefined && err !== null) return reject(done(err));
           const chunk = self.read();
           if (chunk !== null) return resolve({ value: chunk, done: false });
           if (self._readableState.ended) return resolve(done({ done: true }));
-          self.once('readable', () => {
-            const c = self.read();
-            resolve(c !== null ? { value: c, done: false } : done({ done: true }));
-          });
-          self.once('end', () => resolve(done({ done: true })));
+          const cleanup = () => { self.removeListener('readable', onReadable); self.removeListener('end', onEnd); self.removeListener('error', onError); };
+          const onReadable = () => { cleanup(); const c = self.read(); resolve(c !== null ? { value: c, done: false } : done({ done: true })); };
+          const onEnd = () => { cleanup(); resolve(done({ done: true })); };
+          // A stream error must reject the consumer's for-await, not surface as an
+          // unhandled 'error' event.
+          const onError = (e) => { cleanup(); done(); reject(e); };
+          self.once('readable', onReadable);
+          self.once('end', onEnd);
+          self.once('error', onError);
         });
       },
       return() {
@@ -611,6 +617,14 @@ Readable.prototype[Symbol.asyncDispose] = function() {
 };
 
 Readable.from = function(iterable, opts) {
+  // Validate up front (sync throw) — must be iterable/async-iterable or a string.
+  if (iterable == null || (typeof iterable !== 'string' &&
+      typeof iterable[Symbol.asyncIterator] !== 'function' &&
+      typeof iterable[Symbol.iterator] !== 'function')) {
+    const e = new TypeError('The "iterable" argument must be an instance of Iterable. Received ' +
+      (iterable === null ? 'null' : 'type ' + typeof iterable));
+    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
   const r = new Readable({ objectMode: true, highWaterMark: 16, ...opts });
   r._read = () => {};
   (async () => {
