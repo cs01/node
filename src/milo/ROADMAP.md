@@ -21,7 +21,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 |------------|-----------|------|----------|--------------|
 | event      | 27/28     | 96%  | —        | captureRejections |
 | next       | 9/9       | 100% | —        | done |
-| buffer     | 49/63     | 77%  | high     | ucs2 indexOf alignment, DEP0005, inspect extra-props, resizable |
+| buffer     | 52/63     | 83%  | high     | ucs2 indexOf alignment, inspect extra-props, resizable |
 | querystring| 3/3       | 100% | —        | done |
 | process    | 45/57     | 78%  | high     | beforeExit re-emit on server close, execve, --title flag, hrtime natives |
 | url        | 10/11     | 91%  | med      | URL props own-enumerable vs getters (urltooptions) |
@@ -160,6 +160,7 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 
 ## done
 
+- [x] buffer: legacy `new Buffer()` emits DEP0005 once (internal allocs via _newBuffer skip warning); native binding.fill shim range-checks start/end (ERR_OUT_OF_RANGE) — buffer 49->52 (fill, constructor-deprecation-error, pending-deprecation)
 - [x] buffer: byteLength accepts cross-realm ArrayBuffer (toStringTag); compare rejects prototype-only fakes (isView brand) — buffer 46->48
 
 - [x] FOUNDATIONAL: AsyncLocalStorage async propagation via V8 ContinuationPreservedEmbedderData — context survives await/.then/timers/nextTick. Curated async tests still need createHook tracking, but ALS works for real frameworks

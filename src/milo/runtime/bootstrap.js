@@ -144,6 +144,24 @@
       _jsBindings.util.asyncContextSet = _natUtil.asyncContextSet;
     }
   } catch {}
+  // Node's native buffer.fill(buf,value,start,end,encoding) range-checks start/end
+  // and throws ERR_OUT_OF_RANGE. Tests call this raw binding directly (lib uses
+  // fillRange), so surface the same validation via a shim over the native binding.
+  try {
+    const _natBuf = _nativeBinding('buffer');
+    if (_natBuf && typeof _natBuf.fill === 'function') {
+      const _natFill = _natBuf.fill;
+      const _bufShim = Object.create(null);
+      for (const k of Object.keys(_natBuf)) _bufShim[k] = _natBuf[k];
+      _bufShim.fill = function(buf, value, start, end, encoding) {
+        const len = buf.length;
+        if (typeof start === 'number' && (start < 0 || start > len)) { const e = new RangeError(`The value of "start" is out of range. It must be >= 0 and <= ${len}. Received ${start}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+        if (typeof end === 'number' && (end < 0 || end > len)) { const e = new RangeError(`The value of "end" is out of range. It must be >= 0 and <= ${len}. Received ${end}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+        return _natFill.call(_natBuf, buf, value, start, end, encoding);
+      };
+      _jsBindings.buffer = _bufShim;
+    }
+  } catch {}
   globalThis.internalBinding = function(name) {
     if (_jsBindings[name]) return _jsBindings[name];
     try { return _nativeBinding(name); } catch { return Object.create(null); }

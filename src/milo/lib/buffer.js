@@ -218,8 +218,30 @@ function _base64Encode(buf, start, end) {
   return btoa(s);
 }
 
+// Legacy `new Buffer()`/`Buffer()` is deprecated (DEP0005). Internal allocations
+// go through _newBuffer, which sets _internalCtor so the warning fires only for
+// direct user calls. The warning is emitted at most once.
+let _internalCtor = false;
+let _bufferWarned = false;
+function _emitBufferDeprecation() {
+  if (_bufferWarned) return;
+  _bufferWarned = true;
+  if (typeof process !== 'undefined' && process.emitWarning) {
+    process.emitWarning(
+      'Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.',
+      'DeprecationWarning', 'DEP0005'
+    );
+  }
+}
+function _newBuffer(...args) {
+  _internalCtor = true;
+  try { return new Buffer(...args); }
+  finally { _internalCtor = false; }
+}
+
 class Buffer extends Uint8Array {
   constructor(arg, byteOffsetOrEncoding, length) {
+    if (!_internalCtor) _emitBufferDeprecation();
     if (typeof arg === 'number' && typeof byteOffsetOrEncoding === 'string') {
       const e = new TypeError('The "string" argument must be of type string. Received type number (' + arg + ')');
       e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
@@ -241,7 +263,7 @@ class Buffer extends Uint8Array {
       err.code = 'ERR_OUT_OF_RANGE';
       throw err;
     }
-    const buf = new Buffer(size);
+    const buf = _newBuffer(size);
     if (fill !== undefined) {
       if (encoding !== undefined && typeof encoding !== 'string') {
         throw _ERR_INVALID_ARG_TYPE('encoding', 'string', encoding);
@@ -275,7 +297,7 @@ class Buffer extends Uint8Array {
       err.code = 'ERR_OUT_OF_RANGE';
       throw err;
     }
-    return new Buffer(size);
+    return _newBuffer(size);
   }
 
   static allocUnsafeSlow(size) {
@@ -285,7 +307,7 @@ class Buffer extends Uint8Array {
       err.code = 'ERR_OUT_OF_RANGE';
       throw err;
     }
-    return new Buffer(new ArrayBuffer(size));
+    return _newBuffer(new ArrayBuffer(size));
   }
 
   static from(value, encodingOrOffset, length) {
@@ -300,7 +322,7 @@ class Buffer extends Uint8Array {
           Object.setPrototypeOf(u8, Buffer.prototype);
           return u8;
         }
-        return new Buffer(_hexDecode(value));
+        return _newBuffer(_hexDecode(value));
       }
       if (enc === 'base64' || enc === 'base64url') {
         const cleaned = value.replace(/-/g, '+').replace(/_/g, '/');
@@ -309,15 +331,15 @@ class Buffer extends Uint8Array {
           Object.setPrototypeOf(u8, Buffer.prototype);
           return u8;
         }
-        return new Buffer(_base64Decode(cleaned));
+        return _newBuffer(_base64Decode(cleaned));
       }
       if (enc === 'ascii' || enc === 'latin1' || enc === 'binary') {
-        const a = new Buffer(value.length);
+        const a = _newBuffer(value.length);
         for (let i = 0; i < value.length; i++) a[i] = value.charCodeAt(i) & 0xff;
         return a;
       }
       if (enc === 'ucs2' || enc === 'ucs-2' || enc === 'utf16le' || enc === 'utf-16le') {
-        const a = new Buffer(value.length * 2);
+        const a = _newBuffer(value.length * 2);
         for (let i = 0; i < value.length; i++) {
           const c = value.charCodeAt(i);
           a[i * 2] = c & 0xff;
@@ -325,7 +347,7 @@ class Buffer extends Uint8Array {
         }
         return a;
       }
-      return new Buffer(_utf8Encode(value));
+      return _newBuffer(_utf8Encode(value));
     }
     if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && value instanceof SharedArrayBuffer)) {
       // A fake AB inherits ArrayBuffer.prototype (instanceof passes) but has no real
@@ -345,9 +367,9 @@ class Buffer extends Uint8Array {
       Object.setPrototypeOf(view, Buffer.prototype);
       return view;
     }
-    if (Array.isArray(value) || value instanceof Uint8Array) return new Buffer(value);
-    if (Buffer.isBuffer(value)) { const c = new Buffer(value.length); c.set(value); return c; }
-    if (value && typeof value === 'object' && value.type === 'Buffer' && Array.isArray(value.data)) return new Buffer(value.data);
+    if (Array.isArray(value) || value instanceof Uint8Array) return _newBuffer(value);
+    if (Buffer.isBuffer(value)) { const c = _newBuffer(value.length); c.set(value); return c; }
+    if (value && typeof value === 'object' && value.type === 'Buffer' && Array.isArray(value.data)) return _newBuffer(value.data);
     if (value && typeof value === 'object' && (value.buffer instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && value.buffer instanceof SharedArrayBuffer))) {
       return Buffer.from(value.buffer, value.byteOffset || 0, value.byteLength !== undefined ? value.byteLength : value.buffer.byteLength);
     }
@@ -357,7 +379,7 @@ class Buffer extends Uint8Array {
       if (typeof value[Symbol.toPrimitive] === 'function') primitive = value[Symbol.toPrimitive]('string');
       else if (typeof value.valueOf === 'function') primitive = value.valueOf();
       if (typeof primitive === 'string') return Buffer.from(primitive, encodingOrOffset);
-      if (typeof value.length === 'number') return new Buffer(Array.from(value));
+      if (typeof value.length === 'number') return _newBuffer(Array.from(value));
     }
     throw _bufFromTypeError(value);
   }
