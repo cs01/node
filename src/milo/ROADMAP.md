@@ -29,7 +29,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | v8         | 3/5       | 60%  | —        | mostly passing |
 | timers     | 31/55     | 56%  | high     | unref, immediate edge cases |
 | require    | 11/19     | 57%  | med      | circular deps, extensions |
-| module     | 17/26     | 65%  | high     | _extensions custom ext, deprecation warnings |
+| module     | 19/26     | 73%  | high     | _extensions custom ext, .node dlopen, circular warning |
 | console    | 8/14      | 57%  | med      | Console constructor, tty colors |
 | path       | 8/15      | 53%  | med      | edge cases |
 | diagnostics| 8/17      | 47%  | low      | channel subscribe/unsubscribe |
@@ -159,6 +159,8 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
 
 ## done
+
+- [x] --pending/no/throw-deprecation flags derived from cmdline; module.parent deduped DEP0144 getter (module 17->19)
 
 - [x] module loader honors customized Module.wrapper (non-builtin); null-proto package.json (proto-pollution safe) — module 14->17
 - [x] util.parseEnv dotenv-compatible parser (quotes/multiline/comments/export/escapes); process.processTicksAndRejections named frame
