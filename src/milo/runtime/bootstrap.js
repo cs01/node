@@ -1183,6 +1183,14 @@
             getSystemErrorName: (err) => `ERRNO_${err}`,
             promisify: require('util').promisify,
             deprecate: require('util').deprecate,
+            // pendingDeprecate only warns under --pending-deprecation; without flag
+            // support, mirror Node's no-flag behavior: wrap but don't warn.
+            pendingDeprecate: (fn) => fn,
+            sleep: (msec) => {
+              if (typeof msec !== 'number') { const e = new TypeError('The "msec" argument must be of type number. Received ' + (msec === null ? 'null' : typeof msec)); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
+              if (!Number.isInteger(msec) || msec < 0 || msec > 0xffffffff) { const e = new RangeError(`The value of "msec" is out of range. It must be a 32-bit unsigned integer. Received ${msec}`); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+              internalBinding('util').sleep(msec);
+            },
             kEmptyObject: Object.freeze({}),
           };
         } else {
