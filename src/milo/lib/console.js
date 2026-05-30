@@ -10,6 +10,11 @@ function _invalidArgTypeHelper(value) {
   return ' Received type ' + typeof value + ' (' + inspect(value, { colors: false }) + ')';
 }
 
+// A stack overflow during a write is never swallowed, even with ignoreErrors.
+function _isStackOverflow(e) {
+  return e instanceof RangeError && typeof e.message === 'string' && e.message.includes('call stack');
+}
+
 class Console {
   constructor(stdout, stderr, opts) {
     if (typeof stdout === 'object' && stdout !== null && !stdout.write) {
@@ -89,7 +94,7 @@ class Console {
       try {
         if (this._stdout && this._stdout.write) this._stdout.write(msg);
         else internalBinding('_console').write(msg);
-      } catch {}
+      } catch (e) { if (_isStackOverflow(e)) throw e; }
     }
   }
 
@@ -106,7 +111,7 @@ class Console {
       try {
         if (this._stderr && this._stderr.write) this._stderr.write(msg);
         else internalBinding('_console').writeError(msg);
-      } catch {}
+      } catch (e) { if (_isStackOverflow(e)) throw e; }
     }
   }
 
