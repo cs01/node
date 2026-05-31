@@ -435,16 +435,11 @@ function stringToFlags(flags) {
 
 function openSync(path, flags, mode) {
   _validatePath(path, 'path');
-  if (mode != null && typeof mode === 'string') {
-    const e = new TypeError(`The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '${mode}'`);
-    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
-  }
-  if (mode != null && typeof mode !== 'number' && typeof mode !== 'undefined') {
-    throw _ERR_INVALID_ARG_TYPE('mode', 'integer', mode);
-  }
+  // mode accepts a uint32 or octal string (e.g. '10644'); _validateMode masks/parses.
+  mode = mode == null ? 0o666 : _validateMode(mode, 'mode');
   const sp = _toPath(path);
   const f = typeof flags === 'string' ? (FLAG_MAP[flags] ?? 0) : (flags || 0);
-  const fd = b.open(sp, f, mode || 0o666);
+  const fd = b.open(sp, f, mode);
   if (fd < 0) {
     if ((f & O_EXCL) && b.exists(sp)) throw _fsError('EEXIST', 'open', sp, 'file already exists');
     throw _fsError('ENOENT', 'open', sp, 'no such file or directory');
