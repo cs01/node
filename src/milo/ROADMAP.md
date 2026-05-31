@@ -13,7 +13,7 @@ We use their curated subset as our primary compat benchmark.
 Run: `zsh src/milo/test-compat.sh [N|all] [timeout] [module]`
 List: `src/milo/bun-curated-tests.txt` (2,143 tests present in our repo)
 
-### current pass rates (snapshot 2026-05-28 — STALE; several rows verified higher, re-measure before trusting)
+### current pass rates (snapshot 2026-05-30; small modules re-measured. path/assert/console/querystring 100%; whatwg 19, require 17)
 
 On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM)
 
@@ -28,7 +28,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | readable   | 4/5       | 80%  | med      | destroy/unpipe edge cases |
 | v8         | 3/5       | 60%  | —        | mostly passing |
 | timers     | 49/55     | 89%  | low      | refresh ordering, getLibuvNow (native syntax), ALS, domain |
-| require    | 14/19     | 73%  | med      | resolve dedup, symlink, exceptions |
+| require    | 17/19     | 89%  | low      | preserve-symlinks flag, delete-array-iterator |
 | module     | 21/26     | 80%  | high     | .node dlopen, circular-dep warning, main-fail stderr |
 | console    | 9/14      | 64%  | med      | write-error propagation, tty colors, revoked proxy |
 | path       | 15/15     | 100% | —        | done (curated) |
