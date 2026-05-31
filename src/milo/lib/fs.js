@@ -140,6 +140,16 @@ function readFileSync(path, opts) {
       try { return readFileSync(fd, opts); } finally { closeSync(fd); }
     }
   }
+  // Guard before reading the whole file into memory: Node caps single reads at
+  // kIoMaxLength (2**31-1). Without this a multi-GB file would OOM the process.
+  {
+    let st = null;
+    try { st = statSync(p); } catch {}
+    if (st && st.size > 2147483647) {
+      const e = new RangeError(`File size (${st.size}) is greater than 2 GiB`);
+      e.code = 'ERR_FS_FILE_TOO_LARGE'; throw e;
+    }
+  }
   const r = b.readFile(p);
   if (r === -1) { const e = new Error(`ENOENT: no such file or directory, open '${path}'`); e.code = 'ENOENT'; e.syscall = 'open'; e.path = String(path); throw e; }
   if (encoding === 'utf8' || encoding === 'utf-8') return r;
@@ -693,10 +703,16 @@ function accessSync(path, mode) {
   }
 }
 
+// copyfile mode flags: EXCL(1)|FICLONE(2)|FICLONE_FORCE(4) — max 7. Validated
+// synchronously by both sync and async forms (Node throws before any async work).
+function _validateCopyMode(mode) {
+  if (mode != null && typeof mode !== 'number') throw _ERR_INVALID_ARG_TYPE('mode', 'integer', mode);
+  if (mode != null && (!Number.isInteger(mode) || mode < 0 || mode > 7)) throw _ERR_OUT_OF_RANGE('mode', '>= 0 && <= 7', mode);
+}
 function copyFileSync(src, dest, mode) {
   _validatePath(src, 'src');
   _validatePath(dest, 'dest');
-  if (mode != null && typeof mode !== 'number') throw _ERR_INVALID_ARG_TYPE('mode', 'integer', mode);
+  _validateCopyMode(mode);
   const COPYFILE_EXCL = 1;
   if ((mode & COPYFILE_EXCL) && existsSync(dest)) {
     throw _fsError('EEXIST', 'copyfile', _toPath(src), 'file already exists', _toPath(dest));
@@ -964,6 +980,7 @@ function copyFile(src, dest, flags, cb) {
   if (typeof flags === 'function') { cb = flags; flags = 0; }
   _validatePath(src, 'src');
   _validatePath(dest, 'dest');
+  _validateCopyMode(flags);
   _validateCb(cb); _async(copyFileSync, [src, dest, flags], (err) => cb(err));
 }
 function realpath(path, opts, cb) {
@@ -1010,7 +1027,7 @@ function _validateLen(len) {
     e.code = 'ERR_OUT_OF_RANGE'; throw e;
   }
 }
-function ftruncateSync(fd, len) { _validateFd(fd); _validateLen(len); b.ftruncate(fd, len || 0); }
+function ftruncateSync(fd, len) { _validateFd(fd); _validateLen(len); b.ftruncate(fd, len > 0 ? len : 0); }
 function fchmodSync(fd, mode) { _validateFd(fd); mode = _validateMode(mode, 'mode'); b.fchmod(fd, mode); }
 
 function fsync(fd, cb) { _validateFd(fd); _validateCb(cb); _async(fsyncSync, [fd], (err) => cb(err)); }

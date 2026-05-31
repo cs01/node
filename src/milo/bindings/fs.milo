@@ -603,12 +603,12 @@ fn fsFdatasync(info: *u8, _ud: *u8): void {
 fn fsFtruncate(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let fd = ci.i32Arg(0, -1)
-    let len = ci.i32Arg(1, 0)
+    let len = ci.i64Arg(1, 0)
     if fd < 0 {
         ci.retI32(-1)
         return
     }
-    unsafe { ci.retI32(ftruncate(fd, len as i64)) }
+    unsafe { ci.retI32(ftruncate(fd, len)) }
 }
 
 fn fsFchmod(info: *u8, _ud: *u8): void {
