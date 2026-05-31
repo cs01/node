@@ -1241,12 +1241,22 @@
       // Skip for builtins — requiring 'module' here would recurse while loading it.
       let _wrap;
       if (!isBuiltin) { try { _wrap = globalThis.require('module').wrapper; } catch {} }
-      if (_wrap && _wrap[0] !== '(function (exports, require, module, __filename, __dirname) { ') {
-        const compiled = (0, eval)(_wrap[0] + src + _wrap[1]);
-        compiled.call(mod.exports, mod.exports, modRequire, mod, resolved, dname);
-      } else {
-        // .call(mod.exports, ...) so a module's top-level `this` === module.exports (Node semantics).
-        (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src)).call(mod.exports, mod.exports, modRequire, mod, resolved, dname, primordials);
+      try {
+        if (_wrap && _wrap[0] !== '(function (exports, require, module, __filename, __dirname) { ') {
+          const compiled = (0, eval)(_wrap[0] + src + _wrap[1]);
+          compiled.call(mod.exports, mod.exports, modRequire, mod, resolved, dname);
+        } else {
+          // .call(mod.exports, ...) so a module's top-level `this` === module.exports (Node semantics).
+          (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src)).call(mod.exports, mod.exports, modRequire, mod, resolved, dname, primordials);
+        }
+      } catch (e) {
+        // A module that throws while loading must NOT be cached — re-requiring it
+        // re-runs and re-throws (Node semantics). Remove the in-progress registry entry.
+        delete _moduleWrappers[resolved];
+        if (isBare && id !== resolved) delete _moduleWrappers[id];
+        delete _moduleObjects[resolved];
+        delete moduleCache[resolved];
+        throw e;
       }
     }
     mod.loaded = true;
