@@ -1475,8 +1475,18 @@ class Dir {
 
 function _promisify(fn) { return (...args) => { try { return Promise.resolve(fn(...args)); } catch (e) { return Promise.reject(e); } }; }
 const promises = {
-  readFile: _promisify((path, opts) => readFileSync(path, opts)),
-  writeFile: _promisify((path, data) => writeFileSync(path, data)),
+  readFile: (path, opts) => {
+    const sig = opts && typeof opts === 'object' ? opts.signal : undefined;
+    try { _validateAbortSignal(sig); } catch (e) { return Promise.reject(e); }
+    if (sig && sig.aborted) return Promise.reject(_abortErr(sig));
+    try { return Promise.resolve(readFileSync(path, opts)); } catch (e) { return Promise.reject(e); }
+  },
+  writeFile: (path, data, opts) => {
+    const sig = opts && typeof opts === 'object' ? opts.signal : undefined;
+    try { _validateAbortSignal(sig); } catch (e) { return Promise.reject(e); }
+    if (sig && sig.aborted) return Promise.reject(_abortErr(sig));
+    try { writeFileSync(path, data, opts); return Promise.resolve(); } catch (e) { return Promise.reject(e); }
+  },
   stat: _promisify((path, opts) => statSync(path, opts)),
   lstat: _promisify((path, opts) => lstatSync(path, opts)),
   unlink: _promisify((path) => unlinkSync(path)),
