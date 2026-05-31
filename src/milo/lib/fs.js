@@ -393,7 +393,11 @@ function statfs(path, opts, cb) {
   _async(statfsSync, [path, opts], (err, res) => cb(err, res));
 }
 function lchmod(path, mode, cb) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); _validateCb(cb); _async(lchmodSync, [path, mode], (err) => cb(err)); }
-function symlinkSync(target, path) { _validatePath(target, 'target'); _validatePath(path, 'path'); b.symlink(_toPath(target), _toPath(path)); }
+function _validateSymlinkType(type) {
+  if (type != null && type !== 'dir' && type !== 'file' && type !== 'junction')
+    throw _ERR_INVALID_ARG_VALUE('type', type);
+}
+function symlinkSync(target, path, type) { _validatePath(target, 'target'); _validatePath(path, 'path'); _validateSymlinkType(type); b.symlink(_toPath(target), _toPath(path)); }
 function lstatSync(path, options) {
   _validatePath(path, 'path');
   const sp = _toPath(path);
@@ -1247,6 +1251,9 @@ function symlink(target, path, type, cb) {
   if (typeof type === 'function') { cb = type; type = undefined; }
   _validatePath(target, 'target');
   _validatePath(path, 'path');
+  // type, when given, must be one of dir|file|junction (or null) — node throws otherwise.
+  _validateSymlinkType(type);
+  _validateCb(cb);
   _async(symlinkSync, [target, path], (err) => cb(err));
 }
 function write(fd, buffer, offset, length, position, cb) {
@@ -1487,7 +1494,7 @@ const promises = {
   mkdtemp: _promisify((prefix) => mkdtempSync(prefix)),
   readlink: _promisify((p) => readlinkSync(p)),
   realpath: _promisify((p) => realpathSync(p)),
-  symlink: _promisify((target, p) => symlinkSync(target, p)),
+  symlink: _promisify((target, p, type) => symlinkSync(target, p, type)),
   appendFile: _promisify((p, data) => appendFileSync(p, data)),
   statfs: _promisify((path) => {
     _validatePath(path, 'path');
