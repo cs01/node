@@ -58,7 +58,17 @@ class Console {
     this._groupIndent = '';
     this._groupIndentationWidth = groupIndentation;
     this._ignoreErrors = opts ? opts.ignoreErrors !== false : true;
-    this._colorMode = opts && opts.colorMode;
+    const _explicitColorMode = opts && opts.colorMode !== undefined;
+    this._colorMode = _explicitColorMode ? opts.colorMode : 'auto';
+    if (this._colorMode !== 'auto' && typeof this._colorMode !== 'boolean') {
+      const e = new TypeError(`The argument 'colorMode' must be one of: 'auto', true, false. Received ${inspect(this._colorMode)}`);
+      e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+    }
+    // colorMode and inspectOptions.colors both set the same thing — reject the pair.
+    if (_explicitColorMode && opts.inspectOptions && typeof opts.inspectOptions === 'object' && 'colors' in opts.inspectOptions) {
+      const e = new TypeError('Option "options.inspectOptions.color" cannot be used in combination with option "colorMode"');
+      e.code = 'ERR_INCOMPATIBLE_OPTION_PAIR'; throw e;
+    }
     this._inspectOptions = opts && opts.inspectOptions;
     // Bind methods so they work when detached (e.g., [1,2,3].forEach(c.log))
     const proto = Object.getPrototypeOf(this);
@@ -77,10 +87,19 @@ class Console {
     }
   }
 
-  _fmt(...args) {
+  // Resolve whether to colorize for `stream`: colorMode 'auto' follows the stream's
+  // TTY-ness; true/false force it. inspectOptions.colors (if present) overrides.
+  _colorFor(stream) {
+    if (this._colorMode === 'auto') return !!(stream && stream.isTTY);
+    return this._colorMode === true;
+  }
+
+  _fmt(stream, args) {
+    const opts = { colors: this._colorFor(stream), ...(this._inspectOptions || {}) };
     if (args.length === 0) return '';
-    if (typeof args[0] === 'string' && args.length > 1) return require('util').format(...args);
-    return args.map(a => typeof a === 'string' ? a : inspect(a)).join(' ');
+    const { formatWithOptions } = require('util');
+    if (typeof args[0] === 'string' && args.length > 1) return formatWithOptions(opts, ...args);
+    return args.map(a => typeof a === 'string' ? a : inspect(a, opts)).join(' ');
   }
 
   _indented(s) {
@@ -115,7 +134,7 @@ class Console {
   }
 
   log(...args) {
-    this._writeTo(this._stdout, this._indented(this._fmt(...args)), (m) => internalBinding('_console').write(m));
+    this._writeTo(this._stdout, this._indented(this._fmt(this._stdout, args)), (m) => internalBinding('_console').write(m));
   }
 
   info(...args) { this.log(...args); }
@@ -123,7 +142,7 @@ class Console {
   dir(obj, opts) { this.log(inspect(obj, opts)); }
 
   error(...args) {
-    this._writeTo(this._stderr, this._indented(this._fmt(...args)), (m) => internalBinding('_console').writeError(m));
+    this._writeTo(this._stderr, this._indented(this._fmt(this._stderr, args)), (m) => internalBinding('_console').writeError(m));
   }
 
   warn(...args) { this.error(...args); }
