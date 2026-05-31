@@ -1120,13 +1120,9 @@ function open(path, flags, mode, cb) {
   if (typeof flags === 'function') { cb = flags; flags = 'r'; mode = 0o666; }
   else if (typeof mode === 'function') { cb = mode; mode = 0o666; }
   _validatePath(path, 'path');
-  if (mode != null && typeof mode === 'string') {
-    const e = new TypeError(`The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '${mode}'`);
-    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
-  }
-  if (mode != null && typeof mode !== 'number') {
-    throw _ERR_INVALID_ARG_TYPE('mode', 'integer', mode);
-  }
+  // openSync parses+masks mode (uint32 or octal string); validate here too so a
+  // bad mode throws synchronously rather than via the callback.
+  mode = mode == null ? 0o666 : _validateMode(mode, 'mode');
   _validateCb(cb);
   _async(openSync, [path, flags, mode], cb);
 }
