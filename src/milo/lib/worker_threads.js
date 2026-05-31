@@ -169,15 +169,26 @@ if (_isWorker) {
 
   // called by the native worker entry each loop iteration; returns "stay alive"
   Object.defineProperty(globalThis, '__workerPump', { value: function __workerPump() {
-    for (;;) {
-      const env = _b.pollToWorker(_chan);
-      if (env === undefined) break;
-      if (env && env.t === 'message') parentPort.emit('message', env.v);
+    // A worker can itself own child workers. Drain their queues here exactly as
+    // the main loop does — without this a nested worker's messages/errors/exit
+    // are never delivered. A child 'error' handler may re-throw; that must surface
+    // as THIS worker's uncaughtException (which already posts to our parent), so
+    // the whole tick runs under one guard.
+    try {
+      for (;;) {
+        const env = _b.pollToWorker(_chan);
+        if (env === undefined) break;
+        if (env && env.t === 'message') parentPort.emit('message', env.v);
+      }
+      if (globalThis.__pumpParentWorkers) globalThis.__pumpParentWorkers();
+    } catch (e) {
+      process.emit('uncaughtException', e);
     }
+    const childWorkersAlive = globalThis.__hasActiveWorkers ? globalThis.__hasActiveWorkers() : false;
     const timersPending = globalThis.__workerTick ? globalThis.__workerTick() : false;
     if (_exited || _b.shouldTerminate(_chan)) { _b.markDone(_chan, _exitCode); return false; }
     const hasListeners = parentPort.listenerCount('message') > 0;
-    return timersPending || hasListeners;
+    return timersPending || hasListeners || childWorkersAlive;
   }, enumerable: false });
 }
 
