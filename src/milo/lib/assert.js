@@ -185,22 +185,24 @@ function _lcs(a, b) {
 
 // comparison diff for throws() object matching
 function _createComparisonDiff(actual, expected) {
+  // actual may be a non-object rejection value (e.g. null, 5) — guard property reads.
+  const actualIsObj = actual !== null && (typeof actual === 'object' || typeof actual === 'function');
   const keys = Object.keys(expected).sort();
   const lines = ['  Comparison {'];
   for (const key of keys) {
-    const aVal = actual[key];
+    const aVal = actualIsObj ? actual[key] : undefined;
     const eVal = expected[key];
     const aStr = _inspect(aVal);
     const eStr = _inspect(eVal);
     if (expected[key] instanceof RegExp) {
-      if (!expected[key].test(actual[key])) {
+      if (!expected[key].test(aVal)) {
         lines.push(`+   ${key}: ${aStr},`);
         lines.push(`-   ${key}: ${eStr},`);
       } else {
         lines.push(`    ${key}: ${aStr},`);
       }
     } else if (!_deepEqual(aVal, eVal, true)) {
-      if (eVal === undefined && !(key in actual)) {
+      if (eVal === undefined && !(actualIsObj && key in actual)) {
         lines.push(`-   ${key}: ${eStr},`);
       } else {
         lines.push(`+   ${key}: ${aStr},`);
@@ -879,19 +881,27 @@ async function rejects(fn, expected, message) {
         }
       }
     } else if (typeof expected === 'object' && expected !== null) {
+      // Property-subset match: RegExp values match via .test(), others deep-equal.
+      // Guard null/primitive `e` (e.g. Promise.reject(null)) — every key mismatches.
+      const ev = (e === null || (typeof e !== 'object' && typeof e !== 'function')) ? undefined : e;
+      const mismatched = [];
       for (const key of Object.keys(expected)) {
-        // RegExp values match via .test() against the property (like throws()),
-        // not deep-equality — {message: /foo/} must regex-match e.message.
+        const av = ev === undefined ? undefined : ev[key];
         if (expected[key] instanceof RegExp) {
-          if (!expected[key].test(e[key])) {
-            fail(e[key], expected[key],
-              message || `rejects: ${key} mismatch (actual: ${_inspect(e[key])}, expected: ${expected[key]})`,
-              'rejects');
-          }
-        } else if (!_deepEqual(e[key], expected[key], true)) {
-          fail(e[key], expected[key],
-            message || `rejects: ${key} mismatch (actual: ${_inspect(e[key])}, expected: ${_inspect(expected[key])})`,
-            'rejects');
+          if (!expected[key].test(av)) mismatched.push(key);
+        } else if (!_deepEqual(av, expected[key], true)) {
+          mismatched.push(key);
+        }
+      }
+      if (mismatched.length > 0) {
+        if (message) {
+          fail(e, expected, message, 'rejects');
+        } else {
+          const diffStr = _createComparisonDiff(e, expected);
+          const err = new AssertionError({ actual: e, expected, operator: 'rejects' });
+          err.message = `Expected values to be strictly deep-equal:\n+ actual - expected\n\n${diffStr}\n`;
+          err.generatedMessage = true;
+          throw err;
         }
       }
     }
