@@ -70,6 +70,9 @@ function inspect(obj, opts) {
     return _c('special', obj.name ? '[' + tag + ': ' + obj.name + ']' : '[' + tag + ' (anonymous)]');
   }
 
+  // Revoked Proxy throws on any access (including the custom-inspect symbol below).
+  try { Reflect.getPrototypeOf(obj); } catch (e) { if (String(e && e.message).includes('revoked')) return '<Revoked Proxy>'; throw e; }
+
   if (obj[Symbol.for('nodejs.util.inspect.custom')]) {
     const custom = obj[Symbol.for('nodejs.util.inspect.custom')](opts && opts.depth !== undefined ? opts.depth : 2, opts || {}, inspect);
     if (typeof custom === 'string') return custom;
@@ -124,6 +127,9 @@ function _reduceToSingleString(parts, prefix, open, close, currentDepth) {
 
 function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
   if (seen.has(obj)) return '[Circular]';
+  // A revoked Proxy throws on every operation (even Array.isArray/getPrototypeOf).
+  // Detect via a benign Reflect op and render like Node instead of crashing.
+  try { Reflect.getPrototypeOf(obj); } catch (e) { if (String(e && e.message).includes('revoked')) return '<Revoked Proxy>'; throw e; }
   seen.add(obj);
 
   if (Array.isArray(obj)) {
