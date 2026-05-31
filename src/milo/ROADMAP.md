@@ -77,22 +77,6 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 - [ ] `zlib.params()` — dynamic compression level change
 - [ ] flush mode edge cases
 
-## milo loader bug (FLAGGED + worked around — fix in $HOME/git/milo to remove workaround)
-
-### Object.prototype Symbol.toStringTag pollution on require('url')
-- `require('url')` makes milo's native internal-lib loader load REAL `lib/internal/url.js`; its
-  line 307 `ObjectDefineProperties(URLSearchParamsIterator.prototype, { [SymbolToStringTag]: ... })`
-  is mis-applied by milo (injected `_patchIterTag` helper) onto `Object.prototype`, globally
-  breaking `Object.prototype.toString` (`String({})` → `'[object URLSearchParams Iterator]'`).
-- `_patchIterTag` is in NO source file — injected by milo's native loader (confirmed via
-  non-configurable-lock stack trace). NOT reproducible in plain `-e` eval; only via internal-lib load.
-- WORKAROUND (live, `src/milo/lib/url.js` end): delete the bogus `Object.prototype[Symbol.toStringTag]`
-  (it's `configurable:true`; milo url.js runs after the leak in the same require). This unblocked
-  URLSearchParams (whatwg 11→19).
-- TRUE FIX (milo repo): make `ObjectDefineProperties(Ctor.prototype, {[computedSymbol]:...})` target
-  the function's `.prototype` (not Object.prototype), esp. after `delete Ctor.prototype.constructor`
-  + `ObjectSetPrototypeOf`. Then remove the url.js scrub. See memory project_milo_object_proto_pollution.
-
 ## critical
 
 ### error code validation (~435 tests)
