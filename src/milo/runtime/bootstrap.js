@@ -215,18 +215,40 @@
       }
     };
   }
-  if (typeof DOMException === 'undefined') globalThis.DOMException = class DOMException extends Error {
-    constructor(msg, nameOrOpts) {
-      super(msg);
-      if (typeof nameOrOpts === 'object' && nameOrOpts !== null) {
-        this.name = nameOrOpts.name || 'Error';
-        if ('cause' in nameOrOpts) this.cause = nameOrOpts.cause;
-      } else {
-        this.name = nameOrOpts || 'Error';
+  // Registry of objects (ArrayBuffers) the runtime refuses to transfer via
+  // postMessage / ArrayBuffer.prototype.transfer. Shared across buffer.js (pool),
+  // worker_threads.js (markAsUntransferable), and MessagePort below. A WeakSet so
+  // marking does not pin the buffer alive.
+  if (!globalThis.__untransferable) globalThis.__untransferable = new WeakSet();
+  if (typeof DOMException === 'undefined') {
+    // Legacy DOMException name→code map (https://webidl.spec.whatwg.org/#dfn-error-names-table).
+    const _domCodes = { IndexSizeError: 1, HierarchyRequestError: 3, WrongDocumentError: 4, InvalidCharacterError: 5, NoModificationAllowedError: 7, NotFoundError: 8, NotSupportedError: 9, InUseAttributeError: 10, InvalidStateError: 11, SyntaxError: 12, InvalidModificationError: 13, NamespaceError: 14, InvalidAccessError: 15, SecurityError: 18, NetworkError: 19, AbortError: 20, URLMismatchError: 21, QuotaExceededError: 22, TimeoutError: 23, InvalidNodeTypeError: 24, DataCloneError: 25 };
+    globalThis.DOMException = class DOMException extends Error {
+      constructor(msg, nameOrOpts) {
+        super(msg);
+        if (typeof nameOrOpts === 'object' && nameOrOpts !== null) {
+          this.name = nameOrOpts.name || 'Error';
+          if ('cause' in nameOrOpts) this.cause = nameOrOpts.cause;
+        } else {
+          this.name = nameOrOpts || 'Error';
+        }
+        this.code = _domCodes[this.name] || 0;
       }
-      this.code = 0;
-    }
-  };
+    };
+  }
+  // ArrayBuffer.prototype.transfer() must throw on a buffer marked untransferable
+  // (e.g. the Buffer pool). Wrap V8's native transfer to gate on the registry.
+  if (typeof ArrayBuffer.prototype.transfer === 'function' && !ArrayBuffer.prototype.transfer.__untransferableGuarded) {
+    const _origTransfer = ArrayBuffer.prototype.transfer;
+    const _guarded = function transfer(newLength) {
+      if (globalThis.__untransferable.has(this)) {
+        throw new TypeError('Cannot transfer an ArrayBuffer that was marked as untransferable');
+      }
+      return _origTransfer.call(this, newLength);
+    };
+    _guarded.__untransferableGuarded = true;
+    Object.defineProperty(ArrayBuffer.prototype, 'transfer', { value: _guarded, writable: true, configurable: true });
+  }
   if (typeof Event === 'undefined') {
     globalThis.Event = class Event { constructor(type, opts) { this.type = type; this.bubbles = opts?.bubbles || false; this.cancelable = opts?.cancelable || false; this.composed = opts?.composed || false; this.defaultPrevented = false; this.target = null; this.currentTarget = null; this.eventPhase = 0; this.isTrusted = false; } preventDefault() { if (this.cancelable) this.defaultPrevented = true; } stopPropagation() { this._stopPropagation = true; } stopImmediatePropagation() { this._stopPropagation = true; this._stopImmediate = true; } composedPath() { return this.target ? [this.target] : []; } };
     Object.defineProperties(Event, { NONE: { value: 0, writable: false, configurable: false, enumerable: true }, CAPTURING_PHASE: { value: 1, writable: false, configurable: false, enumerable: true }, AT_TARGET: { value: 2, writable: false, configurable: false, enumerable: true }, BUBBLING_PHASE: { value: 3, writable: false, configurable: false, enumerable: true } });
@@ -1246,8 +1268,12 @@
           const compiled = (0, eval)(_wrap[0] + src + _wrap[1]);
           compiled.call(mod.exports, mod.exports, modRequire, mod, resolved, dname);
         } else {
-          // .call(mod.exports, ...) so a module's top-level `this` === module.exports (Node semantics).
-          (new Function('exports', 'require', 'module', '__filename', '__dirname', 'primordials', src)).call(mod.exports, mod.exports, modRequire, mod, resolved, dname, primordials);
+          // Wrap on a SINGLE line (so user line N maps to file line N) and append a
+          // //# sourceURL so V8 attributes frames to the real file path — stack traces
+          // show `/path/file.js:13:5` instead of `eval at _loadModule <anonymous>`.
+          // .call(mod.exports, ...) so top-level `this` === module.exports (Node semantics).
+          const wrapped = '(function (exports, require, module, __filename, __dirname, primordials) { ' + src + '\n})\n//# sourceURL=' + resolved;
+          (0, eval)(wrapped).call(mod.exports, mod.exports, modRequire, mod, resolved, dname, primordials);
         }
       } catch (e) {
         // A module that throws while loading must NOT be cached — re-requiring it
@@ -1294,6 +1320,11 @@
         let stub;
         if (id === 'internal/test/binding') {
           stub = { internalBinding: globalThis.internalBinding };
+        } else if (id === 'internal/buffer') {
+          // Node's fast-path utf8 writer; first arg is the target buffer. Tests
+          // pass this to %OptimizeFunctionOnNextCall, so it must be a real fn.
+          const Buffer = globalThis.require('buffer').Buffer;
+          stub = { utf8Write: (buf, string, offset, length) => buf.utf8Write(string, offset, length) };
         } else if (id === 'internal/errors') {
           const _errCodes = {};
           const _codesProxy = new Proxy(_errCodes, { get(t, k) {
@@ -1676,6 +1707,15 @@
     class MessagePort extends EventTarget {
       constructor() { super(); this._other = null; this._started = false; this._queue = []; }
       postMessage(data, transfer) {
+        // Reject transfer of buffers marked untransferable (e.g. the Buffer pool,
+        // refs nodejs/node#32752) before any cloning side effects.
+        if (transfer != null) {
+          for (const item of transfer) {
+            if (globalThis.__untransferable.has(item)) {
+              throw new DOMException('Found invalid object in transferList', 'DataCloneError');
+            }
+          }
+        }
         const clone = JSON.parse(JSON.stringify(data === undefined ? null : data));
         if (this._other) {
           if (this._other._started) {
