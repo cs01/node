@@ -466,6 +466,41 @@ process.hasUncaughtExceptionCaptureCallback = () => _uncaughtExceptionCallback !
 // a capture callback or 'uncaughtException' listener handles it and execution
 // continues; otherwise the error is printed and the process exits non-zero.
 // Without this, escaped errors were swallowed and the process exited 0.
+// Hide milo's JS event-loop trampoline frames (Node's loop is C++, so these have
+// no Node analog) — keep everything down to process.processTicksAndRejections.
+function _hideInternalFrames(stack) {
+  return stack.split('\n').filter((l) => {
+    const t = l.trim();
+    return !(t.startsWith('at tick (') || t.startsWith('at drainAll (') ||
+             t.startsWith('at __runEventLoop (') || t.startsWith('at __drainMicrotasks ('));
+  }).join('\n');
+}
+
+// Match Node's uncaught-exception stderr: a code frame (file:line, source line,
+// caret), the (trimmed) stack, then the `Node.js vX.Y.Z` footer.
+function _formatFatal(er) {
+  let out = '';
+  const stack = er && typeof er.stack === 'string' ? er.stack : null;
+  if (stack) {
+    // First stack frame with a real path → code frame.
+    const fr = stack.split('\n').find((l) => /\(?(\/[^()\s]+):(\d+):(\d+)\)?\s*$/.test(l.trim()));
+    const m = fr && /\(?(\/[^()\s]+):(\d+):(\d+)\)?\s*$/.exec(fr.trim());
+    if (m) {
+      try {
+        const lines = require('fs').readFileSync(m[1], 'utf8').split(/\r?\n/);
+        const src = lines[(+m[2]) - 1];
+        if (src !== undefined) out += `${m[1]}:${m[2]}\n${src}\n${' '.repeat(Math.max(0, (+m[3]) - 1))}^\n\n`;
+      } catch {}
+    }
+    out += _hideInternalFrames(stack) + '\n';
+  } else {
+    out += String(er) + '\n';
+  }
+  const v = typeof process.version === 'string' ? process.version : 'v22.0.0';
+  out += `Node.js ${v}\n`;
+  return out;
+}
+
 process._fatalException = function(er) {
   if (_uncaughtExceptionCallback !== null) {
     try { _uncaughtExceptionCallback(er); return true; }
@@ -485,10 +520,10 @@ process._fatalException = function(er) {
     return false;
   }
   try {
-    const msg = er && er.stack ? er.stack : String(er);
-    if (process.stderr && process.stderr.write) process.stderr.write(msg + '\n');
-    else console.error(msg);
-  } catch {}
+    process.stderr && process.stderr.write ? process.stderr.write(_formatFatal(er)) : console.error(_formatFatal(er));
+  } catch {
+    try { const m = er && er.stack ? er.stack : String(er); (process.stderr && process.stderr.write) ? process.stderr.write(m + '\n') : console.error(m); } catch {}
+  }
   if (!process.exitCode) process.exitCode = 1;
   process.exit(process.exitCode || 1);
   return false;
