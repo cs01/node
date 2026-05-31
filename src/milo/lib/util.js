@@ -132,8 +132,10 @@ function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
     const items = obj.map(v => _inspectValue(v, maxDepth, currentDepth + 1, seen, colors));
     return _reduceToSingleString(items, '', '[', ']', currentDepth);
   }
-  if (obj instanceof Date) { const s = obj.toISOString(); return colors ? _colorize('date', s) : s; }
-  if (obj instanceof RegExp) { const s = obj.toString(); return colors ? _colorize('regexp', s) : s; }
+  // A real Date has [[DateValue]]; an object merely sharing Date.prototype (fake)
+  // throws on toISOString — fall through to object formatting (renders `Date {}`).
+  if (obj instanceof Date) { try { const s = obj.toISOString(); return colors ? _colorize('date', s) : s; } catch { /* not a real Date */ } }
+  if (obj instanceof RegExp) { try { const s = RegExp.prototype.toString.call(obj); return colors ? _colorize('regexp', s) : s; } catch {} }
   if (obj instanceof Error) return obj.stack || obj.toString();
   if (obj instanceof Map) {
     if (currentDepth >= maxDepth) return '[Map]';

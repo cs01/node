@@ -21,7 +21,7 @@ function _inspect(val) {
   }
   if (val instanceof RegExp) return val.toString();
   if (val instanceof Error) return `[${val.name || 'Error'}: ${val.message}]`;
-  if (val instanceof Date) return val.toISOString();
+  if (val instanceof Date) { try { return val.toISOString(); } catch { /* fake Date — fall through */ } }
   // for objects/arrays, use multi-line inspect
   return _inspectObj(val, new Set(), 0);
 }
@@ -34,7 +34,7 @@ function _inspectObj(val, seen, depth) {
     return val.name ? `[Function: ${val.name}]` : '[Function (anonymous)]';
   }
   if (val instanceof RegExp) return val.toString();
-  if (val instanceof Date) return val.toISOString();
+  if (val instanceof Date) { try { return val.toISOString(); } catch { /* fake Date — render as object below */ } }
   if (val instanceof Error) return `[${val.name || 'Error'}: ${val.message}]`;
 
   if (seen.has(val)) return '[Circular *1]';
@@ -55,7 +55,16 @@ function _inspectObj(val, seen, depth) {
   // check for Arguments
   const tag = Object.prototype.toString.call(val);
   const isArguments = tag === '[object Arguments]';
-  const prefix = isArguments ? '[Arguments] ' : '';
+  // Non-plain objects are prefixed with their constructor name (Date {}, Foo {}),
+  // matching Node's inspect. Plain objects (Object/null-proto) get no name prefix.
+  let prefix = '';
+  if (isArguments) {
+    prefix = '[Arguments] ';
+  } else {
+    const proto = Object.getPrototypeOf(val);
+    if (proto === null) prefix = '[Object: null prototype] ';
+    else { const cn = proto.constructor && proto.constructor.name; if (cn && cn !== 'Object') prefix = cn + ' '; }
+  }
 
   const keys = Object.keys(val);
   // only include enumerable symbol keys
@@ -101,9 +110,15 @@ function _createDiff(actual, expected) {
   const aLines = _inspect(actual).split('\n');
   const bLines = _inspect(expected).split('\n');
 
-  // both single line — simple !== format, use util.inspect for exact matching
+  // Both single line: primitives use the compact `a !== b` form; objects (even
+  // when they inspect to one line, e.g. a Date) use the +/- two-line form like Node.
   if (aLines.length === 1 && bLines.length === 1) {
-    return `\n${_inspectSimple(actual)} !== ${_inspectSimple(expected)}\n`;
+    const aPrim = actual === null || typeof actual !== 'object';
+    const bPrim = expected === null || typeof expected !== 'object';
+    if (aPrim && bPrim) {
+      return `\n${_inspectSimple(actual)} !== ${_inspectSimple(expected)}\n`;
+    }
+    return `\n+ ${aLines[0]}\n- ${bLines[0]}\n`;
   }
 
   // multi-line diff using LCS
@@ -472,7 +487,16 @@ function _deepEqual(a, b, strict) {
     if (ac && !_deepEqual(a.cause, b.cause, strict)) return false;
   }
 
-  if (a instanceof Date) return a.getTime() === b.getTime();
+  if (a instanceof Date) {
+    // Runtime-type check: a fake sharing Date.prototype has no [[DateValue]] and
+    // throws on getTime. A real Date is never deep-equal to such a fake.
+    let at, bt, ar = true, br = true;
+    try { at = a.getTime(); } catch { ar = false; }
+    try { bt = b.getTime(); } catch { br = false; }
+    if (ar !== br) return false;
+    if (ar) return at === bt || (at !== at && bt !== bt);
+    // neither is a real Date — fall through to property comparison
+  }
   if (a instanceof RegExp) return a.source === b.source && a.flags === b.flags;
   if (a instanceof Map) {
     if (b.size !== a.size) return false;
