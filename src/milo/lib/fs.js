@@ -721,6 +721,18 @@ function copyFileSync(src, dest, mode) {
   writeFileSync(dest, data);
 }
 
+function _validateStreamFdPath(path, options) {
+  if (options.fd == null) { _validatePath(path, 'path'); }
+  else if (typeof options.fd !== 'number' && !(options.fd && typeof options.fd === 'object' && typeof options.fd.fd === 'number')) {
+    throw _ERR_INVALID_ARG_TYPE('options.fd', ['number', 'FileHandle'], options.fd);
+  }
+}
+function _validateStreamStartEnd(start, end) {
+  if (start !== undefined && typeof start !== 'number') throw _ERR_INVALID_ARG_TYPE('start', 'number', start);
+  if (end !== undefined && typeof end !== 'number') throw _ERR_INVALID_ARG_TYPE('end', 'number', end);
+  if (start !== undefined && (!Number.isInteger(start) || start < 0)) throw _ERR_OUT_OF_RANGE('start', '>= 0', start);
+  if (end !== undefined && (!Number.isInteger(end) || end < 0)) throw _ERR_OUT_OF_RANGE('end', '>= 0', end);
+}
 function _normalizeStreamOpts(opts) {
   if (opts !== undefined && opts !== null && typeof opts !== 'string' && typeof opts !== 'object') {
     const e = new TypeError(`The "options" argument must be of type string or an instance of Object. Received type ${typeof opts}`);
@@ -748,6 +760,8 @@ function _initStreamClasses() {
       this.path = path == null ? undefined : path;
       this.flags = options.flags || 'r';
       this.mode = options.mode != null ? options.mode : 0o666;
+      _validateStreamFdPath(path, options);
+      _validateStreamStartEnd(options.start, options.end);
       this.start = options.start;
       this.end = options.end == null ? Infinity : options.end;
       this.pos = this.start != null ? this.start : undefined;
@@ -810,6 +824,8 @@ function _initStreamClasses() {
       this.path = path == null ? undefined : path;
       this.flags = options.flags || 'w';
       this.mode = options.mode != null ? options.mode : 0o666;
+      _validateStreamFdPath(path, options);
+      _validateStreamStartEnd(options.start, undefined);
       this.start = options.start;
       this.pos = this.start;
       this.bytesWritten = 0;
