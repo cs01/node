@@ -1290,33 +1290,63 @@ function watch(filename, options, listener) {
   return watcher;
 }
 
-const _watchFileTimers = new Map();
+const _statWatchers = new Map();
+
+// Returned by fs.watchFile — an EventEmitter polling stat() on an interval.
+// Node exposes ref/unref (timer lifetime) and stop() (emits 'stop').
+class StatWatcher extends EventEmitter {
+  constructor() { super(); this._timer = null; this._stopped = false; }
+  start(fname, interval, listener) {
+    let prev = null;
+    try { prev = statSync(fname); } catch {}
+    if (listener) this.on('change', listener);
+    this._timer = setInterval(() => {
+      let curr = null;
+      try { curr = statSync(fname); } catch {}
+      if (prev && curr && prev.mtimeMs !== curr.mtimeMs) this.emit('change', curr, prev);
+      else if (!prev && curr) this.emit('change', curr, prev || curr);
+      prev = curr;
+    }, interval);
+    return this;
+  }
+  ref() { if (this._timer && this._timer.ref) this._timer.ref(); return this; }
+  unref() { if (this._timer && this._timer.unref) this._timer.unref(); return this; }
+  stop() {
+    if (this._stopped) return;
+    this._stopped = true;
+    if (this._timer) { clearInterval(this._timer); this._timer = null; }
+    process.nextTick(() => this.emit('stop'));
+  }
+}
 
 function watchFile(filename, options, listener) {
   if (typeof options === 'function') { listener = options; options = {}; }
   _validatePath(filename, 'filename');
+  if (typeof listener !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', listener);
   const interval = (options && options.interval) || 5007;
   const fname = String(filename);
-  let prev = null;
-  try { prev = statSync(fname); } catch {}
-  const timer = setInterval(() => {
-    let curr = null;
-    try { curr = statSync(fname); } catch {}
-    if (prev && curr && prev.mtimeMs !== curr.mtimeMs) {
-      listener(curr, prev);
-    } else if (!prev && curr) {
-      listener(curr, prev || curr);
-    }
-    prev = curr;
-  }, interval);
-  _watchFileTimers.set(fname, timer);
+  let watcher = _statWatchers.get(fname);
+  if (!watcher) {
+    watcher = new StatWatcher();
+    _statWatchers.set(fname, watcher);
+    watcher.start(fname, interval, listener);
+  } else if (listener) {
+    watcher.on('change', listener);
+  }
+  return watcher;
 }
 
 function unwatchFile(filename, listener) {
   _validatePath(filename, 'filename');
   const fname = String(filename);
-  const timer = _watchFileTimers.get(fname);
-  if (timer) { clearInterval(timer); _watchFileTimers.delete(fname); }
+  const watcher = _statWatchers.get(fname);
+  if (!watcher) return;
+  if (listener) watcher.removeListener('change', listener);
+  // Node stops polling only when no listeners remain (or no listener arg given).
+  if (!listener || watcher.listenerCount('change') === 0) {
+    watcher.stop();
+    _statWatchers.delete(fname);
+  }
 }
 
 class Dirent {
