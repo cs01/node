@@ -9,6 +9,22 @@ function _inspectSimple(val) {
 }
 
 // inspect for multi-line diff display (used in +/- formatted diffs)
+// Render an Error as `[Name: msg]`, plus `{ [cause]: ..., extra: ... }` when it
+// carries a non-enumerable `cause` or extra own props (multi-line so a diff can
+// highlight a differing cause). message/name/stack are intrinsic, not shown.
+function _formatError(val, seen, depth) {
+  const base = `[${val.name || 'Error'}: ${val.message}]`;
+  const props = [];
+  if (Object.prototype.hasOwnProperty.call(val, 'cause')) props.push(['[cause]', val.cause]);
+  for (const k of Object.keys(val)) { if (k !== 'cause' && k !== 'message' && k !== 'name' && k !== 'stack') props.push([k, val[k]]); }
+  if (props.length === 0) return base;
+  const d = depth || 0;
+  const ind = '  '.repeat(d + 1), cind = '  '.repeat(d);
+  const ns = seen ? new Set(seen) : new Set(); ns.add(val);
+  const entries = props.map(([k, v]) => `${ind}${k}: ${_inspectObj(v, ns, d + 1)}`);
+  return `${base} {\n${entries.join(',\n')}\n${cind}}`;
+}
+
 function _inspect(val) {
   if (val === undefined) return 'undefined';
   if (val === null) return 'null';
@@ -20,7 +36,7 @@ function _inspect(val) {
     return val.name ? `[Function: ${val.name}]` : '[Function (anonymous)]';
   }
   if (val instanceof RegExp) return val.toString();
-  if (val instanceof Error) return `[${val.name || 'Error'}: ${val.message}]`;
+  if (val instanceof Error) return _formatError(val, new Set(), 0);
   if (val instanceof Date) { try { return val.toISOString(); } catch { /* fake Date — fall through */ } }
   // for objects/arrays, use multi-line inspect
   return _inspectObj(val, new Set(), 0);
@@ -35,7 +51,7 @@ function _inspectObj(val, seen, depth) {
   }
   if (val instanceof RegExp) return val.toString();
   if (val instanceof Date) { try { return val.toISOString(); } catch { /* fake Date — render as object below */ } }
-  if (val instanceof Error) return `[${val.name || 'Error'}: ${val.message}]`;
+  if (val instanceof Error) return _formatError(val, seen, depth);
 
   if (seen.has(val)) return '[Circular *1]';
 
