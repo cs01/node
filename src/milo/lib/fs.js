@@ -115,7 +115,9 @@ function readFileSync(path, opts) {
     const chunks = [];
     const buf = Buffer.alloc(8192);
     let n;
-    while ((n = readSync(path, buf, 0, 8192, null)) > 0) chunks.push(buf.slice(0, n));
+    // copy each chunk — buf.slice() is a view into the reused buffer, so pushing
+    // views and concat'ing later aliases every chunk to the final read's bytes.
+    while ((n = readSync(path, buf, 0, 8192, null)) > 0) chunks.push(Buffer.from(buf.subarray(0, n)));
     const result = Buffer.concat(chunks);
     return encoding ? result.toString(encoding) : result;
   }
@@ -127,6 +129,16 @@ function readFileSync(path, opts) {
   }
   if (flag.indexOf('a') !== -1 || flag.indexOf('w') !== -1) {
     if (!existsSync(p)) { writeFileSync(path, ''); }
+  }
+  // Non-regular files (pipes/fifos/char devices/sockets, e.g. /dev/stdin) report
+  // size 0 to stat, so native b.readFile reads nothing useful — loop-read via fd until EOF.
+  {
+    let st = null;
+    try { st = statSync(p); } catch {}
+    if (st && ((st.isFIFO && st.isFIFO()) || (st.isCharacterDevice && st.isCharacterDevice()) || (st.isSocket && st.isSocket()))) {
+      const fd = openSync(p, flag);
+      try { return readFileSync(fd, opts); } finally { closeSync(fd); }
+    }
   }
   const r = b.readFile(p);
   if (r === -1) { const e = new Error(`ENOENT: no such file or directory, open '${path}'`); e.code = 'ENOENT'; e.syscall = 'open'; e.path = String(path); throw e; }
@@ -538,6 +550,25 @@ function readv(fd, buffers, position, cb) {
   }
 }
 
+function readvSync(fd, buffers, position) {
+  _validateFd(fd);
+  if (!Array.isArray(buffers)) throw _ERR_INVALID_ARG_TYPE('buffers', 'ArrayBufferView[]', buffers);
+  for (let i = 0; i < buffers.length; i++) {
+    if (!ArrayBuffer.isView(buffers[i])) throw _ERR_INVALID_ARG_TYPE('buffers[' + i + ']', 'Buffer or TypedArray', buffers[i]);
+  }
+  if (position != null && position !== -1) b.fdSeek(fd, position, 0);
+  let total = 0;
+  for (const buf of buffers) {
+    const result = b.fdRead(fd, buf.byteLength);
+    if (typeof result === 'number' || !result) break;
+    const bytes = new Uint8Array(result.buffer || result);
+    for (let i = 0; i < bytes.length; i++) buf[i] = bytes[i];
+    total += bytes.length;
+    if (bytes.length < buf.byteLength) break;
+  }
+  return total;
+}
+
 function rmSync(path, opts) {
   _validatePath(path, 'path');
   const p = _toPath(path);
@@ -640,96 +671,173 @@ function copyFileSync(src, dest, mode) {
   writeFileSync(dest, data);
 }
 
-function createReadStream(path, opts) {
+function _normalizeStreamOpts(opts) {
   if (opts !== undefined && opts !== null && typeof opts !== 'string' && typeof opts !== 'object') {
     const e = new TypeError(`The "options" argument must be of type string or an instance of Object. Received type ${typeof opts}`);
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
   if (typeof opts === 'string') opts = { encoding: opts };
-  _assertEncoding(opts && opts.encoding);
-  const { Readable } = require('stream');
-  const highWaterMark = (opts && opts.highWaterMark) || 65536;
-  const encoding = opts && opts.encoding;
-  const autoClose = opts && opts.autoClose !== undefined ? opts.autoClose : true;
-  let ownFd = false;
-  let fd;
-  // opts.fd may be a numeric fd OR a FileHandle (use its underlying .fd).
-  if (opts && opts.fd != null) { fd = (typeof opts.fd === 'object' && opts.fd.fd != null) ? opts.fd.fd : opts.fd; } else { fd = openSync(path, (opts && opts.flags) || 'r'); ownFd = true; }
-  let pos = (opts && opts.start) || 0;
-  const end = opts && opts.end;
-  if (globalThis.__ref) globalThis.__ref();
-  let closed = false;
-  function closeStream() {
-    if (closed) return;
-    closed = true;
-    if (ownFd || autoClose) { try { closeSync(fd); } catch(e) {} }
-    if (globalThis.__unref) globalThis.__unref();
-  }
-  const rs = new Readable({
-    highWaterMark,
-    read(size) {
-      const toRead = end != null ? Math.min(size, end - pos + 1) : size;
-      if (toRead <= 0) { this.push(null); closeStream(); return; }
+  return opts || {};
+}
+function _streamFd(v) { return (v != null && typeof v === 'object' && v.fd != null) ? v.fd : v; }
+
+let _ReadStream, _WriteStream;
+function _initStreamClasses() {
+  if (_ReadStream) return;
+  const { Readable, Writable } = require('stream');
+
+  // fs streams open asynchronously (via the injectable opts.fs, default to the
+  // public fs fns so they're patchable) and emit 'open'/'ready'; _read/_write
+  // queue behind 'open' since milo's stream base has no _construct hook.
+  class ReadStream extends Readable {
+    constructor(path, options) {
+      options = _normalizeStreamOpts(options);
+      _assertEncoding(options.encoding);
+      super({ highWaterMark: options.highWaterMark || 65536, encoding: options.encoding });
+      this.fs = options.fs || module.exports;
+      this.path = path == null ? undefined : path;
+      this.flags = options.flags || 'r';
+      this.mode = options.mode != null ? options.mode : 0o666;
+      this.start = options.start;
+      this.end = options.end == null ? Infinity : options.end;
+      this.pos = this.start != null ? this.start : undefined;
+      this.bytesRead = 0;
+      this.closed = false;
+      this.autoClose = options.autoClose !== undefined ? options.autoClose : true;
+      this._ownFd = options.fd == null;
+      this.fd = options.fd != null ? _streamFd(options.fd) : null;
+      if (globalThis.__ref) globalThis.__ref();
+      this.once('close', () => { this.closed = true; });
+      this._opening = this.fd == null;
+      if (this.fd != null) process.nextTick(() => { this.emit('open', this.fd); this.emit('ready'); });
+      else this.fs.open(this.path, this.flags, this.mode, (er, fd) => {
+        this._opening = false;
+        if (er) { if (this.autoClose) this.destroy(er); else this.emit('error', er); return; }
+        this.fd = fd; this.emit('open', fd); this.emit('ready');
+      });
+    }
+    _read(n) {
+      if (this.fd == null) { this.once('open', () => this._read(n)); return; }
+      const toRead = this.end !== Infinity ? Math.min(n, this.end - (this.pos || 0) + 1) : n;
+      if (toRead <= 0) { this.push(null); return; }
       const buf = Buffer.alloc(toRead);
-      const n = readSync(fd, buf, 0, toRead, pos);
-      if (n <= 0) { this.push(null); closeStream(); return; }
-      pos += n;
-      const chunk = n < toRead ? buf.slice(0, n) : buf;
-      this.push(encoding ? chunk.toString(encoding) : chunk);
-    },
-    destroy(_err, cb) { closeStream(); cb(_err); },
-  });
-  rs.path = path;
-  rs.fd = fd;
-  rs.close = function(cb) { rs.destroy(); if (cb) process.nextTick(cb); };
-  if (opts && opts.start != null) rs.start = opts.start;
-  if (opts && opts.end != null) rs.end = opts.end;
-  Object.defineProperty(rs, 'pending', { get() { return false; } });
-  process.nextTick(() => rs.emit('open', fd));
-  process.nextTick(() => rs.emit('ready'));
-  return rs;
+      this.fs.read(this.fd, buf, 0, toRead, this.pos == null ? null : this.pos, (er, bytesRead) => {
+        if (er) { this.destroy(er); return; }
+        if (bytesRead > 0) {
+          this.bytesRead += bytesRead;
+          if (this.pos != null) this.pos += bytesRead;
+          this.push(bytesRead < toRead ? buf.subarray(0, bytesRead) : buf);
+        } else { this.push(null); }
+      });
+    }
+    _destroy(err, cb) {
+      // destroy mid-open: wait for the fd, then close it (don't leak it).
+      if (this.fd == null && this._opening) { this.once('open', () => this._closeFd(err, cb)); return; }
+      this._closeFd(err, cb);
+    }
+    _closeFd(err, cb) {
+      const fd = this.fd;
+      this.fd = null;
+      // Unref the loop the moment we initiate close, not inside the close cb:
+      // a user may monkeypatch fs.close to a fn that drops the callback (see
+      // test-fs-write-stream), which would otherwise leave _activeRefs pinned
+      // and hang the process.
+      if (!this._unrefed) { this._unrefed = true; if (globalThis.__unref) globalThis.__unref(); }
+      if (fd != null && (this._ownFd || this.autoClose)) {
+        this.fs.close(fd, (er) => { cb(er || err); });
+      } else { cb(err); }
+    }
+    close(cb) { if (cb) { if (this.closed || this.destroyed) process.nextTick(cb); else this.once('close', cb); } this.destroy(); }
+    get pending() { return this.fd == null; }
+  }
+
+  class WriteStream extends Writable {
+    constructor(path, options) {
+      options = _normalizeStreamOpts(options);
+      _assertEncoding(options.encoding);
+      super({ highWaterMark: options.highWaterMark });
+      this.fs = options.fs || module.exports;
+      this.path = path == null ? undefined : path;
+      this.flags = options.flags || 'w';
+      this.mode = options.mode != null ? options.mode : 0o666;
+      this.start = options.start;
+      this.pos = this.start;
+      this.bytesWritten = 0;
+      this.closed = false;
+      this.autoClose = options.autoClose !== undefined ? options.autoClose : true;
+      this._ownFd = options.fd == null;
+      this.fd = options.fd != null ? _streamFd(options.fd) : null;
+      if (globalThis.__ref) globalThis.__ref();
+      this.once('close', () => { this.closed = true; });
+      this._opening = this.fd == null;
+      if (this.fd != null) process.nextTick(() => { this.emit('open', this.fd); this.emit('ready'); });
+      else this.fs.open(this.path, this.flags, this.mode, (er, fd) => {
+        this._opening = false;
+        if (er) { if (this.autoClose) this.destroy(er); else this.emit('error', er); return; }
+        this.fd = fd; this.emit('open', fd); this.emit('ready');
+      });
+    }
+    _write(chunk, enc, cb) {
+      if (this.fd == null) { this.once('open', () => this._write(chunk, enc, cb)); return; }
+      if (typeof chunk === 'string') chunk = Buffer.from(chunk, enc);
+      this.fs.write(this.fd, chunk, 0, chunk.length, this.pos == null ? null : this.pos, (er, bytes) => {
+        if (er) { cb(er); return; }
+        this.bytesWritten += bytes;
+        if (this.pos != null) this.pos += bytes;
+        cb();
+      });
+    }
+    _writev(chunks, cb) {
+      if (this.fd == null) { this.once('open', () => this._writev(chunks, cb)); return; }
+      const buffers = chunks.map((c) => typeof c.chunk === 'string' ? Buffer.from(c.chunk, c.encoding) : c.chunk);
+      if (typeof this.fs.writev !== 'function') {
+        // no injected writev — write each buffer sequentially via _write
+        let i = 0;
+        const next = (er) => {
+          if (er) return cb(er);
+          if (i >= buffers.length) return cb();
+          this._write(buffers[i++], null, next);
+        };
+        next();
+        return;
+      }
+      this.fs.writev(this.fd, buffers, this.pos == null ? null : this.pos, (er, bytes) => {
+        if (er) { cb(er); return; }
+        this.bytesWritten += bytes;
+        if (this.pos != null) this.pos += bytes;
+        cb();
+      });
+    }
+    _destroy(err, cb) {
+      // destroy mid-open: wait for the fd, then close it (don't leak it).
+      if (this.fd == null && this._opening) { this.once('open', () => this._closeFd(err, cb)); return; }
+      this._closeFd(err, cb);
+    }
+    _closeFd(err, cb) {
+      const fd = this.fd;
+      this.fd = null;
+      if (!this._unrefed) { this._unrefed = true; if (globalThis.__unref) globalThis.__unref(); }
+      if (fd != null && (this._ownFd || this.autoClose)) {
+        this.fs.close(fd, (er) => { cb(er || err); });
+      } else { cb(err); }
+    }
+    close(cb) { if (cb) { if (this.closed || this.destroyed) process.nextTick(cb); else this.once('close', cb); } this.destroy(); }
+    get pending() { return this.fd == null; }
+  }
+
+  _ReadStream = ReadStream;
+  _WriteStream = WriteStream;
+  // expose the class prototypes on the public constructor functions so both
+  // `new fs.ReadStream()` and legacy `fs.ReadStream()` (no new) yield real
+  // instances, and `x instanceof fs.ReadStream` holds.
+  ReadStreamCtor.prototype = ReadStream.prototype;
+  WriteStreamCtor.prototype = WriteStream.prototype;
 }
 
-function createWriteStream(path, opts) {
-  if (opts !== undefined && opts !== null && typeof opts !== 'string' && typeof opts !== 'object') {
-    const e = new TypeError(`The "options" argument must be of type string or an instance of Object. Received type ${typeof opts}`);
-    e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
-  }
-  if (typeof opts === 'string') opts = { encoding: opts };
-  _assertEncoding(opts && opts.encoding);
-  const { Writable } = require('stream');
-  const flags = (opts && opts.flags) || 'w';
-  const fd = openSync(path, flags);
-  if (globalThis.__ref) globalThis.__ref();
-  let closed = false;
-  function closeStream() {
-    if (closed) return;
-    closed = true;
-    closeSync(fd);
-    if (globalThis.__unref) globalThis.__unref();
-  }
-  let bytesWritten = 0;
-  const ws = new Writable({
-    write(chunk, encoding, cb) {
-      try {
-        if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
-        const n = writeSync(fd, chunk);
-        bytesWritten += n;
-        cb();
-      } catch (e) { cb(e); }
-    },
-    final(cb) { closeStream(); cb(); },
-    destroy(_err, cb) { closeStream(); cb(_err); },
-  });
-  ws.path = path;
-  ws.fd = fd;
-  ws.close = function(cb) { ws.destroy(); if (cb) process.nextTick(cb); };
-  Object.defineProperty(ws, 'bytesWritten', { get() { return bytesWritten; } });
-  Object.defineProperty(ws, 'pending', { get() { return false; } });
-  process.nextTick(() => ws.emit('open', fd));
-  process.nextTick(() => ws.emit('ready'));
-  return ws;
-}
+function createReadStream(path, opts) { _initStreamClasses(); return new _ReadStream(path, opts); }
+function createWriteStream(path, opts) { _initStreamClasses(); return new _WriteStream(path, opts); }
+function ReadStreamCtor(path, opts) { _initStreamClasses(); return new _ReadStream(path, opts); }
+function WriteStreamCtor(path, opts) { _initStreamClasses(); return new _WriteStream(path, opts); }
 
 // Async callback wrappers — run sync on next tick to match Node.js API shape
 function _validateCb(cb) {
@@ -749,7 +857,7 @@ function readFile(path, opts, cb) {
         const chunks = [];
         const buf = Buffer.alloc(8192);
         let n;
-        while ((n = readSync(path, buf, 0, 8192, null)) > 0) chunks.push(buf.slice(0, n));
+        while ((n = readSync(path, buf, 0, 8192, null)) > 0) chunks.push(Buffer.from(buf.subarray(0, n)));
         const result = Buffer.concat(chunks);
         const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
         cb(null, encoding ? result.toString(encoding) : result);
@@ -1235,6 +1343,7 @@ const promises = {
     return { type: 0, bsize: 4096, blocks: 0, bfree: 0, bavail: 0, files: 0, ffree: 0 };
   }),
   truncate: _promisify((p, len) => truncateSync(p, len)),
+  opendir: _promisify((p, opts) => opendirSync(p, opts)),
   chown: (p, uid, gid) => { try { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); } catch(e) { return Promise.reject(e); } return _promisify(chownSync)(p, uid, gid); },
   lchown: (p, uid, gid) => { try { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); } catch(e) { return Promise.reject(e); } return _promisify(lchownSync)(p, uid, gid); },
   lchmod: (p, mode) => { try { _validatePath(p, 'path'); } catch(e) { return Promise.reject(e); } return Promise.resolve(); },
@@ -1245,7 +1354,7 @@ const promises = {
       const fd = openSync(p, flags || 'r', mode);
       const handle = {
         fd,
-        close() { if (!this._closed) { this._closed = true; closeSync(fd); this.emit('close'); } return Promise.resolve(); },
+        close() { if (!this._closed) { this._closed = true; closeSync(fd); this.fd = -1; this.emit('close'); } return Promise.resolve(); },
         read(buf, off, len, pos) {
           // FileHandle.read overloads: read(buffer,offset,length,position),
           // read(buffer,{offset,length,position}), and read({buffer,offset,length,position}).
@@ -1273,10 +1382,35 @@ const promises = {
         stat() { try { return Promise.resolve(fstatSync(fd)); } catch (e) { return Promise.reject(e); } },
         readFile(opts) { try { return Promise.resolve(readFileSync('/dev/fd/' + fd, opts)); } catch (e) { return Promise.reject(e); } },
         writeFile(data) { writeSync(fd, data); return Promise.resolve(); },
+        appendFile(data, opts) {
+          const signal = opts && opts.signal;
+          const run = (resolve, reject) => {
+            if (signal && signal.aborted) { const e = new Error('The operation was aborted'); e.name = 'AbortError'; e.code = 'ABORT_ERR'; return reject(e); }
+            try { b.fdSeek(fd, 0, 2); writeSync(fd, typeof data === 'string' ? Buffer.from(data, (opts && opts.encoding) || 'utf8') : data); resolve(); }
+            catch (e) { reject(e); }
+          };
+          // signal may abort on a queued nextTick before our write runs — defer the
+          // check so a same-tick abort() is observed and rejects with AbortError.
+          return new Promise((resolve, reject) => { if (signal) process.nextTick(run, resolve, reject); else run(resolve, reject); });
+        },
+        readv(buffers, position) {
+          try { return Promise.resolve({ bytesRead: readvSync(fd, buffers, position), buffers }); }
+          catch (e) { return Promise.reject(e); }
+        },
+        writev(buffers, position) {
+          try { return Promise.resolve({ bytesWritten: writevSync(fd, buffers, position), buffers }); }
+          catch (e) { return Promise.reject(e); }
+        },
         chmod(m) { fchmodSync(fd, m); return Promise.resolve(); },
+        chown(uid, gid) { try { fchownSync(fd, uid, gid); } catch {} return Promise.resolve(); },
+        utimes(atime, mtime) { return Promise.resolve(); },
         datasync() { fdatasyncSync(fd); return Promise.resolve(); },
         sync() { fsyncSync(fd); return Promise.resolve(); },
         truncate(len) { ftruncateSync(fd, len); return Promise.resolve(); },
+        // streams over the handle's fd; autoClose:false so closing the stream
+        // doesn't close the handle the caller still owns.
+        createReadStream(o) { return createReadStream(undefined, { fd, autoClose: false, ...(o || {}) }); },
+        createWriteStream(o) { return createWriteStream(undefined, { fd, autoClose: false, ...(o || {}) }); },
         // explicit resource management: `await using fh = await open(...)` closes on scope exit
         [Symbol.asyncDispose]() { return this.close(); },
         [Symbol.dispose]() { try { this.close(); } catch {} },
@@ -1403,17 +1537,27 @@ function opendirSync(path, options) {
   _validatePath(path, 'path');
   const entries = readdirSync(path, { withFileTypes: true });
   let idx = 0;
+  let closed = false;
+  const _dirClosed = () => { const e = new Error('Directory handle was closed'); e.code = 'ERR_DIR_CLOSED'; return e; };
   return {
     path: typeof path === 'string' ? path : path.toString(),
-    readSync() { return idx < entries.length ? entries[idx++] : null; },
-    read() { return Promise.resolve(this.readSync()); },
-    closeSync() {},
-    close() { return Promise.resolve(); },
+    readSync() { if (closed) throw _dirClosed(); return idx < entries.length ? entries[idx++] : null; },
+    read() { if (closed) return Promise.reject(_dirClosed()); return Promise.resolve(idx < entries.length ? entries[idx++] : null); },
+    closeSync() { closed = true; },
+    close() { closed = true; return Promise.resolve(); },  // idempotent
+    [Symbol.dispose]() { closed = true; },
+    [Symbol.asyncDispose]() { closed = true; return Promise.resolve(); },
     [Symbol.asyncIterator]() {
       const self = this;
       return { next() { const v = self.readSync(); return Promise.resolve(v ? { value: v, done: false } : { done: true }); } };
     },
   };
+}
+
+function opendir(path, options, cb) {
+  if (typeof options === 'function') { cb = options; options = undefined; }
+  _validateCb(cb);
+  process.nextTick(() => { try { cb(null, opendirSync(path, options)); } catch (e) { cb(e); } });
 }
 
 // util.promisify(fs.read/write) must resolve with a named object, not just the
@@ -1422,6 +1566,8 @@ function opendirSync(path, options) {
   const _cpa = Symbol.for('nodejs.util.promisify.customArgs');
   read[_cpa] = ['bytesRead', 'buffer'];
   write[_cpa] = ['bytesWritten', 'buffer'];
+  readv[_cpa] = ['bytesRead', 'buffers'];
+  writev[_cpa] = ['bytesWritten', 'buffers'];
 }
 
 module.exports = {
@@ -1436,11 +1582,15 @@ module.exports = {
   symlinkSync, lstatSync, readlinkSync, linkSync,
   chownSync, lchownSync, utimesSync, truncateSync,
   openSync, closeSync, fstatSync, writeSync, readSync,
-  fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync, fchownSync, writevSync, writev, readv,
+  fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync, fchownSync, writevSync, writev, readv, readvSync,
   createReadStream, createWriteStream,
-  ReadStream: createReadStream, WriteStream: createWriteStream,
   watch, watchFile, unwatchFile, FSWatcher, Dirent, Dir, Stats,
-  opendirSync, _toUnixTimestamp, statfsSync, statfs,
+  opendir, opendirSync, _toUnixTimestamp, statfsSync, statfs,
   promises, assertEncoding, stringToFlags, Utf8Stream,
   constants: internalBinding('constants').fs,
 };
+// ReadStream/WriteStream are real classes (instanceof + prototype work); init
+// lazily to avoid a require('stream') cycle at fs load.
+_initStreamClasses();
+module.exports.ReadStream = ReadStreamCtor;
+module.exports.WriteStream = WriteStreamCtor;

@@ -158,6 +158,17 @@ function _inspectObject(obj, maxDepth, currentDepth, seen, colors) {
     return _reduceToSingleString(items, 'Set(' + obj.size + ') ', '{', '}', currentDepth);
   }
 
+  // TypedArrays render as `Name(len) [ elems ]` (empty: `Name(0) []`), distinct
+  // from plain objects. Buffers are intercepted earlier by their custom inspect.
+  if (ArrayBuffer.isView(obj) && !(obj instanceof DataView)) {
+    const taName = (obj.constructor && obj.constructor.name) || 'TypedArray';
+    if (currentDepth >= maxDepth) return '[' + taName + ']';
+    if (obj.length === 0) return taName + '(0) []';
+    const items = [];
+    for (let i = 0; i < obj.length; i++) items.push(_inspectValue(obj[i], maxDepth, currentDepth + 1, seen, colors));
+    return _reduceToSingleString(items, taName + '(' + obj.length + ') ', '[', ']', currentDepth);
+  }
+
   // Compute tag prefix for non-plain objects
   let prefix = '';
   const proto = Object.getPrototypeOf(obj);

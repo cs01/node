@@ -370,33 +370,49 @@ fn runBootstrap(ctx: Context, path: *u8): Value {
     }
 }
 
+// write() on a pipe may write fewer bytes than requested (pipe buffer full);
+// loop until all bytes flushed so large stdout/stderr writes aren't truncated.
+fn writeAllFd(fd: i32, buf: *u8, len: i64): void {
+    var off: i64 = 0
+    unsafe {
+        while off < len {
+            let n = write(fd, (buf as i64 + off) as *u8, len - off)
+            if n <= 0 { break }
+            off = off + n
+        }
+    }
+}
+
+fn consoleWriteFd(iso: Isolate, arg: Value, fd: i32): void {
+    unsafe {
+        // null buf => returns utf8 byte length (no terminator); size buffer to fit.
+        let blen = arg.writeUtf8(iso, 0 as *u8, 0)
+        if blen <= 0 { return }
+        if blen < 8192 {
+            var buf: [u8; 8192] = [0; 8192]
+            let len = arg.writeUtf8(iso, buf as *u8, 8192) - 1
+            if len > 0 { writeAllFd(fd, buf as *u8, len as i64) }
+        } else {
+            let heap = malloc((blen + 1) as i64)
+            if heap as i64 != 0 {
+                let len = arg.writeUtf8(iso, heap, blen + 1) - 1
+                if len > 0 { writeAllFd(fd, heap, len as i64) }
+                free(heap)
+            }
+        }
+    }
+}
+
 fn consoleWrite(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     if ci.length() < 1 { return }
-    let iso = ci.isolate()
-    let arg = ci.arg(0)
-    var buf: [u8; 8192] = [0; 8192]
-    unsafe {
-        // writeUtf8 returns length including null terminator
-        let len = arg.writeUtf8(iso, buf as *u8, 8192) - 1
-        if len > 0 {
-            write(1, buf as *u8, len as i64)
-        }
-    }
+    consoleWriteFd(ci.isolate(), ci.arg(0), 1)
 }
 
 fn consoleWriteError(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     if ci.length() < 1 { return }
-    let iso = ci.isolate()
-    let arg = ci.arg(0)
-    var buf: [u8; 8192] = [0; 8192]
-    unsafe {
-        let len = arg.writeUtf8(iso, buf as *u8, 8192) - 1
-        if len > 0 {
-            write(2, buf as *u8, len as i64)
-        }
-    }
+    consoleWriteFd(ci.isolate(), ci.arg(0), 2)
 }
 
 // TTY raw mode — save/restore termios (128 bytes covers macOS arm64 struct termios)
@@ -914,6 +930,18 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
     parser.addBool("expose-internals", "", "Expose internal modules")
     parser.addBool("no-warnings", "", "Suppress process warnings")
     parser.addBool("expose-gc", "", "Expose global gc() function")
+    parser.addBool("allow-natives-syntax", "", "Enable V8 %-prefixed natives syntax")
+    parser.addString("title", "", "Set the process title at startup", "")
+    // Permission model flags — accepted (and currently treated as permissive
+    // no-ops) so scripts launched with them parse instead of mistaking the value
+    // for a script path.
+    parser.addBool("permission", "", "Enable the permission model")
+    parser.addString("allow-fs-read", "", "Permission model: allow fs reads", "")
+    parser.addString("allow-fs-write", "", "Permission model: allow fs writes", "")
+    parser.addBool("allow-child-process", "", "Permission model: allow child processes")
+    parser.addBool("allow-worker", "", "Permission model: allow workers")
+    parser.addBool("allow-addons", "", "Permission model: allow native addons")
+    parser.addBool("allow-wasi", "", "Permission model: allow WASI")
     parser.addString("unhandled-rejections", "", "Unhandled rejection mode (throw/warn/none/strict)", "")
     parser.addString("stack-trace-limit", "", "Error.stackTraceLimit override", "")
     parser.addOptionalPositional("file", "JavaScript file to execute")
@@ -941,6 +969,9 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
 
     var exposeGc = false
     if parsed.has("expose-gc") { exposeGc = true }
+
+    var allowNatives = false
+    if parsed.has("allow-natives-syntax") { allowNatives = true }
 
     if parsed.has("require") {
         preloadModule = parsed.getString("require").cstr()
@@ -1036,6 +1067,10 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
         if exposeGc {
             v8c_set_flags_from_string("--expose-gc")
         }
+        // Must precede V8::Initialize (inside v8c_platform_init).
+        if allowNatives {
+            v8c_set_flags_from_string("--allow-natives-syntax")
+        }
         if v8c_platform_init(exec) != 0 {
             printErr("error: v8c_platform_init failed\n" as *u8)
             return 1
@@ -1126,6 +1161,12 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
             }
         }
 
+        // --title=foo sets process.title at startup (applies in all run modes).
+        if parsed.has("title") {
+            let titleStr = parsed.getString("title")
+            ctx.objectSet(proc, "title" as *u8, iso.string(titleStr.cstr()))
+        }
+
         // Set process._eval and process.execArgv for fork bomb protection
         if scriptFile as i64 == 0 && script as i64 != 0 {
             let evalLen = strlen(script) as i32
@@ -1138,6 +1179,12 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
             }
             ctx.objectSetIndex(execArgvArr, 1, iso.stringLen(script, evalLen))
             ctx.objectSet(proc, "execArgv" as *u8, execArgvArr)
+
+            // In -e/-p mode Node exposes builtin modules as lazy globals (so a
+            // one-liner can reference `vm`, `fs`, … without require). Install
+            // configurable getters that don't shadow real globals (crypto, etc.).
+            let lazyGlobals = "(function(){var R=globalThis.require;if(typeof R!=='function')return;var ns=['vm','fs','path','os','util','assert','events','stream','buffer','crypto','http','https','net','url','querystring','zlib','child_process','dns','tls','dgram','readline','module','timers','string_decoder','tty','v8','worker_threads','perf_hooks','async_hooks'];for(var i=0;i<ns.length;i++){(function(n){if(n in globalThis)return;Object.defineProperty(globalThis,n,{configurable:true,enumerable:false,get:function(){try{return R(n)}catch(e){return undefined}},set:function(v){Object.defineProperty(globalThis,n,{value:v,writable:true,configurable:true,enumerable:true})}})})(ns[i])}})()"
+            ctx.compileRun(lazyGlobals as *u8, strlen(lazyGlobals) as i32, "[lazy-globals]" as *u8)
         }
 
         // Preload --require module if specified
@@ -1178,7 +1225,9 @@ fn milo_node_main(argc: i32, argv: *i64): i32 {
             // route top-level throws through process._fatalException so capture callbacks
             // / 'uncaughtException' listeners fire (native would otherwise just print + exit)
             // run via Module.runMain so a --require preload can monkey-patch it
-            let rMiddle = "');require.main={id:'.',filename:f,loaded:false,paths:[]};try{require('module').runMain();}catch(e){process._fatalException(e);}})()"
+            // If _fatalException was monkey-patched to a non-function, an uncaught
+            // top-level throw exits with the dedicated code 6 (Node semantics).
+            let rMiddle = "');require.main={id:'.',filename:f,loaded:false,paths:[]};try{require('module').runMain();}catch(e){var fe=process._fatalException;if(typeof fe==='function'){fe.call(process,e);}else{(process.reallyExit||process.exit).call(process,6);}}})()"
             var wi: i64 = 0
             var wj: i64 = 0
             while wj < strlen(rPrefix) {

@@ -143,6 +143,9 @@
       _jsBindings.util.asyncContextGet = _natUtil.asyncContextGet;
       _jsBindings.util.asyncContextSet = _natUtil.asyncContextSet;
     }
+    if (_natUtil && _natUtil.arrayBufferViewHasBuffer) {
+      _jsBindings.util.arrayBufferViewHasBuffer = _natUtil.arrayBufferViewHasBuffer;
+    }
   } catch {}
   // Node's native buffer.fill(buf,value,start,end,encoding) range-checks start/end
   // and throws ERR_OUT_OF_RANGE. Tests call this raw binding directly (lib uses

@@ -328,6 +328,15 @@ extern "C" v8c_context* v8c_context_new(v8c_isolate* iso) {
     auto* i = ISO(iso);
     v8::HandleScope scope(i);
     auto ctx = v8::Context::New(i);
+    // Share the creating context's security token so cross-context stack frames
+    // stay visible in Error traces. Without this each vm context gets a unique
+    // token and V8 elides its frames as cross-origin — breaking, e.g., a
+    // vm.runInNewContext script that calls back into a host function and expects
+    // its filename to appear in the stack (Buffer DEP0005 node_modules check).
+    auto entered = i->GetCurrentContext();
+    if (!entered.IsEmpty()) {
+        ctx->SetSecurityToken(entered->GetSecurityToken());
+    }
     auto* cw = new ContextWrapper{i, v8::Global<v8::Context>(i, ctx)};
     return reinterpret_cast<v8c_context*>(cw);
 }
@@ -462,6 +471,15 @@ TYPE_CHECK(bigint, IsBigInt)
 TYPE_CHECK(external, IsExternal)
 
 #undef TYPE_CHECK
+
+// True iff the view has materialized its backing ArrayBuffer. V8 keeps small
+// typed arrays (<=64 bytes) on-heap with no buffer until .buffer is touched;
+// internalBinding('util').arrayBufferViewHasBuffer surfaces that state.
+extern "C" int v8c_array_buffer_view_has_buffer(v8c_isolate* iso, v8c_value val) {
+    auto local = unwrap(ISO(iso), val);
+    if (local.IsEmpty() || !local->IsArrayBufferView()) return 0;
+    return local.As<v8::ArrayBufferView>()->HasBuffer() ? 1 : 0;
+}
 
 extern "C" int v8c_value_strict_equals(v8c_isolate* iso, v8c_value a,
                                         v8c_value b) {

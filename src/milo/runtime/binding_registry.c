@@ -63,3 +63,11 @@ const char* nm_get_lib_dir(void) {
 int nm_fs_open(const char* path, int flags, int mode) {
     return open(path, flags, mode);
 }
+
+// Wrapper for variadic fcntl() — same ARM64 ABI reason. Sets FD_CLOEXEC so the
+// fd closes across execve (lets a replaced process image rebind a socket port).
+int nm_set_cloexec(int fd) {
+    int flags = fcntl(fd, F_GETFD, 0);
+    if (flags < 0) return -1;
+    return fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}

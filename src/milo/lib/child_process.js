@@ -266,7 +266,42 @@ function spawn(file, args, options) {
     return child;
   }
 
-  const result = b.spawnAsync(file, a, stdinMode, stdoutMode, stderrMode);
+  // IPC channel: when stdio contains 'ipc', wire up a socketpair on fd 3 and
+  // expose NODE_CHANNEL_FD to the child so child.send()/'message' work (same
+  // mechanism as fork()).
+  const _wantsIPC = Array.isArray(opts.stdio) && opts.stdio.indexOf('ipc') >= 0;
+  let _ipcParentFd = -1, _ipcChildFd = -1, _ipcSavedChannel;
+  if (_wantsIPC) {
+    const _pair = b.socketpair();
+    if (_pair && _pair !== -1) {
+      _ipcParentFd = _pair[0]; _ipcChildFd = _pair[1];
+      _ipcSavedChannel = process.env.NODE_CHANNEL_FD;
+      process.env.NODE_CHANNEL_FD = '3';
+    }
+  }
+  // native spawnAsync inherits process.env/cwd at fork; apply opts.env+opts.cwd
+  // around the (synchronous) fork/exec, then restore — same trick as spawnSync.
+  const savedEnv = {};
+  const addedKeys = [];
+  if (opts.env) {
+    for (const k of Object.keys(opts.env)) {
+      if (k in process.env) savedEnv[k] = process.env[k]; else addedKeys.push(k);
+      process.env[k] = opts.env[k];
+    }
+  }
+  let savedCwd;
+  if (opts.cwd) { try { savedCwd = process.cwd(); process.chdir(String(opts.cwd)); } catch {} }
+  let result;
+  try {
+    result = b.spawnAsync(file, a, stdinMode, stdoutMode, stderrMode, _ipcChildFd);
+  } finally {
+    if (opts.env) { for (const k of Object.keys(savedEnv)) process.env[k] = savedEnv[k]; for (const k of addedKeys) delete process.env[k]; }
+    if (savedCwd) { try { process.chdir(savedCwd); } catch {} }
+  }
+  if (_wantsIPC && _ipcParentFd >= 0) {
+    if (_ipcSavedChannel !== undefined) process.env.NODE_CHANNEL_FD = _ipcSavedChannel;
+    else delete process.env.NODE_CHANNEL_FD;
+  }
   if (!result || result === -1) {
     _deadChild();
     child.spawnfile = file; child.spawnargs = [file, ...a];
@@ -335,6 +370,56 @@ function spawn(file, args, options) {
 
   child.stdout = setupReadPipe(result.stdoutFd);
   child.stderr = setupReadPipe(result.stderrFd);
+
+  // IPC channel (newline-delimited JSON over the socketpair), mirroring fork().
+  if (_wantsIPC && _ipcParentFd >= 0) {
+    child.connected = true;
+    child.channel = {};
+    net._ensurePoll();
+    b.setNonBlocking(_ipcParentFd);
+    let _ipcBuf = '';
+    const _ipcObj = {
+      _fd: _ipcParentFd, destroyed: false, _unref: true,
+      _onReadable() {
+        for (;;) {
+          const data = b.readPipe(_ipcParentFd);
+          if (data === undefined) {
+            net.Socket._sockets.delete(_ipcParentFd);
+            b.closeFd(_ipcParentFd);
+            this.destroyed = true;
+            child.connected = false;
+            child.emit('disconnect');
+            return;
+          }
+          if (data.length === 0) break;
+          _ipcBuf += data.replace(/\0/g, '');
+          let nl;
+          while ((nl = _ipcBuf.indexOf('\n')) >= 0) {
+            const line = _ipcBuf.substring(0, nl);
+            _ipcBuf = _ipcBuf.substring(nl + 1);
+            if (line.length > 0) { try { child.emit('message', JSON.parse(line)); } catch {} }
+          }
+        }
+      }
+    };
+    net.Socket._sockets.set(_ipcParentFd, _ipcObj);
+    tcp.pollAdd(_ipcParentFd, tcp.EVFILT_READ);
+    child.send = function(message, sendHandle, options, callback) {
+      if (typeof sendHandle === 'function') { callback = sendHandle; sendHandle = undefined; }
+      if (typeof options === 'function') { callback = options; options = undefined; }
+      if (!child.connected) { if (callback) callback(new Error('channel closed')); return false; }
+      b.writePipe(_ipcParentFd, JSON.stringify(message) + '\n');
+      if (callback) process.nextTick(callback);
+      return true;
+    };
+    child.disconnect = function() {
+      if (!child.connected) return;
+      child.connected = false;
+      net.Socket._sockets.delete(_ipcParentFd);
+      b.closeFd(_ipcParentFd);
+      child.emit('disconnect');
+    };
+  }
 
   child.kill = function(signal) {
     if (child.killed) return false;

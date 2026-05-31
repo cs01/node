@@ -355,8 +355,11 @@ class Server extends EventEmitter {
     const addr = this.address();
     if (addr) this._connectionKey = `${addr.family === 'IPv6' ? '6' : '4'}:${addr.address}:${addr.port}`;
 
-    // emit listening async like Node does
-    process.nextTick(() => this.emit('listening'));
+    // Emit 'listening' on a real loop turn (setImmediate), not a microtask, to
+    // match Node: a beforeExit handler that listens+closes must span loop
+    // iterations so beforeExit can re-fire, rather than collapsing into one
+    // nextTick drain.
+    setImmediate(() => this.emit('listening'));
     return this;
   }
 

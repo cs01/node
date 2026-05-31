@@ -21,6 +21,7 @@ extern fn memcpy(dst: *u8, src: *u8, len: i64): *u8
 // read/write for connected sockets
 extern fn read(fd: i32, buf: *u8, len: i64): i64
 extern fn write(fd: i32, buf: *u8, len: i64): i64
+extern fn nm_set_cloexec(fd: i32): i32
 extern fn sendto(fd: i32, buf: *u8, len: i64, flags: i32, addr: *u8, addrlen: i32): i64
 extern fn recvfrom(fd: i32, buf: *u8, len: i64, flags: i32, addr: *u8, addrlen: *i32): i64
 
@@ -174,6 +175,10 @@ fn tcpSocket(info: *u8, _ud: *u8): void {
         // non-blocking
         let flags = fcntl(fd, 3, 0)
         fcntl(fd, 4, flags | 4)
+        // FD_CLOEXEC via a C wrapper (variadic fcntl can't be called directly on
+        // ARM64): the socket must close on execve so a replaced process image can
+        // rebind the port (Node default).
+        nm_set_cloexec(fd)
         ci.retI32(fd)
     }
 }

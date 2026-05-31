@@ -61,6 +61,8 @@ process.env = new Proxy({}, {
   getOwnPropertyDescriptor(_, key) { const k = String(key); if (_envDeleted.has(k)) return undefined; let v; if (k in _envOverrides) v = _envOverrides[k]; else v = _envB.get(k); if (v !== undefined) return { value: v, writable: true, enumerable: true, configurable: true }; return undefined; },
 });
 
+// process.config is set after process.execPath is resolved (see below) so the
+// real config.gypi can be located next to the binary.
 process.config = Object.freeze({ variables: Object.freeze({ asan: 0, v8_enable_i18n_support: 0, node_module_version: 135, node_builtin_shareable_builtins: Object.freeze([]) }), target_defaults: Object.freeze({ default_configuration: 'Release' }) });
 process.features = { inspector: false, debug: false, uv: true, ipv6: true, openssl_is_boringssl: false, quic: false, tls_alpn: true, tls_sni: true, tls_ocsp: true, tls: true, cached_builtins: true, require_module: true, typescript: false };
 if (!process.versions) process.versions = {};
@@ -128,7 +130,12 @@ if (!process.hrtime) {
     if (time) { r[0] -= time[0]; r[1] -= time[1]; if (r[1] < 0) { r[0]--; r[1] += 1e9; } }
     return r;
   };
-  process.hrtime.bigint = b.hrtimeBigint;
+  // Wrap the native in a plain JS function — V8 %OptimizeFunctionOnNextCall /
+  // %PrepareFunctionForOptimization (used by test-process-hrtime-bigint under
+  // --allow-natives-syntax) crash on a bare C-binding callback that has no
+  // feedback vector; a JS wrapper optimizes cleanly.
+  const _hrtimeBigint = b.hrtimeBigint;
+  process.hrtime.bigint = function bigint() { return _hrtimeBigint(); };
 }
 
 // Proper nextTick queue — runs before promises, drains recursively
@@ -235,6 +242,16 @@ if (!process.execve) {
   };
 }
 if (!process.title) process.title = 'milo-node';
+if (!process.dlopen) {
+  // milo can't load native .node addons. Always fail, but with the filename
+  // embedded literally (not via a printf-style format) so a path containing
+  // `%s` can't corrupt the message — the security property this guards.
+  process.dlopen = function dlopen(module, filename, flags) {
+    const e = new Error('Cannot load native addon ' + filename + ': native addons are not supported');
+    e.code = 'ERR_DLOPEN_FAILED';
+    throw e;
+  };
+}
 if (!process.execPath) {
   const _ep = process.argv[0] || '';
   if (_ep) {
@@ -246,6 +263,15 @@ if (!process.execPath) {
     process.execPath = _ep;
   }
 }
+// Now that execPath is resolved, replace process.config with the real parsed
+// config.gypi (frozen) located next to the binary, so it deep-equals what build
+// tooling reads. Keep the stub if the file is absent (relocated binary).
+try {
+  const _cfp = require('path').join(require('path').dirname(process.execPath || ''), '..', '..', 'config.gypi');
+  let _craw = require('fs').readFileSync(_cfp, 'utf8');
+  _craw = _craw.split('\n').slice(1).join('\n'); // drop the leading `# Do not edit` comment
+  process.config = Object.freeze(JSON.parse(_craw, (k, v) => v === 'true' ? true : v === 'false' ? false : v));
+} catch { /* keep stub */ }
 if (!process.argv0) process.argv0 = process.argv[0] || '';
 // Resolve argv[0] to absolute path for child_process spawning compat
 if (process.argv[0] && !process.argv[0].startsWith('/')) {
@@ -296,8 +322,10 @@ if (!process.kill) {
     return true;
   };
 }
-// Validate and wrap process.exitCode as a property
-let _exitCode = process.exitCode || 0;
+// Validate and wrap process.exitCode as a property. Default is undefined (NOT 0)
+// — Node only materializes a code once one is set; tests assert the undefined
+// default, and all consumers coalesce with `|| 0`.
+let _exitCode = process.exitCode;
 function _validateExitCode(code) {
   if (code === null || code === undefined) return 0;
   if (typeof code === 'number') {
@@ -337,17 +365,22 @@ const _nativeExit = process.exit;
 if (!process.reallyExit) process.reallyExit = _nativeExit;
 process.exit = function(code) {
   if (code !== undefined) process.exitCode = code;
-  const exitCode = process.exitCode || 0;
   if (!process._exiting) {
     process._exiting = true;
-    try { process.emit('exit', exitCode); } catch {}
+    try { process.emit('exit', process.exitCode || 0); } catch {}
   }
-  process.reallyExit(exitCode);
+  // Re-read exitCode after 'exit' handlers — a handler may set process.exitCode
+  // (e.g. resetting to 0 after a fatal beforeExit), and that value wins.
+  process.reallyExit(process.exitCode || 0);
 };
 // Called by runtime before normal program completion (via __runExitHandlers global)
 process._emitBeforeExit = function() {
   const code = process.exitCode || 0;
-  try { process.emit('beforeExit', code); } catch {}
+  // A throw from a 'beforeExit' handler is fatal like any uncaught exception —
+  // route it through _fatalException so 'exit' still fires (Node semantics),
+  // instead of silently swallowing it.
+  try { process.emit('beforeExit', code); }
+  catch (e) { if (process._fatalException) process._fatalException(e); else throw e; }
 };
 process._emitExit = function() {
   const code = process.exitCode || 0;
@@ -502,14 +535,17 @@ function _formatFatal(er) {
 }
 
 process._fatalException = function(er) {
+  // A throw from within the uncaughtException handler is fatal with the special
+  // exit code 7 (not 1) — Node distinguishes "exception in fatal handler".
+  let threwInHandler = false;
   if (_uncaughtExceptionCallback !== null) {
     try { _uncaughtExceptionCallback(er); return true; }
-    catch (er2) { er = er2; }
+    catch (er2) { er = er2; threwInHandler = true; }
   } else {
     const handlers = process.listeners ? process.listeners('uncaughtException') : [];
     if (handlers && handlers.length > 0) {
       try { process.emit('uncaughtException', er, 'uncaughtException'); return true; }
-      catch (er2) { er = er2; } // a handler itself threw → now fatal
+      catch (er2) { er = er2; threwInHandler = true; } // a handler itself threw → now fatal
     }
   }
   // Inside a worker with no handler that handled the throw, hand off to the
@@ -524,8 +560,13 @@ process._fatalException = function(er) {
   } catch {
     try { const m = er && er.stack ? er.stack : String(er); (process.stderr && process.stderr.write) ? process.stderr.write(m + '\n') : console.error(m); } catch {}
   }
-  if (!process.exitCode) process.exitCode = 1;
-  process.exit(process.exitCode || 1);
+  // An unhandled fatal exception forces exit code 1 (or 7 if it was the
+  // uncaughtException handler that threw), overriding any user-set
+  // process.exitCode. The 'exit' handler can still override it afterward, which
+  // process.exit honors via its post-emit re-read.
+  const _fatalCode = threwInHandler ? 7 : 1;
+  process.exitCode = _fatalCode;
+  process.exit(_fatalCode);
   return false;
 };
 
@@ -560,6 +601,12 @@ if (!process.resourceUsage) process.resourceUsage = () => ({ userCPUTime: 0, sys
   process.disconnect = function() {
     if (!process.connected) return;
     process.connected = false;
+    // Deregister fd 3 from the poll set so the event loop can drain and the
+    // child exits — otherwise the (ref'd) IPC socket keeps __hasIO() true and
+    // the process hangs after disconnect. (net/tcp are declared below but only
+    // referenced here at call time.)
+    try { net.Socket._sockets.delete(3); } catch {}
+    try { tcp.pollRemove(3, tcp.EVFILT_READ); } catch {}
     _spawnB.closeFd(3);
     process.emit('disconnect');
   };

@@ -80,11 +80,18 @@ function _utf8Encode(str) {
     let c = str.charCodeAt(i);
     if (c < 0x80) a.push(c);
     else if (c < 0x800) { a.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f)); }
-    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length) {
-      const c2 = str.charCodeAt(++i);
-      const cp = ((c - 0xd800) << 10) + (c2 - 0xdc00) + 0x10000;
-      a.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
-    } else { a.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f)); }
+    else if (c >= 0xd800 && c <= 0xdbff) {
+      // High surrogate: only a *valid* following low surrogate forms a 4-byte
+      // codepoint; otherwise it's a lone surrogate → U+FFFD (Node/WHATWG, not
+      // raw WTF-8). Must verify c2's range — the old code blindly paired.
+      const c2 = i + 1 < str.length ? str.charCodeAt(i + 1) : 0;
+      if (c2 >= 0xdc00 && c2 <= 0xdfff) {
+        i++;
+        const cp = ((c - 0xd800) << 10) + (c2 - 0xdc00) + 0x10000;
+        a.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+      } else { a.push(0xef, 0xbf, 0xbd); }
+    } else if (c >= 0xdc00 && c <= 0xdfff) { a.push(0xef, 0xbf, 0xbd); }
+    else { a.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f)); }
   }
   return a;
 }
@@ -206,9 +213,47 @@ function _checkBigIntValue(value, min, max, range) {
 }
 const _INT64_MIN = -(2n ** 63n), _INT64_MAX = 2n ** 63n - 1n, _UINT64_MAX = 2n ** 64n - 1n;
 
+const _b64tab = (() => {
+  const t = new Int8Array(256).fill(-1);
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  for (let i = 0; i < A.length; i++) t[A.charCodeAt(i)] = i;
+  t[45] = 62; // '-' url-safe
+  t[95] = 63; // '_' url-safe
+  return t;
+})();
+// Forgiving base64: silently skips any byte outside the alphabet (whitespace,
+// '=', stray control chars), decoding the valid remainder rather than throwing
+// — matches Node, unlike strict atob().
+// indexOf/lastIndexOf can be invoked on an arbitrary receiver (e.g.
+// `new Buffer.prototype.lastIndexOf()`); reject anything that isn't an
+// ArrayBuffer view before touching .length, matching Node's validateBuffer.
+// Cross-realm-safe ArrayBuffer/SharedArrayBuffer test: a vm-context AB fails
+// `instanceof` (different realm's constructor) but keeps its [[Class]] tag.
+function _isAnyArrayBuffer(v) {
+  if (v instanceof ArrayBuffer) return true;
+  if (typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer) return true;
+  const tag = Object.prototype.toString.call(v);
+  return tag === '[object ArrayBuffer]' || tag === '[object SharedArrayBuffer]';
+}
+function _validateBufferReceiver(self) {
+  if (!ArrayBuffer.isView(self)) {
+    const e = new TypeError('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received an instance of ' + ((self && self.constructor && self.constructor.name) || typeof self));
+    e.code = 'ERR_INVALID_ARG_TYPE';
+    throw e;
+  }
+}
 function _base64Decode(str) {
-  if (_nativeBase64Decode) return _nativeBase64Decode(str);
-  return Uint8Array.from(atob(str), c => c.charCodeAt(0));
+  const out = [];
+  let acc = 0, bits = 0;
+  for (let i = 0; i < str.length; i++) {
+    const cc = str.charCodeAt(i);
+    if (cc === 61) break; // '=' terminates the stream (so '=bad…' decodes to nothing)
+    const v = _b64tab[cc & 0xff];
+    if (v < 0) continue;
+    acc = (acc << 6) | v; bits += 6;
+    if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 0xff); }
+  }
+  return out;
 }
 
 function _base64Encode(buf, start, end) {
@@ -223,8 +268,41 @@ function _base64Encode(buf, start, end) {
 // direct user calls. The warning is emitted at most once.
 let _internalCtor = false;
 let _bufferWarned = false;
+const _kNodeModulesRE = /[\\/]node_modules[\\/]/;
+// Walk the call stack to the first non-internal frame and report whether its
+// script lives in node_modules. Uses getScriptNameOrSourceURL() because milo
+// loads modules via eval+`//# sourceURL` (getFileName() is null for those, but
+// the sourceURL — incl. a vm runInNewContext filename — is preserved here).
+function _isInsideNodeModules() {
+  const prevPrep = Error.prepareStackTrace;
+  const prevLimit = Error.stackTraceLimit;
+  let frames;
+  try {
+    Error.stackTraceLimit = Infinity;
+    Error.prepareStackTrace = (_e, f) => f;
+    const holder = {};
+    Error.captureStackTrace(holder, _isInsideNodeModules);
+    frames = holder.stack;
+  } catch { return false; }
+  finally { Error.prepareStackTrace = prevPrep; Error.stackTraceLimit = prevLimit; }
+  if (!Array.isArray(frames)) return false;
+  for (const frame of frames) {
+    let name = null;
+    try { name = frame.getScriptNameOrSourceURL ? frame.getScriptNameOrSourceURL() : frame.getFileName(); } catch {}
+    if (!name || typeof name !== 'string') continue;
+    if (name.startsWith('node:')) continue;
+    if (name.indexOf('/src/milo/') !== -1) continue; // milo runtime internals (≈ node: core)
+    if (name === '[main]' || name === '[eval]' || name === '[require]') continue;
+    return _kNodeModulesRE.test(name);
+  }
+  return false;
+}
 function _emitBufferDeprecation() {
   if (_bufferWarned) return;
+  // Calls originating inside node_modules don't warn unless --pending-deprecation
+  // is set. Don't latch _bufferWarned when suppressing, so a later top-level call
+  // still warns.
+  if (!(typeof process !== 'undefined' && process.pendingDeprecation) && _isInsideNodeModules()) return;
   _bufferWarned = true;
   if (typeof process !== 'undefined' && process.emitWarning) {
     process.emitWarning(
@@ -237,6 +315,33 @@ function _newBuffer(...args) {
   _internalCtor = true;
   try { return new Buffer(...args); }
   finally { _internalCtor = false; }
+}
+
+// Buffer pool: small allocations (allocUnsafe, Buffer.from(string)) share one
+// backing ArrayBuffer, so e.g. Buffer.from('a').buffer === Buffer.from('b').buffer.
+// The pool AB is marked untransferable (refs nodejs/node#32752) so postMessage and
+// ArrayBuffer.prototype.transfer cannot steal other live buffers' memory.
+let _poolSize, _poolOffset, _allocPool;
+function _createPool() {
+  _poolSize = Buffer.poolSize;
+  _allocPool = new ArrayBuffer(_poolSize);
+  if (globalThis.__untransferable) globalThis.__untransferable.add(_allocPool);
+  _poolOffset = 0;
+}
+function _alignPool() {
+  // Keep 8-byte alignment so DataView/typed-array views over pooled buffers stay aligned.
+  if (_poolOffset & 0x7) { _poolOffset |= 0x7; _poolOffset++; }
+}
+function _poolAlloc(size) {
+  if (size <= 0) return _newBuffer(new ArrayBuffer(0));
+  if (size < (Buffer.poolSize >>> 1)) {
+    if (_allocPool === undefined || size > _poolSize - _poolOffset) _createPool();
+    const b = _newBuffer(_allocPool, _poolOffset, size);
+    _poolOffset += size;
+    _alignPool();
+    return b;
+  }
+  return _newBuffer(new ArrayBuffer(size));
 }
 
 class Buffer extends Uint8Array {
@@ -297,7 +402,7 @@ class Buffer extends Uint8Array {
       err.code = 'ERR_OUT_OF_RANGE';
       throw err;
     }
-    return _newBuffer(size);
+    return _poolAlloc(size);
   }
 
   static allocUnsafeSlow(size) {
@@ -307,7 +412,10 @@ class Buffer extends Uint8Array {
       err.code = 'ERR_OUT_OF_RANGE';
       throw err;
     }
-    return _newBuffer(new ArrayBuffer(size));
+    // Allocate from a bare typed array (not an explicit ArrayBuffer) so V8 keeps
+    // small instances on-heap with no backing store until .buffer is touched —
+    // matches Node's createUnsafeBuffer / arrayBufferViewHasBuffer semantics.
+    return _newBuffer(size);
   }
 
   static from(value, encodingOrOffset, length) {
@@ -325,21 +433,24 @@ class Buffer extends Uint8Array {
         return _newBuffer(_hexDecode(value));
       }
       if (enc === 'base64' || enc === 'base64url') {
-        const cleaned = value.replace(/-/g, '+').replace(/_/g, '/');
         if (_nativeBase64Decode) {
-          const u8 = _nativeBase64Decode(cleaned);
-          Object.setPrototypeOf(u8, Buffer.prototype);
-          return u8;
+          // Native may reject invalid input; fall back to the forgiving JS
+          // decoder so stray chars are skipped rather than thrown on.
+          try {
+            const u8 = _nativeBase64Decode(value.replace(/-/g, '+').replace(/_/g, '/'));
+            Object.setPrototypeOf(u8, Buffer.prototype);
+            return u8;
+          } catch { /* fall through */ }
         }
-        return _newBuffer(_base64Decode(cleaned));
+        return _newBuffer(_base64Decode(value));
       }
       if (enc === 'ascii' || enc === 'latin1' || enc === 'binary') {
-        const a = _newBuffer(value.length);
+        const a = _poolAlloc(value.length);
         for (let i = 0; i < value.length; i++) a[i] = value.charCodeAt(i) & 0xff;
         return a;
       }
       if (enc === 'ucs2' || enc === 'ucs-2' || enc === 'utf16le' || enc === 'utf-16le') {
-        const a = _newBuffer(value.length * 2);
+        const a = _poolAlloc(value.length * 2);
         for (let i = 0; i < value.length; i++) {
           const c = value.charCodeAt(i);
           a[i * 2] = c & 0xff;
@@ -347,9 +458,12 @@ class Buffer extends Uint8Array {
         }
         return a;
       }
-      return _newBuffer(_utf8Encode(value));
+      const bytes = _utf8Encode(value);
+      const a = _poolAlloc(bytes.length);
+      a.set(bytes);
+      return a;
     }
-    if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && value instanceof SharedArrayBuffer)) {
+    if (_isAnyArrayBuffer(value)) {
       // A fake AB inherits ArrayBuffer.prototype (instanceof passes) but has no real
       // slot — its byteLength getter throws "incompatible receiver"; treat as bad arg.
       let bl;
@@ -363,14 +477,22 @@ class Buffer extends Uint8Array {
       if (length === undefined) len = bl - offset;
       else { len = +length; if (Number.isNaN(len)) len = 0; }
       if (len < 0 || offset + len > bl) { const e = new RangeError('"length" is outside of buffer bounds'); e.code = 'ERR_BUFFER_OUT_OF_BOUNDS'; throw e; }
-      const view = new Uint8Array(value, offset, len);
+      // Resizable/growable AB with no explicit length → length-tracking view, so
+      // buffer.byteLength follows ab.resize()/grow(). Passing len would freeze it.
+      const view = (length === undefined && (value.resizable || value.growable))
+        ? new Uint8Array(value, offset)
+        : new Uint8Array(value, offset, len);
       Object.setPrototypeOf(view, Buffer.prototype);
       return view;
     }
     if (Array.isArray(value) || value instanceof Uint8Array) return _newBuffer(value);
+    // Non-Uint8Array TypedArrays (Uint32Array, Int16Array, …) are copied
+    // element-wise mod 256 as an array of integers, NOT byte-reinterpreted —
+    // matches Node's fromArrayLike. Must precede the `.buffer` view path below.
+    if (ArrayBuffer.isView(value) && !(value instanceof DataView)) return _newBuffer(Array.from(value));
     if (Buffer.isBuffer(value)) { const c = _newBuffer(value.length); c.set(value); return c; }
     if (value && typeof value === 'object' && value.type === 'Buffer' && Array.isArray(value.data)) return _newBuffer(value.data);
-    if (value && typeof value === 'object' && (value.buffer instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && value.buffer instanceof SharedArrayBuffer))) {
+    if (value && typeof value === 'object' && _isAnyArrayBuffer(value.buffer)) {
       return Buffer.from(value.buffer, value.byteOffset || 0, value.byteLength !== undefined ? value.byteLength : value.buffer.byteLength);
     }
     // String objects and objects with Symbol.toPrimitive/valueOf that return a string
@@ -379,7 +501,13 @@ class Buffer extends Uint8Array {
       if (typeof value[Symbol.toPrimitive] === 'function') primitive = value[Symbol.toPrimitive]('string');
       else if (typeof value.valueOf === 'function') primitive = value.valueOf();
       if (typeof primitive === 'string') return Buffer.from(primitive, encodingOrOffset);
-      if (typeof value.length === 'number') return _newBuffer(Array.from(value));
+      // Array-like: any own `length` makes it valid. A non-numeric length yields
+      // an empty buffer (Node returns new FastBuffer()); a numeric one is copied
+      // element-wise via ToLength (so 3.3 → 3, 'BAM'/NaN → 0).
+      if (value.length !== undefined) {
+        if (typeof value.length !== 'number') return _newBuffer(0);
+        return _newBuffer(Array.from(value));
+      }
     }
     throw _bufFromTypeError(value);
   }
@@ -515,6 +643,10 @@ class Buffer extends Uint8Array {
     // for 2-byte encodings, only write whole characters
     if (enc === 'ucs2' || enc === 'ucs-2' || enc === 'utf16le' || enc === 'utf-16le') {
       len = len & ~1; // round down to even
+    } else if ((enc === 'utf8' || enc === 'utf-8') && len < bytes.length && (bytes[len] & 0xc0) === 0x80) {
+      // The cut falls inside a multibyte sequence — Node never writes a partial
+      // character, so back up to the lead byte of the incomplete char.
+      do { len--; } while (len > 0 && (bytes[len] & 0xc0) === 0x80);
     }
     this.set(bytes.subarray(0, len), offset);
     return len;
@@ -565,8 +697,10 @@ class Buffer extends Uint8Array {
     return _utf8Decode(this, start, end);
   }
 
-  get parent() { return this.buffer; }
-  get offset() { return this.byteOffset; }
+  // On Buffer.prototype itself (not a real view) the underlying .buffer/.byteOffset
+  // getters throw "incompatible receiver"; Node's prototype getters yield undefined.
+  get parent() { try { return this.buffer; } catch { return undefined; } }
+  get offset() { try { return this.byteOffset; } catch { return undefined; } }
 
   inspect(recurseTimes, ctx) {
     const max = _exports.INSPECT_MAX_BYTES;
@@ -574,6 +708,23 @@ class Buffer extends Uint8Array {
     for (let i = 0; i < Math.min(this.length, max); i++) hex.push(this[i].toString(16).padStart(2, '0'));
     let str = hex.join(' ');
     if (this.length > max) { const rem = this.length - max; str += ' ... ' + rem + ' more byte' + (rem !== 1 ? 's' : ''); }
+    // When inspected via util.inspect (ctx present), append own enumerable
+    // non-index properties: `<Buffer 31 32, prop: 1>`. Render them through a
+    // null-proto object and strip util's `[Object: null prototype] { … }`
+    // wrapper (27-char prefix, 2-char suffix), matching Node.
+    if (ctx) {
+      const obj = { __proto__: null };
+      let extras = false;
+      for (const key of Object.keys(this)) {
+        if (/^(?:0|[1-9]\d*)$/.test(key) && Number(key) < this.length) continue; // skip byte indices
+        extras = true; obj[key] = this[key];
+      }
+      if (extras) {
+        if (this.length !== 0) str += ', ';
+        const inner = require('util').inspect(obj, { ...ctx, breakLength: Infinity, compact: true });
+        str += inner.slice(27, -2);
+      }
+    }
     return '<Buffer ' + str + '>';
   }
 
@@ -613,7 +764,9 @@ class Buffer extends Uint8Array {
   }
   copy(target, targetStart, sourceStart, sourceEnd) {
     if (!target || typeof target !== 'object' || (!ArrayBuffer.isView(target) && !(target instanceof ArrayBuffer) && !(target instanceof SharedArrayBuffer))) {
-      const err = new TypeError('The "target" argument must be an instance of Buffer or Uint8Array. Received type ' + typeof target);
+      // Node renders undefined/null without the "type" prefix.
+      const recv = target === undefined ? 'undefined' : target === null ? 'null' : 'type ' + typeof target;
+      const err = new TypeError('The "target" argument must be an instance of Buffer or Uint8Array. Received ' + recv);
       err.code = 'ERR_INVALID_ARG_TYPE'; throw err;
     }
     if (ArrayBuffer.isView(target) && !(target instanceof Uint8Array)) {
@@ -642,6 +795,7 @@ class Buffer extends Uint8Array {
   }
 
   indexOf(value, byteOffset, encoding) {
+    _validateBufferReceiver(this);
     // 4-arg form: indexOf(value, byteOffset, end, encoding) for limiting search range
     let searchEnd = this.length;
     if (arguments.length >= 4) {
@@ -687,6 +841,20 @@ class Buffer extends Uint8Array {
     if (start < 0) start = 0;
     if (needle.length === 0) return Math.min(start, searchEnd);
     if (start >= searchEnd) return -1;
+    // ucs2/utf16le: search in 2-byte units. A match must be even-aligned and
+    // both haystack and needle need >=2 bytes to form a 16-bit unit, so a
+    // 1-byte needle can never match (Node's IndexOfBuffer UCS2 path).
+    const _normEnc = typeof encoding === 'string' ? encoding.toLowerCase() : undefined;
+    if (_normEnc === 'ucs2' || _normEnc === 'ucs-2' || _normEnc === 'utf16le' || _normEnc === 'utf-16le') {
+      if (this.length < 2 || needle.length < 2) return -1;
+      if (start & 1) start++;
+      for (let i = start; i + needle.length <= searchEnd; i += 2) {
+        let found = true;
+        for (let j = 0; j < needle.length; j++) { if (this[i + j] !== needle[j]) { found = false; break; } }
+        if (found) return i;
+      }
+      return -1;
+    }
     if (_nativeIndexOf && searchEnd === this.length) return _nativeIndexOf(this, needle, start);
     for (let i = start; i <= searchEnd - needle.length; i++) {
       let found = true;
@@ -817,6 +985,7 @@ class Buffer extends Uint8Array {
   swap64() { if (this.length % 8 !== 0) { const e = new RangeError('Buffer size must be a multiple of 64-bits'); e.code = 'ERR_INVALID_BUFFER_SIZE'; throw e; } for (let i = 0; i < this.length; i += 8) { for (let j = 0; j < 4; j++) { const t = this[i+j]; this[i+j] = this[i+7-j]; this[i+7-j] = t; } } return this; }
 
   lastIndexOf(value, byteOffset, encoding) {
+    _validateBufferReceiver(this);
     // 4-arg form: lastIndexOf(value, byteOffset, end, encoding)
     let searchEnd = this.length;
     if (arguments.length >= 4) {
@@ -836,10 +1005,11 @@ class Buffer extends Uint8Array {
     if (typeof value === 'number') {
       const byte = value & 0xff;
       let start;
-      if (byteOffset === undefined || byteOffset !== byteOffset) { // undefined or NaN
+      const bo = +byteOffset; // coerce first: {}, undefined → NaN; null, [] → 0
+      if (bo !== bo) { // NaN → search from the end (whole buffer)
         start = searchEnd - 1;
       } else {
-        start = +byteOffset;
+        start = bo;
         if (start < 0) start = this.length + start;
       }
       if (start >= searchEnd) start = searchEnd - 1;
@@ -857,10 +1027,11 @@ class Buffer extends Uint8Array {
       return Math.min(Math.max(off, 0), searchEnd, this.length);
     }
     let start;
-    if (byteOffset === undefined || byteOffset !== byteOffset) { // undefined or NaN
+    const bo = +byteOffset; // coerce first: {}, undefined → NaN; null, [] → 0
+    if (bo !== bo) { // NaN → search from the end (whole buffer)
       start = searchEnd - needle.length;
     } else {
-      start = +byteOffset;
+      start = bo;
       if (start < 0) start = this.length + start;
     }
     if (start > searchEnd - needle.length) start = searchEnd - needle.length;
@@ -931,9 +1102,39 @@ class Buffer extends Uint8Array {
   }
 }
 
-Buffer.kMaxLength = 2 ** 31 - 1;
+// 2^53-1, matching modern Node on 64-bit: `new Uint8Array(kMaxLength+1)` is the
+// exact point V8 throws "Invalid typed array length" (spec limit), not a buffer
+// pooling cap.
+Buffer.kMaxLength = Number.MAX_SAFE_INTEGER;
 Buffer.poolSize = 8192;
 Buffer.prototype.toLocaleString = Buffer.prototype.toString;
+
+// Inherited TypedArray methods that allocate (map/filter) construct their
+// result via the species constructor — Buffer — which would emit DEP0005.
+// Wrap them so the internal allocation is flagged as internal (no warning)
+// while still returning a real Buffer (same prototype, unlike a FastBuffer
+// subclass which would break deepStrictEqual against plain Buffers).
+for (const _m of ['map', 'filter', 'subarray']) {
+  const _orig = Uint8Array.prototype[_m];
+  Buffer.prototype[_m] = function(...a) {
+    const _prev = _internalCtor;
+    _internalCtor = true;
+    try { return _orig.apply(this, a); } finally { _internalCtor = _prev; }
+  };
+}
+// Node defines indexOf/lastIndexOf as ordinary (constructable) functions, so
+// `new buf.lastIndexOf()` runs the body and throws a descriptive arg error
+// rather than "X is not a constructor". Class methods lack [[Construct]], so
+// re-wrap as named function expressions (the name surfaces in that error).
+{
+  const _io = Buffer.prototype.indexOf;
+  const _lio = Buffer.prototype.lastIndexOf;
+  Object.defineProperty(Buffer.prototype, 'indexOf', { configurable: true, writable: true, value: function indexOf(...a) { return _io.apply(this, a); } });
+  Object.defineProperty(Buffer.prototype, 'lastIndexOf', { configurable: true, writable: true, value: function lastIndexOf(...a) { return _lio.apply(this, a); } });
+}
+// Explicit Buffer.of avoids inheriting Uint8Array.of, which would allocate via
+// `new Buffer(len)` and emit DEP0005.
+Buffer.of = function of(...args) { return Buffer.from(args); };
 
 // lowercase UInt → Uint aliases (Node compat)
 for (const fn of ['UInt8', 'UInt16LE', 'UInt16BE', 'UInt32LE', 'UInt32BE', 'UIntLE', 'UIntBE', 'BigUInt64LE', 'BigUInt64BE']) {
@@ -1053,9 +1254,9 @@ function isUtf8(input) {
 
 let _inspectMaxBytes = 50;
 const _exports = {
-  Buffer, SlowBuffer, kMaxLength: 2 ** 31 - 1, kStringMaxLength: 2 ** 29 - 24,
+  Buffer, SlowBuffer, kMaxLength: Number.MAX_SAFE_INTEGER, kStringMaxLength: 2 ** 29 - 24,
   isAscii, isUtf8,
-  constants: { MAX_LENGTH: 2 ** 31 - 1, MAX_STRING_LENGTH: 2 ** 29 - 24 },
+  constants: { MAX_LENGTH: Number.MAX_SAFE_INTEGER, MAX_STRING_LENGTH: 2 ** 29 - 24 },
   atob: globalThis.atob, btoa: globalThis.btoa,
   File: globalThis.File, Blob: globalThis.Blob,
 };

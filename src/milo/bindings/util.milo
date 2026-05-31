@@ -94,6 +94,20 @@ fn utilGetCallerLocation(info: *u8, _ud: *u8): void {
     ci.retUndefined()
 }
 
+extern fn v8c_array_buffer_view_has_buffer(iso: *u8, val: i32): i32
+
+fn utilArrayBufferViewHasBuffer(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 1 {
+        ci.retBool(0)
+        return
+    }
+    let iso = ci.isolate()
+    var r: i32 = 0
+    unsafe { r = v8c_array_buffer_view_has_buffer(iso.ptr, ci.arg(0).slot) }
+    ci.retBool(r)
+}
+
 fn utilSleep(_info: *u8, _ud: *u8): void {}
 
 fn nm_init_util(iso: *u8, ctx: *u8, exports: i32): void {
@@ -127,6 +141,7 @@ fn nm_init_util(iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "previewEntries" as *u8, utilPreviewEntries as *u8)
         c.setMethod(exp, "getExternalValue" as *u8, utilGetExternalValue as *u8)
         c.setMethod(exp, "isInsideNodeModules" as *u8, utilIsInsideNodeModules as *u8)
+        c.setMethod(exp, "arrayBufferViewHasBuffer" as *u8, utilArrayBufferViewHasBuffer as *u8)
         c.setMethod(exp, "getCallerLocation" as *u8, utilGetCallerLocation as *u8)
         c.setMethod(exp, "sleep" as *u8, utilSleep as *u8)
         c.setMethod(exp, "asyncContextGet" as *u8, asyncContextGet as *u8)

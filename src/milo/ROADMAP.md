@@ -4,75 +4,72 @@ Goal: 100% Node.js runtime compatibility.
 Test only the module you're fixing: `./out/Release/milo-node -e "..."`.
 Full build: `bash src/milo/build.sh`
 
+Only outstanding work is listed. A module/feature not here is assumed passing.
+
 ## bun compat scoreboard
 
 Bun targets 2,185 of Node's 3,979 `test/parallel/` tests (55%). They skip entire subsystems:
 repl, inspector, debugger, diagnostics_channel, domain, permission, trace, snapshot, test runner.
 We use their curated subset as our primary compat benchmark.
 
-Run: `zsh src/milo/test-compat.sh [N|all] [timeout] [module]`
+Run safely: `bash test_safe_runner.sh --compat --module <mod>` (root runner — ulimit -v + ulimit -u + RSS watchdog + forkbomb kill).
+The per-module `zsh src/milo/test-compat.sh` only caps V8 heap + wall-time — NOT off-heap mem or proc count, so it can OOM/forkbomb on child_process/cluster/large-file tests.
 List: `src/milo/bun-curated-tests.txt` (2,143 tests present in our repo)
 
-### current pass rates (snapshot 2026-05-30; small modules re-measured. path/assert/console/querystring 100%; whatwg 19, require 17)
+### current pass rates (snapshot 2026-05-30)
 
-On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM)
+Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
+36% is test-weighted across all 30+ modules: the big low-scoring modules (http 210, http2 165, stream 156, crypto 94, child 85, tls 82) dominate the total, so 100% on small modules (buffer 63, process 57) barely moves it.
 
 | module     | pass/total | rate | priority | top blockers |
 |------------|-----------|------|----------|--------------|
-| event      | 27/28     | 96%  | low      | capture-rejections: avoidLoop case — when ee[captureRejectionSymbol] async handler itself throws, _err2 must surface as unhandledRejection; works in isolation, fails only in the 8-fn nextTick chain (rejection-tracking during nested tick drain). bootstrap event-loop issue, not events.js |
-| next       | 9/9       | 100% | —        | done |
-| buffer     | 52/63     | 83%  | high     | ucs2 indexOf alignment, inspect extra-props, resizable |
-| querystring| 3/3       | 100% | —        | done |
-| process    | 45/57     | 78%  | high     | beforeExit re-emit on server close, execve, --title flag, hrtime natives |
-| url        | 11/11     | 100% | —        | done (curated); full glob: parse-deprecation DEP0169, pathToFileURL backslash, relative |
-| readable   | 3/5       | 60%  | med      | from-web (web streams getReader); Readable.from async-iter error timing (endWithError emits unhandled before consumer) |
-| v8         | 3/5       | 60%  | —        | mostly passing |
+| event      | 27/28     | 96%  | low      | capture-rejections avoidLoop: when ee[captureRejectionSymbol] async handler itself throws, _err2 must surface as unhandledRejection; works in isolation, fails only in the 8-fn nextTick chain (rejection-tracking during nested tick drain). bootstrap event-loop issue, not events.js |
 | timers     | 49/55     | 89%  | low      | refresh ordering, getLibuvNow (native syntax), ALS, domain |
 | require    | 17/19     | 89%  | low      | preserve-symlinks flag, delete-array-iterator |
 | module     | 21/26     | 80%  | high     | .node dlopen, circular-dep warning, main-fail stderr |
+| worker     | 40/53     | 75%  | low      | heap-snapshot, wasm transfer, type-check/workerdata validation, message-port receive/transfer |
 | console    | 9/14      | 64%  | med      | write-error propagation, tty colors, revoked proxy |
-| path       | 15/15     | 100% | —        | done (curated) |
+| readable   | 3/5       | 60%  | med      | from-web (web streams getReader); Readable.from async-iter error timing |
+| v8         | 3/5       | 60%  | —        | mostly passing |
 | diagnostics| 10/17     | 58%  | low      | tracingChannel+ALS async propagation, udp |
+| util       | 10/19     | 53%  | med      | inspect getters/showHidden, callbackify, deprecate |
 | fs         | 99/201    | 49%  | high     | dispose ERR_DIR_CLOSED, readFile+signal, error codes |
+| whatwg     | 19/41     | 46%  | med      | URL↔searchParams live-sync, TextDecoder, webstreams |
+| stream     | 73/156    | 46%  | high     | async-fn map/flatMap, web streams, pipe edge cases |
 | http       | 91/210    | 43%  | high     | timeout/abort, keep-alive, error codes |
 | net        | 44/106    | 41%  | high     | Socket not extending Duplex |
-| stream     | 73/156    | 46%  | high     | async-fn map/flatMap, web streams, pipe edge cases |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
-| util       | 10/19     | 53%  | med      | inspect getters/showHidden, callbackify, deprecate |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
-| whatwg     | 19/41     | 46%  | med      | URLSearchParams brand/args DONE; remaining: URL↔searchParams live-sync, TextDecoder, webstreams |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |
-| child      | 17/85     | 20%  | med      | child.send, spawn edge cases |
 | tls        | 18/82     | 21%  | med      | connection lifecycle, error codes |
-| dgram      | 11/64     | 17%  | low      | bind/send permissions, multicast |
-| readline   | 2/17      | 11%  | low      | interface, cursor |
+| child      | 17/85     | 20%  | med      | child.send, spawn edge cases |
 | crypto     | 19/94     | 20%  | med      | ECDH, sign/verify gaps |
-| dns        | 1/22      | 4%   | low      | Resolver class |
+| dgram      | 11/64     | 17%  | low      | bind/send permissions, multicast |
 | http2      | 27/165    | 16%  | low      | frame codec + HPACK exist; stream/session edge cases |
-| worker     | 40/53     | 75%  | low      | real pthread+isolate impl; uncaught-exception propagation fully works (single-level, nested, exit-from-handler, non-fatal). remaining: heap-snapshot, wasm transfer, type-check/workerdata validation, message-port receive/transfer, event |
+| readline   | 2/17      | 11%  | low      | interface, cursor |
 | async      | 1/18      | 5%   | med      | async_hooks createHook tracking (ALS propagation DONE) |
+| dns        | 1/22      | 4%   | low      | Resolver class |
 | webcrypto  | 0/11      | 0%   | low      | subtle crypto gaps |
 
 ## quick wins (biggest compat % gain per effort)
 
 ### error codes (cross-module) — unlocks ~11 process, ~dozens elsewhere
-- [ ] already tracked below — "Missing expected exception" is #1 failure pattern across all modules
+- [ ] "Missing expected exception" is #1 failure pattern across all modules
 - [ ] just adding `.code` to thrown errors would flip many tests
 
-### process 38% → ~60% (57 tests in curated set, 22 passing)
+### process (small remaining gaps)
 - [ ] `process.seteuid()`, `process.setegid()`, `process.getegid()` — trivial syscall bindings (3 tests)
 - [ ] `process.umask(mask)` — return old mask, not current (2 tests)
-- [ ] `process.ref()` / `process.unref()` — missing on process object (1 test)
 - [ ] `process.kill(pid)` validation + return value (2 tests)
 - [ ] error code validation on cpuUsage, hrtime, nextTick, chdir (4 tests)
 
-### module 26% → ~50% (26 tests in curated set, 7 passing)
+### module 80% → ~50%+ remaining
 - [ ] `Module._stat` — fs.statSync wrapper, used by require resolution (1 test)
 - [ ] `Module._nodeModulePaths` / `Module._resolveLookupPaths` — expose internals (2 tests)
 - [ ] `Module._extensions` — setter for custom extensions like `.bar` (1 test)
 - [ ] circular dependency detection + warning (1 test)
 
-### zlib 22% → ~50% (56 tests in curated set)
+### zlib 32% → ~50%
 - [ ] `zlib.zstdCompress` / `zlib.ZstdDecompress` — Zstandard support
 - [ ] `zlib.params()` — dynamic compression level change
 - [ ] flush mode edge cases
@@ -83,12 +80,6 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 - [ ] native bindings throw errors without `.code` property — tests match on `{ code: 'ERR_xxx' }` in `assert.throws`
 - [ ] add `makeNodeError(code, type, msg)` helper, use in all validation paths (fs, buffer, net, dgram, crypto, etc.)
 - [ ] covers both "code mismatch" and "Missing expected exception" failure categories
-
-### ~~__dirname resolution~~ — VERIFIED WORKING 2026-05-29
-- [x] `__dirname`/`__filename` resolve correctly for main entry AND required submodules
-- claim "resolves to repo root" was stale; `_loadModule` already sets `dname = path.dirname(resolved)`
-
-### ~~MessagePort EventEmitter~~ — DONE (worker_threads.js bridges MP.prototype.on/once/off/emit over EventTarget)
 
 ## high
 
@@ -102,14 +93,10 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 ### net
 - [ ] net.Socket should extend Duplex (currently extends EventEmitter with ad-hoc methods)
 
-### vm real V8 contexts — DONE (foundation), needs marshaling fidelity
-- [x] vm binding (bindings/vm.milo): createContext + run via v8c_context_new/v8c_script_compile_run
-- [x] true realm isolation — foreign objects get the new context's own Function.prototype (solved util-promisify line 102)
-- [x] sandbox<->global marshaling done INSIDE the target context (writes to a foreign global proxy from the main context are silently dropped by V8 — key gotcha)
-- [ ] TRADEOFF: curated vm 20->18 — shallow value-copy marshaling is lossy vs Node's interceptor contextify:
-      loses property descriptors/getters and Symbol.toStringTag (test-vm-basic wants '[object process]'),
-      and new contexts lack Node globals (console etc) the old eval/with(proxy) fake exposed via globalThis fallback.
-- [ ] NEXT: marshal with full descriptors (getOwnPropertyDescriptors) + seed standard globals -> should exceed 20
+### vm marshaling fidelity (real V8 contexts landed; marshaling lossy)
+- [ ] shallow value-copy marshaling loses property descriptors/getters and Symbol.toStringTag
+      (test-vm-basic wants '[object process]'); new contexts lack Node globals (console etc) the old eval/with(proxy) fake exposed
+- [ ] marshal with full descriptors (getOwnPropertyDescriptors) + seed standard globals -> should exceed 20
 
 ### missing APIs (scattered but cumulative)
 - [ ] `dns.Resolver` class (~30 tests)
@@ -155,102 +142,3 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 ### stream internals
 - [ ] HWM logic — invariant hwm > 0, buffer length tracking
 - [ ] backpressure state transitions — ensures consistent needDrain/flowing state
-
-## done
-
-- [x] worker: uncaught-exception propagation, single-level AND nested (test-worker-nested-uncaught, verified passing). THREE coordinated fixes, all required: (1) **lazy worker bootstrap** — worker-side internals (parentPort, `__workerPump`, the `uncaughtException`->postToParent handler) lived in worker_threads.js's `if (_isWorker)` block, so they only existed if the user script `require`d worker_threads. A bare `new Worker("throw ...",{eval:true})` never required it -> no handler -> the throw vanished. Fix: `nm_worker_entry` (main.milo) now runs `require('worker_threads')` right after bootstrap, unconditionally — every worker is wired like Node's always-on worker bootstrap. (2) **THE key fix** — `nm_worker_entry` ran the script under a native V8 TryCatch but discarded the caught exception. Fix: added `v8c_try_catch_exception` extern; after compileRun, if `v8c_try_catch_has_caught`, extract the exception and call `process._fatalException(exception)` like the main thread -> emits `uncaughtException` -> handler posts `{t:'error'}` to parent -> parent's Worker `'error'` fires. (3) `__workerPump`'s per-tick catch routes through `process._fatalException(e)` (NOT a bare `emit`), and stays alive while child workers remain — so a child's unhandled `error` honors a user handler if present, else hits the worker fallback that posts to OUR parent. Error chains innermost->top->main. (4) **regression-proofing** — the worker-side uncaught->parent post is now a FALLBACK (`__workerUncaughtFallback`, invoked by `_fatalException` only when no user handler handled the throw), not a standing `uncaughtException` listener. As a listener it ALWAYS posted an error and raced a worker whose own handler calls `process.exit(code)` (test-worker-exit-from-uncaught-exception expects clean exit 42, no parent 'error'). worker 30->40, zero regressions. Requires rebuild (main.milo + v8capi extern). Newly passing: nested-uncaught, abort-on-uncaught-exception, exit-from-uncaught-exception, non-fatal-uncaught-exception, onmessage-not-a-function, esm-exit, esm-missing-main, load-file-with-extension.
-- [x] worker: ref/unref real keep-alive accounting — `__hasActiveWorkers` counts only `_refed` workers (unref'd still pumped, but don't hold the loop open); `ref()`/`unref()` toggle `_refed`. Fixes the beforeExit-revival dance (test-worker-ref: unref → idle → beforeExit re-`ref()`s + postMessages → echo → exit) AND test-worker-ref-onexit (unref'd infinite-setInterval worker no longer OOM-hangs main). terminate() resolves `undefined` (was exitCode 0) → test-worker-terminate-null-handler. worker timeouts 11→9, was-stale 1/53 → real 30/53.
-- [x] whatwg: URLSearchParams brand-checks (ERR_INVALID_THIS), arg-count (ERR_MISSING_ARGS), USVString `_toStr` (symbols throw — String(sym) does NOT throw in this V8), form-urlencoded `+`/percent codec, branded `_spIterator`. whatwg 11->19. ALSO removed stale url.js iterator-toStringTag shim that patched `getPrototypeOf(iter)` — with plain-object iterators that was Object.prototype → globally broke String({}). (Was misdiagnosed as a milo bug; see memory project_milo_object_proto_pollution for the grep -a / Function-hook debugging lessons.)
-- [x] util.inspect: showHidden surfaces own non-enumerable + prototype getters (bracketed keys); getters option invokes getter -> [Getter: value]; [Getter]/[Setter]/[Getter/Setter] labels; enumerable-only symbols by default. (test-util-inspect-getters still needs `<ref *N>` circular numbering.)
-- [x] assert.rejects: `_recvType` (an instance of X / undefined) in return/arg messages; only instanceof Error-ctors (arrow validators have no prototype); validator-returns-non-true -> proper AssertionError; object-matcher emits diff + generatedMessage like throws(); `_createComparisonDiff` null-safe for primitive rejections.
-- [x] assert 3->6 (85%): TypedArray branch in `_deepEqual` (+0/-0 via Object.is, NaN, fast vs Object.keys); partialDeepStrictEqual prefix-matches typed arrays/ArrayBuffers; real-Date runtime check (fake w/ Date.prototype renders `Date {}`, never == real Date); deepEqual diff uses +/- for objects; `_inspectObj` constructor-name prefix; error inspect shows `[cause]`+own props. (typedarray-deepequal, checktag, deep-with-error all pass.)
-- [x] assert 7/7 (100%): test-assert-async — thenables require both then AND catch (invalidThenable rejected as ERR_INVALID_ARG_TYPE).
-- [x] path win32: ported canonical Node lib/path.js win32 (device-namespace `\\.\`/`\\?\`, reserved-name CON:/COM1 CVE handling, CVE-2024-36139 relative-with-colon, Unicode-case-folding relative via segment-split, toNamespacedPath/_makeLong, UNC-root parse). format validates pathObject (validateObject) + formatExt dot-prefix. path 9->15 (100% curated)
-- [x] FOUNDATIONAL: `_ERR_INVALID_ARG_TYPE` formatter quotes string values (`type string ('x')`) + truncates >28 chars — matches Node inspect; cross-module (every arg-type validation error message)
-- [x] buffer: legacy `new Buffer()` emits DEP0005 once (internal allocs via _newBuffer skip warning); native binding.fill shim range-checks start/end (ERR_OUT_OF_RANGE) — buffer 49->52 (fill, constructor-deprecation-error, pending-deprecation)
-- [x] buffer: byteLength accepts cross-realm ArrayBuffer (toStringTag); compare rejects prototype-only fakes (isView brand) — buffer 46->48
-
-- [x] FOUNDATIONAL: AsyncLocalStorage async propagation via V8 ContinuationPreservedEmbedderData — context survives await/.then/timers/nextTick. Curated async tests still need createHook tracking, but ALS works for real frameworks
-
-- [x] stream iterator-helper arg validation (map/filter/drop/take/...) — stream 70->73
-
-- [x] timers: interval _onTimeout/_idleTimeout stop signals + internal/linkedlist port — timers 47->49 (40->49 this session, 89%)
-
-- [x] timers: dispose skips immediate drain; _repeat-set re-arms one-shot as interval — timers 45->47 (40->47 this session)
-
-- [x] timers: fireDue slot-state-before-callback (refresh-from-own-callback re-arms); internal/timers setUnrefTimeout — timers 43->45
-
-- [x] timers: unref-immediate loop semantics (setImmediate(fn).unref() doesnt keep loop alive) — timers 40->43
-
-- [x] FOUNDATIONAL: process unhandledRejection/rejectionHandled (V8 PromiseRejectCallback in v8capi -> bootstrap tracker); EventEmitter captureRejections (prototype-backed default, async listener rejections -> error). timers +1, broadly used
-
-- [x] events.removeAllListeners emits removeListener per-listener (Reflect.ownKeys for symbols) — event 27/28
-
-- [x] nextTick this-binding (was queue tuple) + module top-level this===module.exports; Readable.from validation + async-iter error reject. next 9/9
-
-- [x] require.cache Proxy (Module-object semantics over moduleCache) + _builtinCache for node: bypass; node:-prefix error codes — require 11->13, no load-path risk
-
-- [x] module: require.extensions custom handlers + Module.runMain entry (monkey-patchable via --require) — module 19->21 (53->80% this session)
-
-- [x] --pending/no/throw-deprecation flags derived from cmdline; module.parent deduped DEP0144 getter (module 17->19)
-
-- [x] module loader honors customized Module.wrapper (non-builtin); null-proto package.json (proto-pollution safe) — module 14->17
-- [x] util.parseEnv dotenv-compatible parser (quotes/multiline/comments/export/escapes); process.processTicksAndRejections named frame
-
-- [x] util.inspect breakLength multiline wrapping (reduceToSingleString port) — foundational, unblocks console/util/assert-message tests; console-group passes; console 50->57%
-
-- [x] assert.rejects/doesNotReject: regex matchers via .test(), validator-vs-Error-ctor, promiseFn type + non-Promise-return validation, doesNotReject message (CASCADE — affects throws/rejects across suite)
-- [x] fs: createReadStream accepts FileHandle as opts.fd; FileHandle is EventEmitter; read/write option-forms + reject-not-throw (fs 94->99)
-
-- [x] fs.read/readSync/FileHandle option-form + customPromisifyArgs; FileHandle is EventEmitter (read cluster, fs 94->97)
-- [x] querystring.escape node encodeStr port (surrogate combine, lone-end throws) — querystring 3/3
-- [x] url.format type validation (ERR_INVALID_ARG_TYPE) — url 10/11
-- [x] events/AbortSignal: real Event on abort, stopImmediatePropagation halts dispatch, listenerCount, once({signal})
-
-- [x] util.promisify faithful port — resolve first value (was returning array: real bug breaking packages), customPromisifyArgs->named object, setPrototypeOf+own-descriptors, no cache; util-promisify now blocked ONLY by vm realm isolation (line 102 cross-realm prototype)
-- [x] internal/util sleep (validated msec) + customPromisifyArgs export (util-sleep, timers-nested)
-- [x] timers/promises validation + AbortError cause + promisify.custom wiring (timeout/immediate-promisified)
-- [x] buffer ascii decode masks high bit (byte & 0x7f), separate from latin1 (test-buffer-ascii)
-- [x] process.exit funnels through overridable process.reallyExit; process reports as #<process> (really-exit, exit-code-validation)
-- [x] process.kill returns true + propagates kill(2) errno (dead-pid signal-0 probe throws)
-- [x] process.emitWarning honors noDeprecation/throwDeprecation; default 'warning' listener prints Error-only (warning, no-deprecation)
-- [x] top-level uncaught throws route through process._fatalException — `[main]` runner wraps require(f) in try/catch; capture callbacks + 'uncaughtException' listeners now fire instead of native print+exit (process 68%→71%, broad cross-module win)
-- [x] error codes in toString — Error.prototype.toString brackets ERR_* codes ("TypeError [ERR_X]: msg") so assert.throws(/ERR_X/) matches String(err); cross-module win (buffer 33%→73%)
-- [x] process.ref/unref — symbol-based (nodejs.ref) + legacy api
-- [x] process.setSourceMapsEnabled / getSourceMapsSupport — arg validation
-- [x] buffer.isUtf8 — proper unicode well-formed validation (overlong/surrogate/range)
-- [x] buffer writeBigInt64/writeBigUInt64 — bigint type + range validation
-- [x] structuredClone — honors transfer list (detaches), clones typed arrays/map/set/date
-- [x] binary TCP send/recv — WebSocket (ws) package works
-- [x] crypto.randomFillSync, randomFill
-- [x] crypto.createPublicKey, createPrivateKey
-- [x] Buffer.writeUIntBE/LE, readUIntBE/LE, writeIntBE/LE, readIntBE/LE
-- [x] HTTP upgrade events (server + client) for WebSocket
-- [x] HTTP server setTimeout, listening property
-- [x] EventEmitter → function-based constructor (util.inherits compat)
-- [x] Stream → function-based constructor
-- [x] StringDecoder → function-based constructor
-- [x] fs.Dirent + readdirSync withFileTypes
-- [x] fs/promises, stream/promises subpath requires
-- [x] http2 module (basic)
-- [x] util.types: isUint8Array, isArrayBufferView, typed array checks, etc.
-- [x] net.Socket: cork/uncork, pause/resume/pipe, read, _readableState/_writableState
-- [x] net.Server listen({port, host}) options object
-- [x] internalBinding('config').hasCrypto = true
-- [x] tty module with raw mode
-- [x] per-module require with exports map support
-- [x] express 4 full compat (GET/POST/JSON/params/status)
-- [x] stream async iterator + Readable.from
-- [x] ESM module support — import/export transform, default/named/re-exports, multi-line, #imports
-- [x] require('.') and require('..') resolution
-- [x] directory-with-same-name-as-file resolution in require
-- [x] crypto.webcrypto.subtle — digest, importKey, sign, verify
-- [x] globalThis.crypto (WebCrypto API)
-- [x] zlib decompression for high-compression-ratio data (progressive buffer sizing)
-- [x] pg (postgres) client loads
-- [x] 38+ npm packages verified: express, ws, uuid, chalk, nanoid, pg, redis, ioredis, knex, etc.
-- [x] `fork()` with IPC messaging (socketpair + kqueue)
-- [x] `process.send()` / `process.on('message')` in forked children
-- [x] `process.channel` ref/unref for IPC
-- [x] env var inheritance in child processes (posix_spawn environ fix)
-- [x] `process.env` set/delete synced to real C environ
