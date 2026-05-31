@@ -70,7 +70,10 @@ function _reviveErr(o) {
 // Parent side — Worker handle + the pump the main event loop calls each tick.
 // ===========================================================================
 const _activeWorkers = new Set();
-Object.defineProperty(globalThis, '__hasActiveWorkers', { value: () => _activeWorkers.size > 0, enumerable: false });
+// Keep-alive accounting is per-worker ref state, not mere liveness: an unref'd
+// worker still gets pumped (messages/exit flow if the loop is alive for other
+// reasons) but does NOT by itself keep the main event loop running.
+Object.defineProperty(globalThis, '__hasActiveWorkers', { value: () => { for (const w of _activeWorkers) if (w._refed) return true; return false; }, enumerable: false });
 Object.defineProperty(globalThis, '__pumpParentWorkers', { value: () => { for (const w of [..._activeWorkers]) w._pump(); }, enumerable: false });
 
 class Worker extends EventEmitter {
@@ -96,6 +99,7 @@ class Worker extends EventEmitter {
     this.threadId = _b.threadId(this._chan);
     _b.setData(this._chan, options.workerData);
     this._exited = false;
+    this._refed = true;
     _activeWorkers.add(this);
     _b.start(this._chan);
     process.nextTick(() => this.emit('online'));
@@ -117,10 +121,11 @@ class Worker extends EventEmitter {
   }
   terminate() {
     _b.requestTerminate(this._chan);
-    return Promise.resolve(_b.exitCode(this._chan));
+    // Modern Node resolves terminate() with no value (the legacy exitCode arg was removed).
+    return Promise.resolve();
   }
-  ref() { return this; }
-  unref() { return this; }
+  ref() { this._refed = true; return this; }
+  unref() { this._refed = false; return this; }
   get stdout() { return null; }
   get stderr() { return null; }
 }

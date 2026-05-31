@@ -49,7 +49,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 | crypto     | 19/94     | 20%  | med      | ECDH, sign/verify gaps |
 | dns        | 1/22      | 4%   | low      | Resolver class |
 | http2      | 27/165    | 16%  | low      | frame codec + HPACK exist; stream/session edge cases |
-| worker     | 1/53      | 1%   | low      | needs V8 isolate threading |
+| worker     | 30/53     | 57%  | low      | re-measured 2026-05-30 (was stale 1/53): real pthread+isolate impl works. remaining: heap-snapshot, wasm transfer, uncaught-exception propagation, onmessage-non-fn hang, type-check/workerdata validation |
 | async      | 1/18      | 5%   | med      | async_hooks createHook tracking (ALS propagation DONE) |
 | webcrypto  | 0/11      | 0%   | low      | subtle crypto gaps |
 
@@ -88,9 +88,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 - [x] `__dirname`/`__filename` resolve correctly for main entry AND required submodules
 - claim "resolves to repo root" was stale; `_loadModule` already sets `dname = path.dirname(resolved)`
 
-### MessagePort EventEmitter (~93 tests)
-- [ ] `MessageChannel` ports lack `.on()`, `.once()`, `.emit()`
-- [ ] need `MessagePort.prototype` to inherit from `EventEmitter`
+### ~~MessagePort EventEmitter~~ — DONE (worker_threads.js bridges MP.prototype.on/once/off/emit over EventTarget)
 
 ## high
 
@@ -160,6 +158,7 @@ Worth adding to pure algorithmic code where off-by-one and bounds bugs bite hard
 
 ## done
 
+- [x] worker: ref/unref real keep-alive accounting — `__hasActiveWorkers` counts only `_refed` workers (unref'd still pumped, but don't hold the loop open); `ref()`/`unref()` toggle `_refed`. Fixes the beforeExit-revival dance (test-worker-ref: unref → idle → beforeExit re-`ref()`s + postMessages → echo → exit) AND test-worker-ref-onexit (unref'd infinite-setInterval worker no longer OOM-hangs main). terminate() resolves `undefined` (was exitCode 0) → test-worker-terminate-null-handler. worker timeouts 11→9, was-stale 1/53 → real 30/53.
 - [x] whatwg: URLSearchParams brand-checks (ERR_INVALID_THIS), arg-count (ERR_MISSING_ARGS), USVString `_toStr` (symbols throw — String(sym) does NOT throw in this V8), form-urlencoded `+`/percent codec, branded `_spIterator`. whatwg 11->19. ALSO removed stale url.js iterator-toStringTag shim that patched `getPrototypeOf(iter)` — with plain-object iterators that was Object.prototype → globally broke String({}). (Was misdiagnosed as a milo bug; see memory project_milo_object_proto_pollution for the grep -a / Function-hook debugging lessons.)
 - [x] util.inspect: showHidden surfaces own non-enumerable + prototype getters (bracketed keys); getters option invokes getter -> [Getter: value]; [Getter]/[Setter]/[Getter/Setter] labels; enumerable-only symbols by default. (test-util-inspect-getters still needs `<ref *N>` circular numbering.)
 - [x] assert.rejects: `_recvType` (an instance of X / undefined) in return/arg messages; only instanceof Error-ctors (arrow validators have no prototype); validator-returns-non-true -> proper AssertionError; object-matcher emits diff + generatedMessage like throws(); `_createComparisonDiff` null-safe for primitive rejections.
