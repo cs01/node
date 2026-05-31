@@ -394,6 +394,20 @@ function promisify(original) {
 }
 promisify.custom = Symbol.for('nodejs.util.promisify.custom');
 
+// Runs inside a nextTick (process.processTicksAndRejections frame). Wraps a
+// falsy rejection reason here so the Error's stack points at the tick loop.
+function _callbackifyOnRejected(reason, cb) {
+  if (!reason) {
+    const orig = reason;
+    reason = new Error('Promise was rejected with falsy value');
+    reason.reason = orig;
+    reason.code = 'ERR_FALSY_VALUE_REJECTION';
+    // Drop this frame so stack[1] is the tick loop (process.processTicksAndRejections).
+    if (Error.captureStackTrace) Error.captureStackTrace(reason, _callbackifyOnRejected);
+  }
+  return cb(reason);
+}
+
 function callbackify(fn) {
   if (typeof fn !== 'function') {
     let received;
@@ -425,7 +439,10 @@ function callbackify(fn) {
     }
     fn.apply(this, args).then(
       (r) => process.nextTick(cb.bind(this), null, r),
-      (e) => { if (!e) { const wrapped = new Error('Promise was rejected with falsy value'); wrapped.reason = e; wrapped.code = 'ERR_FALSY_VALUE_REJECTION'; e = wrapped; } process.nextTick(cb.bind(this), e); }
+      // Defer the falsy-value wrapping into the nextTick callback so the wrapped
+      // Error's stack[1] is `process.processTicksAndRejections` (Node semantics),
+      // not the promise .then handler that created it.
+      (e) => process.nextTick(_callbackifyOnRejected, e, cb.bind(this))
     );
   };
   Object.defineProperty(callbackified, 'length', { value: fn.length + 1 });
