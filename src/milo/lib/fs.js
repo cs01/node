@@ -1529,10 +1529,14 @@ const promises = {
   open: (p, flags, mode) => {
     try {
       const fd = openSync(p, flags || 'r', mode);
+      // After close the captured fd is stale (and may be reused by a later open),
+      // so every fd op must reject EBADF rather than act on the wrong fd.
+      const _ebadf = (syscall) => _fsError('EBADF', syscall, null, 'bad file descriptor');
       const handle = {
         fd,
         close() { if (!this._closed) { this._closed = true; closeSync(fd); this.fd = -1; this.emit('close'); } return Promise.resolve(); },
         read(buf, off, len, pos) {
+          if (this._closed) return Promise.reject(_ebadf('read'));
           // FileHandle.read overloads: read(buffer,offset,length,position),
           // read(buffer,{offset,length,position}), and read({buffer,offset,length,position}).
           if (buf != null && typeof buf === 'object' && !Buffer.isBuffer(buf) && !ArrayBuffer.isView(buf)) {
@@ -1552,13 +1556,14 @@ const promises = {
           catch (e) { return Promise.reject(e); }
         },
         write(buf, off, len, pos) {
+          if (this._closed) return Promise.reject(_ebadf('write'));
           // writeSync validates+throws synchronously; surface as a rejection.
           try { return Promise.resolve({ bytesWritten: writeSync(fd, buf, off, len, pos), buffer: buf }); }
           catch (e) { return Promise.reject(e); }
         },
-        stat(opts) { try { return Promise.resolve(fstatSync(fd, opts)); } catch (e) { return Promise.reject(e); } },
-        readFile(opts) { try { return Promise.resolve(readFileSync('/dev/fd/' + fd, opts)); } catch (e) { return Promise.reject(e); } },
-        writeFile(data) { writeSync(fd, data); return Promise.resolve(); },
+        stat(opts) { if (this._closed) return Promise.reject(_ebadf('fstat')); try { return Promise.resolve(fstatSync(fd, opts)); } catch (e) { return Promise.reject(e); } },
+        readFile(opts) { if (this._closed) return Promise.reject(_ebadf('read')); try { return Promise.resolve(readFileSync('/dev/fd/' + fd, opts)); } catch (e) { return Promise.reject(e); } },
+        writeFile(data) { if (this._closed) return Promise.reject(_ebadf('write')); writeSync(fd, data); return Promise.resolve(); },
         appendFile(data, opts) {
           const signal = opts && opts.signal;
           const run = (resolve, reject) => {
