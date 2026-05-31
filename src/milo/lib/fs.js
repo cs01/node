@@ -676,6 +676,12 @@ function _validateAccessMode(mode) {
 // macOS errno → node error code (the subset access(2) can return)
 const _ERRNO_CODES = { 1: 'EPERM', 2: 'ENOENT', 13: 'EACCES', 20: 'ENOTDIR', 30: 'EROFS', 62: 'ELOOP', 63: 'ENAMETOOLONG' };
 const _ERRNO_MSG = { EPERM: 'operation not permitted', ENOENT: 'no such file or directory', EACCES: 'permission denied', ENOTDIR: 'not a directory', EROFS: 'read-only file system', ELOOP: 'too many symbolic links', ENAMETOOLONG: 'name too long' };
+// errno (positive, from a native binding) -> fs Error, or null on success.
+function _errnoErr(errno, syscall, path) {
+  if (!errno || errno === 0) return null;
+  const code = _ERRNO_CODES[errno] || 'EACCES';
+  return _fsError(code, syscall, path, _ERRNO_MSG[code] || 'permission denied');
+}
 function accessSync(path, mode) {
   _validatePath(path, 'path');
   _validateAccessMode(mode);
@@ -1467,11 +1473,14 @@ function fchown(fd, uid, gid, cb) { _validateFd(fd); _validateUid(uid); _validat
 function fchownSync(fd, uid, gid) { _validateFd(fd); _validateUid(uid); _validateGid(gid); const _f = internalBinding('fs'); if (_f.fchown) _f.fchown(fd, uid, gid); }
 function chown(p, uid, gid, cb) { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); const sp = _toPath(p); const _f = internalBinding('fs'); if (_f.chown) _f.chown(sp, uid, gid); if (cb) process.nextTick(cb, null); }
 function lchown(p, uid, gid, cb) { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); _validateCb(cb); const sp = _toPath(p); const _f = internalBinding('fs'); if (_f.lchown) _f.lchown(sp, uid, gid); else if (_f.chown) _f.chown(sp, uid, gid); process.nextTick(cb, null); }
-function utimes(p, atime, mtime, cb) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); _f.utimes(sp, Math.floor(atime), Math.floor(mtime)); if (cb) process.nextTick(cb, null); }
-function lutimes(p, atime, mtime, cb) { _validatePath(p, 'path'); if (cb) process.nextTick(cb, null); }
+function utimes(p, atime, mtime, cb) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); const r = _f.utimes(sp, Math.floor(_toUnixTimestamp(atime)), Math.floor(_toUnixTimestamp(mtime))); if (cb) process.nextTick(cb, _errnoErr(r, 'utime', sp)); }
+function futimes(fd, atime, mtime, cb) { _validateFd(fd); _validateCb(cb); const _f = internalBinding('fs'); const r = _f.futimes(fd, Math.floor(_toUnixTimestamp(atime)), Math.floor(_toUnixTimestamp(mtime))); process.nextTick(cb, _errnoErr(r, 'futime', null)); }
+function futimesSync(fd, atime, mtime) { _validateFd(fd); const _f = internalBinding('fs'); const r = _f.futimes(fd, Math.floor(_toUnixTimestamp(atime)), Math.floor(_toUnixTimestamp(mtime))); const e = _errnoErr(r, 'futime', null); if (e) throw e; }
+function lutimes(p, atime, mtime, cb) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); const r = _f.lutimes(sp, Math.floor(_toUnixTimestamp(atime)), Math.floor(_toUnixTimestamp(mtime))); if (cb) process.nextTick(cb, _errnoErr(r, 'lutime', sp)); }
+function lutimesSync(p, atime, mtime) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); const r = _f.lutimes(sp, Math.floor(_toUnixTimestamp(atime)), Math.floor(_toUnixTimestamp(mtime))); const e = _errnoErr(r, 'lutime', sp); if (e) throw e; }
 function chownSync(p, uid, gid) { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); const sp = _toPath(p); const _f = internalBinding('fs'); if (_f.chown) _f.chown(sp, uid, gid); }
 function lchownSync(p, uid, gid) { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); chownSync(p, uid, gid); }
-function utimesSync(p, atime, mtime) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); _f.utimes(sp, Math.floor(atime), Math.floor(mtime)); }
+function utimesSync(p, atime, mtime) { _validatePath(p, 'path'); const sp = _toPath(p); const _f = internalBinding('fs'); const r = _f.utimes(sp, Math.floor(_toUnixTimestamp(atime)), Math.floor(_toUnixTimestamp(mtime))); const e = _errnoErr(r, 'utime', sp); if (e) throw e; }
 function truncateSync(p, len) {
   _validatePath(p, 'path');
   _validateLen(len);
@@ -1602,13 +1611,13 @@ module.exports = {
   readFile, writeFile, appendFile, stat, lstat, mkdir, readdir,
   unlink, rmdir, rename, chmod, lchmod, access, rm, copyFile, realpath, exists,
   open, close, read, write, fstat, fsync, fdatasync, ftruncate, fchmod, fchown, link, readlink, symlink,
-  chown, lchown, utimes, lutimes, truncate, mkdtemp,
+  chown, lchown, utimes, futimes, lutimes, truncate, mkdtemp,
   readFileSync, writeFileSync, appendFileSync, statSync, existsSync,
   mkdirSync, unlinkSync, rmdirSync, renameSync,
   readdirSync, realpathSync, chmodSync,
   lchmodSync, rmSync, mkdtempSync, accessSync, copyFileSync,
   symlinkSync, lstatSync, readlinkSync, linkSync,
-  chownSync, lchownSync, utimesSync, truncateSync,
+  chownSync, lchownSync, utimesSync, futimesSync, lutimesSync, truncateSync,
   openSync, closeSync, fstatSync, writeSync, readSync,
   fsyncSync, fdatasyncSync, ftruncateSync, fchmodSync, fchownSync, writevSync, writev, readv, readvSync,
   createReadStream, createWriteStream,

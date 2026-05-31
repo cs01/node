@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <errno.h>
 
 typedef void (*binding_init_fn)(void* iso, void* ctx, int32_t exports);
 
@@ -70,4 +72,31 @@ int nm_set_cloexec(int fd) {
     int flags = fcntl(fd, F_GETFD, 0);
     if (flags < 0) return -1;
     return fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+
+// libc utimes() takes a struct timeval[2] by pointer — awkward for the milo FFI
+// seam, so build it here. atime/mtime are whole seconds since epoch (the JS layer
+// floors sub-second precision). time_t is 64-bit on macOS, so post-2038 is fine.
+int nm_fs_utimes(const char* path, int64_t atime_sec, int64_t mtime_sec) {
+    struct timeval tv[2];
+    tv[0].tv_sec = (time_t)atime_sec; tv[0].tv_usec = 0;
+    tv[1].tv_sec = (time_t)mtime_sec; tv[1].tv_usec = 0;
+    // return 0 on success, else positive errno so the JS layer can map ENOENT etc.
+    return utimes(path, tv) == 0 ? 0 : errno;
+}
+
+// futimes() on an open fd — same struct timeval[2] marshalling as nm_fs_utimes.
+int nm_fs_futimes(int fd, int64_t atime_sec, int64_t mtime_sec) {
+    struct timeval tv[2];
+    tv[0].tv_sec = (time_t)atime_sec; tv[0].tv_usec = 0;
+    tv[1].tv_sec = (time_t)mtime_sec; tv[1].tv_usec = 0;
+    return futimes(fd, tv) == 0 ? 0 : errno;
+}
+
+// lutimes() acts on the symlink itself (does not follow) — needed for fs.lutimes.
+int nm_fs_lutimes(const char* path, int64_t atime_sec, int64_t mtime_sec) {
+    struct timeval tv[2];
+    tv[0].tv_sec = (time_t)atime_sec; tv[0].tv_usec = 0;
+    tv[1].tv_sec = (time_t)mtime_sec; tv[1].tv_usec = 0;
+    return lutimes(path, tv) == 0 ? 0 : errno;
 }
