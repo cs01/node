@@ -3,6 +3,9 @@
 
 const { inspect } = require('util');
 
+// Marks a stream that already has a console-owned 'error'-swallowing listener.
+const _kConsoleErrSwallow = Symbol('kConsoleErrSwallow');
+
 function _invalidArgTypeHelper(value) {
   if (value == null) return ' Received ' + value;
   if (typeof value === 'function') return ' Received function ' + (value.name || '');
@@ -85,17 +88,34 @@ class Console {
     return this._groupIndent ? this._groupIndent + s.replace(/\n/g, '\n' + this._groupIndent) + '\n' : s + '\n';
   }
 
-  log(...args) {
-    const msg = this._indented(this._fmt(...args));
+  // Write `msg` to `stream` (or the native binding fallback). With ignoreErrors,
+  // both synchronous throws AND asynchronous 'error' events (e.g. a write callback
+  // invoked with an error) must be swallowed — hence the temporary 'error' listener
+  // plus a write callback that removes it. A stack overflow is never swallowed.
+  _writeTo(stream, msg, bindingFn) {
     if (this._ignoreErrors === false) {
-      if (this._stdout && this._stdout.write) this._stdout.write(msg);
-      else internalBinding('_console').write(msg);
-    } else {
-      try {
-        if (this._stdout && this._stdout.write) this._stdout.write(msg);
-        else internalBinding('_console').write(msg);
-      } catch (e) { if (_isStackOverflow(e)) throw e; }
+      if (stream && stream.write) stream.write(msg);
+      else bindingFn(msg);
+      return;
     }
+    try {
+      if (stream && stream.write) {
+        // Async write errors surface as an 'error' event (emitted on a later tick),
+        // which crashes if unhandled. Attach ONE persistent swallowing listener per
+        // stream (idempotent) — avoids per-write add/remove races and listener leaks.
+        if (stream.on && !stream[_kConsoleErrSwallow]) {
+          stream[_kConsoleErrSwallow] = true;
+          stream.on('error', () => {});
+        }
+        stream.write(msg);
+      } else {
+        bindingFn(msg);
+      }
+    } catch (e) { if (_isStackOverflow(e)) throw e; }
+  }
+
+  log(...args) {
+    this._writeTo(this._stdout, this._indented(this._fmt(...args)), (m) => internalBinding('_console').write(m));
   }
 
   info(...args) { this.log(...args); }
@@ -103,16 +123,7 @@ class Console {
   dir(obj, opts) { this.log(inspect(obj, opts)); }
 
   error(...args) {
-    const msg = this._indented(this._fmt(...args));
-    if (this._ignoreErrors === false) {
-      if (this._stderr && this._stderr.write) this._stderr.write(msg);
-      else internalBinding('_console').writeError(msg);
-    } else {
-      try {
-        if (this._stderr && this._stderr.write) this._stderr.write(msg);
-        else internalBinding('_console').writeError(msg);
-      } catch (e) { if (_isStackOverflow(e)) throw e; }
-    }
+    this._writeTo(this._stderr, this._indented(this._fmt(...args)), (m) => internalBinding('_console').writeError(m));
   }
 
   warn(...args) { this.error(...args); }
