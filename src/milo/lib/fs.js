@@ -476,6 +476,12 @@ function readSync(fd, buffer, offset, length, position) {
   if (!Buffer.isBuffer(buffer) && !ArrayBuffer.isView(buffer)) {
     throw _bufferArgError(buffer);
   }
+  // empty buffer can't receive a read — node throws ERR_INVALID_ARG_VALUE before
+  // bounds-checking offset/length. See test-fs-read-empty-buffer.
+  if (buffer.byteLength === 0) {
+    const e = new TypeError(`The argument 'buffer' is empty and cannot be written. Received ${require('util').inspect(buffer)}`);
+    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+  }
   if (arguments.length <= 3) {
     // options form: readSync(fd, buffer[, options]). 3rd arg is always options,
     // and must be a plain-ish object — String objects count (read .length), but
@@ -1202,6 +1208,10 @@ function read(fd, buffer, offset, length, position, cb) {
   if (!Buffer.isBuffer(buffer) && !ArrayBuffer.isView(buffer)) {
     const e = new TypeError('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received type ' + typeof buffer + ' (' + buffer + ')');
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+  }
+  if (buffer.byteLength === 0) {
+    const e = new TypeError(`The argument 'buffer' is empty and cannot be written. Received ${require('util').inspect(buffer)}`);
+    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
   }
   if (offset != null) {
     if (!Number.isInteger(offset)) { const e = new RangeError('The value of "offset" is out of range. It must be an integer. Received ' + (typeof offset === 'bigint' ? offset.toString() : offset)); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
