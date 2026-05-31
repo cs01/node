@@ -299,6 +299,9 @@ function existsSync(path) {
 
 function mkdirSync(path, opts) {
   _validatePath(path, 'path');
+  if (opts && typeof opts === 'object' && opts.recursive !== undefined && typeof opts.recursive !== 'boolean') {
+    throw _ERR_INVALID_ARG_TYPE('options.recursive', 'boolean', opts.recursive);
+  }
   const sp = _toPath(path);
   let mode;
   if (typeof opts === 'number') mode = opts;
