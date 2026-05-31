@@ -235,7 +235,8 @@ Stats.prototype.isCharacterDevice = function() { return (this.mode & 0o170000) =
 Stats.prototype.isFIFO = function() { return (this.mode & 0o170000) === 0o010000; };
 Stats.prototype.isSocket = function() { return (this.mode & 0o170000) === 0o140000; };
 
-function _wrapStats(s) {
+function _wrapStats(s, bigint) {
+  if (bigint) return _wrapStatsBigInt(s);
   const st = new Stats(
     s.dev, s.mode, s.nlink, s.uid, s.gid, 0, s.blksize,
     s.ino, s.size, s.blocks, s.atimeMs, s.mtimeMs, s.ctimeMs, s.birthtimeMs
@@ -244,6 +245,30 @@ function _wrapStats(s) {
   if (s.isFile && !st.isFile()) st.isFile = () => true;
   if (s.isDirectory && !st.isDirectory()) st.isDirectory = () => true;
   if (s.isSymbolicLink && !st.isSymbolicLink()) st.isSymbolicLink = () => true;
+  return st;
+}
+
+// BigIntStats: every numeric field is a BigInt, plus *Ns nanosecond fields.
+// is* methods must use a Number copy of mode — BigInt & Number throws.
+function _wrapStatsBigInt(s) {
+  const bi = (v) => BigInt(Math.floor(Number(v) || 0));
+  const st = Object.create(Stats.prototype);
+  st.dev = bi(s.dev); st.mode = bi(s.mode); st.nlink = bi(s.nlink);
+  st.uid = bi(s.uid); st.gid = bi(s.gid); st.rdev = bi(0);
+  st.blksize = bi(s.blksize || 4096); st.ino = bi(s.ino); st.size = bi(s.size); st.blocks = bi(s.blocks);
+  st.atimeMs = bi(s.atimeMs); st.mtimeMs = bi(s.mtimeMs); st.ctimeMs = bi(s.ctimeMs); st.birthtimeMs = bi(s.birthtimeMs);
+  st.atimeNs = st.atimeMs * 1000000n; st.mtimeNs = st.mtimeMs * 1000000n;
+  st.ctimeNs = st.ctimeMs * 1000000n; st.birthtimeNs = st.birthtimeMs * 1000000n;
+  st.atime = new Date(Number(s.atimeMs) || 0); st.mtime = new Date(Number(s.mtimeMs) || 0);
+  st.ctime = new Date(Number(s.ctimeMs) || 0); st.birthtime = new Date(Number(s.birthtimeMs) || 0);
+  const m = Number(s.mode) || 0;
+  st.isFile = () => s.isFile ? true : (m & 0o170000) === 0o100000;
+  st.isDirectory = () => s.isDirectory ? true : (m & 0o170000) === 0o040000;
+  st.isSymbolicLink = () => s.isSymbolicLink ? true : (m & 0o170000) === 0o120000;
+  st.isBlockDevice = () => (m & 0o170000) === 0o060000;
+  st.isCharacterDevice = () => (m & 0o170000) === 0o020000;
+  st.isFIFO = () => (m & 0o170000) === 0o010000;
+  st.isSocket = () => (m & 0o170000) === 0o140000;
   return st;
 }
 
@@ -256,7 +281,7 @@ function statSync(path, options) {
     if (options && options.throwIfNoEntry === false) return undefined;
     throw _fsError('ENOENT', 'stat', p, 'no such file or directory');
   }
-  return _wrapStats(s);
+  return _wrapStats(s, options && options.bigint);
 }
 
 let _existsSyncDepWarn = true;
@@ -378,7 +403,7 @@ function lstatSync(path, options) {
     if (options && options.throwIfNoEntry === false) return undefined;
     throw _fsError('ENOENT', 'lstat', sp, 'no such file or directory');
   }
-  return _wrapStats(result);
+  return _wrapStats(result, options && options.bigint);
 }
 function readlinkSync(path, opts) { _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding)); _validatePath(path, 'path'); const sp = _toPath(path); return b.readlink ? b.readlink(sp) : sp; }
 // POSIX open flags
@@ -429,11 +454,11 @@ function openSync(path, flags, mode) {
 
 function closeSync(fd) { _validateFd(fd); b.close(fd); }
 
-function fstatSync(fd) {
+function fstatSync(fd, options) {
   _validateFd(fd);
   const result = b.fstat(fd);
   if (typeof result === 'number') throw _fsError('EBADF', 'fstat', null, 'bad file descriptor');
-  return _wrapStats(result);
+  return _wrapStats(result, options && options.bigint);
 }
 
 function _bufferArgError(buffer) {
@@ -1214,7 +1239,7 @@ function read(fd, buffer, offset, length, position, cb) {
 function fstat(fd, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
   _validateFd(fd);
-  _async(fstatSync, [fd], cb);
+  _async(fstatSync, [fd, opts], cb);
 }
 
 function readlink(path, opts, cb) {
@@ -1452,8 +1477,8 @@ function _promisify(fn) { return (...args) => { try { return Promise.resolve(fn(
 const promises = {
   readFile: _promisify((path, opts) => readFileSync(path, opts)),
   writeFile: _promisify((path, data) => writeFileSync(path, data)),
-  stat: _promisify((path) => statSync(path)),
-  lstat: _promisify((path) => lstatSync(path)),
+  stat: _promisify((path, opts) => statSync(path, opts)),
+  lstat: _promisify((path, opts) => lstatSync(path, opts)),
   unlink: _promisify((path) => unlinkSync(path)),
   mkdir: _promisify((path, opts) => mkdirSync(path, opts)),
   rmdir: _promisify((path) => rmdirSync(path)),
@@ -1511,7 +1536,7 @@ const promises = {
           try { return Promise.resolve({ bytesWritten: writeSync(fd, buf, off, len, pos), buffer: buf }); }
           catch (e) { return Promise.reject(e); }
         },
-        stat() { try { return Promise.resolve(fstatSync(fd)); } catch (e) { return Promise.reject(e); } },
+        stat(opts) { try { return Promise.resolve(fstatSync(fd, opts)); } catch (e) { return Promise.reject(e); } },
         readFile(opts) { try { return Promise.resolve(readFileSync('/dev/fd/' + fd, opts)); } catch (e) { return Promise.reject(e); } },
         writeFile(data) { writeSync(fd, data); return Promise.resolve(); },
         appendFile(data, opts) {
