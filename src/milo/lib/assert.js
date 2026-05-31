@@ -817,6 +817,7 @@ function doesNotThrow(fn, expected, message) {
 
 function _recvType(v) {
   if (v === null) return 'null';
+  if (v === undefined) return 'undefined';
   if (typeof v === 'object') return 'an instance of ' + ((v.constructor && v.constructor.name) || 'Object');
   if (typeof v === 'string') return `type string ('${v}')`;
   return `type ${typeof v} (${v})`;
@@ -834,7 +835,7 @@ async function rejects(fn, expected, message) {
     // validates it against `expected`); a non-Promise return is an error.
     _p = fn();
     if (_p === null || typeof _p !== 'object' || typeof _p.then !== 'function') {
-      const e = new TypeError(`Expected instance of Promise to be returned from the "promiseFn" function but got ${_p === null ? 'null' : typeof _p}.`);
+      const e = new TypeError(`Expected instance of Promise to be returned from the "promiseFn" function but got ${_recvType(_p)}.`);
       e.code = 'ERR_INVALID_RETURN_VALUE'; throw e;
     }
   } else {
@@ -854,19 +855,28 @@ async function rejects(fn, expected, message) {
       // Distinguish an Error-constructor (instanceof check) from a validation
       // function. A plain function has a .prototype too, so only treat it as a
       // constructor when it's actually an Error subclass — otherwise call it.
+      // Only Error-constructors use instanceof (a plain/arrow validator has no
+      // usable .prototype and `e instanceof validator` would throw). Everything
+      // else is a validation function that is CALLED.
       const isErrorCtor = expected === Error || (typeof expected === 'function' && Error.isPrototypeOf(expected));
-      if (e instanceof expected) {
-        // matched constructor — ok
-      } else if (isErrorCtor) {
-        const expectedName = expected.name || 'unknown';
-        const actualName = e && e.constructor ? e.constructor.name : typeof e;
-        fail(e, expected,
-          message || `The error is expected to be an instance of "${expectedName}". ` +
-          `Received "${actualName}"\n\nError message:\n\n${e.message || String(e)}`,
-          'rejects');
+      if (isErrorCtor) {
+        if (!(e instanceof expected)) {
+          const expectedName = expected.name || 'unknown';
+          const actualName = e && e.constructor ? e.constructor.name : typeof e;
+          fail(e, expected,
+            message || `The error is expected to be an instance of "${expectedName}". ` +
+            `Received "${actualName}"\n\nError message:\n\n${e.message || String(e)}`,
+            'rejects');
+        }
       } else {
-        const r = expected.call({}, e);
-        if (r !== true) fail(e, expected, message, 'rejects');
+        const r = expected.call(undefined, e);
+        if (r !== true) {
+          const err = new AssertionError({ actual: e, expected, operator: 'rejects' });
+          err.message = `The "${expected.name || ''}" validation function is expected to ` +
+            `return "true". Received ${_inspect(r)}\n\nCaught error:\n\n${e}`;
+          err.generatedMessage = true;
+          throw err;
+        }
       }
     } else if (typeof expected === 'object' && expected !== null) {
       for (const key of Object.keys(expected)) {
@@ -910,7 +920,7 @@ async function doesNotReject(fn, expected, message) {
   if (typeof fn === 'function') {
     _p = fn();
     if (_p === null || typeof _p !== 'object' || typeof _p.then !== 'function') {
-      const e = new TypeError(`Expected instance of Promise to be returned from the "promiseFn" function but got ${_p === null ? 'null' : typeof _p}.`);
+      const e = new TypeError(`Expected instance of Promise to be returned from the "promiseFn" function but got ${_recvType(_p)}.`);
       e.code = 'ERR_INVALID_RETURN_VALUE'; throw e;
     }
   } else { _p = fn; }
