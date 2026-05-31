@@ -890,7 +890,7 @@ function _recvType(v) {
 
 async function rejects(fn, expected, message) {
   // promiseFn must be a function or a thenable.
-  if (typeof fn !== 'function' && (fn === null || typeof fn !== 'object' || typeof fn.then !== 'function')) {
+  if (typeof fn !== 'function' && (fn === null || typeof fn !== 'object' || typeof fn.then !== 'function' || typeof fn.catch !== 'function')) {
     const e = new TypeError(`The "promiseFn" argument must be of type function or an instance of Promise. Received ${_recvType(fn)}`);
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
@@ -985,7 +985,7 @@ async function rejects(fn, expected, message) {
 }
 
 async function doesNotReject(fn, expected, message) {
-  if (typeof fn !== 'function' && (fn === null || typeof fn !== 'object' || typeof fn.then !== 'function')) {
+  if (typeof fn !== 'function' && (fn === null || typeof fn !== 'object' || typeof fn.then !== 'function' || typeof fn.catch !== 'function')) {
     const e = new TypeError(`The "promiseFn" argument must be of type function or an instance of Promise. Received ${_recvType(fn)}`);
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
