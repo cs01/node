@@ -477,6 +477,13 @@ process._fatalException = function(er) {
       catch (er2) { er = er2; } // a handler itself threw → now fatal
     }
   }
+  // Inside a worker with no handler that handled the throw, hand off to the
+  // worker fallback (posts the error to the parent + marks done) instead of
+  // printing to stderr and exiting the whole process.
+  if (typeof globalThis.__workerUncaughtFallback === 'function') {
+    globalThis.__workerUncaughtFallback(er);
+    return false;
+  }
   try {
     const msg = er && er.stack ? er.stack : String(er);
     if (process.stderr && process.stderr.write) process.stderr.write(msg + '\n');

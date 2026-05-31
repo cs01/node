@@ -161,10 +161,16 @@ if (_isWorker) {
     },
   });
 
-  process.on('uncaughtException', (e) => {
+  // Worker-side uncaught-exception -> parent. This is a FALLBACK (invoked by
+  // _fatalException only when no user 'uncaughtException' handler handled the
+  // throw), NOT a standing listener. Matching Node: a worker whose own handler
+  // calls process.exit() exits cleanly with that code and does NOT propagate an
+  // 'error' to the parent. Registering this as a plain listener instead made the
+  // worker ALWAYS post an error and race the user's exit handler.
+  globalThis.__workerUncaughtFallback = (e) => {
     try { _b.postToParent(_chan, { t: 'error', e: _serializeErr(e) }); } catch {}
-    _exitCode = 1; _exited = true;
-  });
+    _exitCode = 1; _exited = true; _b.markDone(_chan, _exitCode);
+  };
   process.exit = (code) => { _exitCode = (code | 0); _exited = true; _b.markDone(_chan, _exitCode); };
 
   // called by the native worker entry each loop iteration; returns "stay alive"
@@ -182,7 +188,12 @@ if (_isWorker) {
       }
       if (globalThis.__pumpParentWorkers) globalThis.__pumpParentWorkers();
     } catch (e) {
-      process.emit('uncaughtException', e);
+      // A child worker's unhandled 'error' (EventEmitter throws) lands here.
+      // Route through _fatalException — NOT a bare emit — so it honors a user
+      // 'uncaughtException' handler if present, and otherwise hits the worker
+      // fallback that posts {t:'error'} to OUR parent. A bare emit would be a
+      // no-op when no user listener exists, silently dropping the nested error.
+      if (process._fatalException) process._fatalException(e);
     }
     const childWorkersAlive = globalThis.__hasActiveWorkers ? globalThis.__hasActiveWorkers() : false;
     const timersPending = globalThis.__workerTick ? globalThis.__workerTick() : false;
