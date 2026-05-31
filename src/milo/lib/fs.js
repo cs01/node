@@ -474,17 +474,18 @@ function _bufferArgError(buffer) {
   e.code = 'ERR_INVALID_ARG_TYPE'; return e;
 }
 
+function _readEmptyBufErr(buffer) {
+  const e = new TypeError(`The argument 'buffer' is empty and cannot be written. Received ${require('util').inspect(buffer)}`);
+  e.code = 'ERR_INVALID_ARG_VALUE'; return e;
+}
 function readSync(fd, buffer, offset, length, position) {
   _validateFd(fd);
   if (!Buffer.isBuffer(buffer) && !ArrayBuffer.isView(buffer)) {
     throw _bufferArgError(buffer);
   }
-  // empty buffer can't receive a read — node throws ERR_INVALID_ARG_VALUE before
-  // bounds-checking offset/length. See test-fs-read-empty-buffer.
-  if (buffer.byteLength === 0) {
-    const e = new TypeError(`The argument 'buffer' is empty and cannot be written. Received ${require('util').inspect(buffer)}`);
-    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
-  }
+  // Reading >0 bytes into an empty buffer is the error; a 0-length read into an
+  // empty buffer is a valid no-op (FileHandle.read(emptyBuf) returns bytesRead:0).
+  // Length resolves below, so defer to _readEmptyBufErr after it's known.
   if (arguments.length <= 3) {
     // options form: readSync(fd, buffer[, options]). 3rd arg is always options,
     // and must be a plain-ish object — String objects count (read .length), but
@@ -501,6 +502,8 @@ function readSync(fd, buffer, offset, length, position) {
   length = length != null ? length : buffer.length - offset;
   if (!Number.isInteger(length)) { const e = new RangeError('The value of "length" is out of range. It must be an integer. Received ' + length); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
   if (length < 0) { const e = new RangeError('The value of "length" is out of range. It must be >= 0. Received ' + length); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
+  // reading >0 bytes into an empty buffer errors; a 0-length read is a valid no-op.
+  if (buffer.byteLength === 0 && length > 0) throw _readEmptyBufErr(buffer);
   if (length > buffer.length - offset) { const e = new RangeError('The value of "length" is out of range. It must be <= ' + (buffer.length - offset) + '. Received ' + length); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
   if (position != null) {
     if (typeof position === 'bigint') {
@@ -1212,10 +1215,6 @@ function read(fd, buffer, offset, length, position, cb) {
     const e = new TypeError('The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received type ' + typeof buffer + ' (' + buffer + ')');
     e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
   }
-  if (buffer.byteLength === 0) {
-    const e = new TypeError(`The argument 'buffer' is empty and cannot be written. Received ${require('util').inspect(buffer)}`);
-    e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
-  }
   if (offset != null) {
     if (!Number.isInteger(offset)) { const e = new RangeError('The value of "offset" is out of range. It must be an integer. Received ' + (typeof offset === 'bigint' ? offset.toString() : offset)); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
     if (offset < 0) { const e = new RangeError('The value of "offset" is out of range. It must be >= 0. Received ' + offset); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
@@ -1224,6 +1223,8 @@ function read(fd, buffer, offset, length, position, cb) {
     if (!Number.isInteger(length)) { const e = new RangeError('The value of "length" is out of range. It must be an integer. Received ' + length); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
     if (length < 0) { const e = new RangeError('The value of "length" is out of range. It must be >= 0. Received ' + length); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
   }
+  // reading >0 bytes into an empty buffer errors synchronously; 0-length is a no-op.
+  if (buffer.byteLength === 0 && (length == null || length > 0)) throw _readEmptyBufErr(buffer);
   if (position != null) {
     if (typeof position === 'bigint') {
       if (position < 0n || position >= 2n ** 63n) { const e = new RangeError('The value of "position" is out of range. It must be >= 0n && < 2n ** 63n. Received ' + position + 'n'); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
