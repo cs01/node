@@ -1149,6 +1149,9 @@
   }
 
   function _resolve(id, parentDir) {
+    // A NUL byte can never be part of a real path; native stat/exists truncate at
+    // NUL and would false-match a prefix (e.g. 'a\0b' -> 'a'). Reject up front.
+    for (let _i = 0; _i < id.length; _i++) { if (id.charCodeAt(_i) === 0) return null; }
     if (id === '.' || id === '..' || id.startsWith('./') || id.startsWith('../') || id.startsWith('/')) {
       const base = parentDir ? _path.resolve(parentDir, id) : _path.resolve(id);
       // A trailing slash, or a final '.'/'..' component (e.g. require('inner/fake/..')),
@@ -1260,6 +1263,11 @@
       const _hadNodePrefix = typeof id === 'string' && id.startsWith('node:');
       if (_hadNodePrefix) id = id.slice(5);
       const flatId = id.replace(/\//g, '_');
+      // A NUL byte can't be in any real path; native stat/exists truncate at NUL
+      // and would false-match a prefix (e.g. 'a\0b' -> 'a'). Unresolvable.
+      for (let _i = 0; _i < id.length; _i++) {
+        if (id.charCodeAt(_i) === 0) { const e = new Error("Cannot find module '" + id + "'"); e.code = 'MODULE_NOT_FOUND'; throw e; }
+      }
       if (_moduleWrappers[id]) return _moduleWrappers[id].exports;
       // node:-prefixed specifiers resolve to the real builtin from the immutable
       // builtin cache, bypassing any user-installed require.cache override.
