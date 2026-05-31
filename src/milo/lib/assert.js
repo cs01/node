@@ -493,6 +493,18 @@ function _deepEqual(a, b, strict) {
     return true;
   }
 
+  // TypedArray (not DataView): same kind already ensured by the prototype check.
+  // Compare length + elements directly — faster than Object.keys on large arrays,
+  // and gets +0/-0 (strict distinguishes via Object.is) and NaN===NaN right.
+  if (ArrayBuffer.isView(a) && typeof a.length === 'number') {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      const x = a[i], y = b[i];
+      if (strict ? !Object.is(x, y) : !(x === y || (x !== x && y !== y))) return false;
+    }
+    return true;
+  }
+
   const keysA = Object.keys(a), keysB = Object.keys(b);
   if (keysA.length !== keysB.length) return false;
   for (const key of keysA) { if (!Object.prototype.hasOwnProperty.call(b, key) || !_deepEqual(a[key], b[key], strict)) return false; }
@@ -564,10 +576,21 @@ function notDeepStrictEqual(actual, expected, message, ...extra) {
 function _partialDeepEqual(a, b) {
   if (Object.is(a, b)) return true;
   if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
-  // Buffers, typed arrays, Date, RegExp, Map, Set, Error compare by full strict
-  // equality — "partial" only relaxes plain objects/arrays.
-  if (ArrayBuffer.isView(b) || b instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && b instanceof SharedArrayBuffer) ||
-      b instanceof Date || b instanceof RegExp || b instanceof Map || b instanceof Set || b instanceof Error) {
+  // Typed arrays / ArrayBuffers: "partial" means expected is a same-kind PREFIX
+  // of actual (Node allows a shorter expected to match a longer actual).
+  if (ArrayBuffer.isView(b) && typeof b.length === 'number') {
+    if (!ArrayBuffer.isView(a) || Object.getPrototypeOf(a) !== Object.getPrototypeOf(b) || a.length < b.length) return false;
+    for (let i = 0; i < b.length; i++) { if (!Object.is(a[i], b[i])) return false; }
+    return true;
+  }
+  if (b instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && b instanceof SharedArrayBuffer)) {
+    if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b) || a.byteLength < b.byteLength) return false;
+    const ua = new Uint8Array(a), ub = new Uint8Array(b);
+    for (let i = 0; i < ub.length; i++) { if (ua[i] !== ub[i]) return false; }
+    return true;
+  }
+  // Date, RegExp, Map, Set, Error still compare by full strict equality.
+  if (b instanceof Date || b instanceof RegExp || b instanceof Map || b instanceof Set || b instanceof Error) {
     return _deepEqual(a, b, true);
   }
   if (Array.isArray(b)) {
