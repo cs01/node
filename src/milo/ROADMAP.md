@@ -19,7 +19,7 @@ On bun's curated subset: **bun 99%, milo 36%** (full run: 782/2143 pass, 1159 fa
 
 | module     | pass/total | rate | priority | top blockers |
 |------------|-----------|------|----------|--------------|
-| event      | 27/28     | 96%  | —        | captureRejections |
+| event      | 27/28     | 96%  | low      | capture-rejections: avoidLoop case — when ee[captureRejectionSymbol] async handler itself throws, _err2 must surface as unhandledRejection; works in isolation, fails only in the 8-fn nextTick chain (rejection-tracking during nested tick drain). bootstrap event-loop issue, not events.js |
 | next       | 9/9       | 100% | —        | done |
 | buffer     | 52/63     | 83%  | high     | ucs2 indexOf alignment, inspect extra-props, resizable |
 | querystring| 3/3       | 100% | —        | done |
