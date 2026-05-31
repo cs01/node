@@ -439,8 +439,10 @@ function stringToFlags(flags) {
 
 function openSync(path, flags, mode) {
   _validatePath(path, 'path');
-  // mode accepts a uint32 or octal string (e.g. '10644'); _validateMode masks/parses.
-  mode = mode == null ? 0o666 : _validateMode(mode, 'mode');
+  // mode accepts a uint32 or octal string (e.g. '10644'); _validateMode parses it.
+  // Mask to permission bits before the syscall — native b.open mishandles modes
+  // above 0o7777 (the high mask bits like 0o10000 must be ignored, not honored).
+  mode = mode == null ? 0o666 : (_validateMode(mode, 'mode') & 0o7777);
   const sp = _toPath(path);
   const f = typeof flags === 'string' ? (FLAG_MAP[flags] ?? 0) : (flags || 0);
   const fd = b.open(sp, f, mode);
