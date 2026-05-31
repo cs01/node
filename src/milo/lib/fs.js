@@ -150,10 +150,10 @@ function readFileSync(path, opts) {
       e.code = 'ERR_FS_FILE_TOO_LARGE'; throw e;
     }
   }
-  const r = b.readFile(p);
-  if (r === -1) { const e = new Error(`ENOENT: no such file or directory, open '${path}'`); e.code = 'ENOENT'; e.syscall = 'open'; e.path = String(path); throw e; }
-  if (encoding === 'utf8' || encoding === 'utf-8') return r;
-  return Buffer.from(r);
+  // Read via fd to preserve raw bytes — b.readFile returns a V8 string, which
+  // mangles any non-UTF8 byte into U+FFFD (corrupts all binary files).
+  const fd = openSync(p, flag);
+  try { return readFileSync(fd, opts); } finally { closeSync(fd); }
 }
 
 function _fsError(code, syscall, path, msg, dest) {
@@ -898,6 +898,28 @@ function _async(syncFn, args, cb) {
   process.nextTick(() => { try { const r = syncFn(...args); cb(null, r); } catch (e) { cb(e); } });
 }
 
+function _validateAbortSignal(signal) {
+  if (signal !== undefined && (signal === null || typeof signal !== 'object' || typeof signal.aborted !== 'boolean'))
+    throw _ERR_INVALID_ARG_TYPE('options.signal', 'AbortSignal', signal);
+}
+function _abortErr(signal) {
+  if (signal && signal.reason) return signal.reason;
+  const e = new Error('The operation was aborted'); e.name = 'AbortError'; e.code = 'ABORT_ERR'; return e;
+}
+// Run a sync fs op under an AbortSignal. The read/write is deferred via
+// setImmediate so an abort scheduled on a microtask/nextTick wins the race
+// (matches Node, whose real async op hasn't completed yet at that point).
+function _asyncSignal(signal, syncFn, args, cb) {
+  let done = false;
+  const onAbort = () => { if (done) return; done = true; cb(_abortErr(signal)); };
+  signal.addEventListener('abort', onAbort, { once: true });
+  setImmediate(() => {
+    if (done) return;
+    try { const r = syncFn(...args); if (done) return; done = true; signal.removeEventListener('abort', onAbort); cb(null, r); }
+    catch (e) { if (done) return; done = true; signal.removeEventListener('abort', onAbort); cb(e); }
+  });
+}
+
 function readFile(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
   _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
@@ -916,6 +938,13 @@ function readFile(path, opts, cb) {
     return;
   }
   _validatePath(path, 'path');
+  const signal = (opts && typeof opts === 'object') ? opts.signal : undefined;
+  _validateAbortSignal(signal);
+  _validateCb(cb);
+  if (signal) {
+    if (signal.aborted) { process.nextTick(cb, _abortErr(signal)); return; }
+    _asyncSignal(signal, readFileSync, [path, opts], cb); return;
+  }
   _async(readFileSync, [path, opts], cb);
 }
 
@@ -933,7 +962,13 @@ function writeFile(path, data, opts, cb) {
   }
   _validatePath(path, 'path');
   _validateCb(cb);
-  _async(writeFileSync, [path, data], (err) => cb(err));
+  const signal = (opts && typeof opts === 'object') ? opts.signal : undefined;
+  _validateAbortSignal(signal);
+  if (signal) {
+    if (signal.aborted) { process.nextTick(cb, _abortErr(signal)); return; }
+    _asyncSignal(signal, writeFileSync, [path, data, opts], (err) => cb(err)); return;
+  }
+  _async(writeFileSync, [path, data, opts], (err) => cb(err));
 }
 
 function stat(path, opts, cb) {
