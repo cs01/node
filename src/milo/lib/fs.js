@@ -440,8 +440,15 @@ function readSync(fd, buffer, offset, length, position) {
   if (!Buffer.isBuffer(buffer) && !ArrayBuffer.isView(buffer)) {
     throw _bufferArgError(buffer);
   }
-  if (offset != null && typeof offset === 'object' && !Array.isArray(offset) && !(offset instanceof String)) {
-    ({ offset = 0, length = buffer.length, position = null } = offset);
+  if (arguments.length <= 3) {
+    // options form: readSync(fd, buffer[, options]). 3rd arg is always options,
+    // and must be a plain-ish object — String objects count (read .length), but
+    // primitives, arrays and functions are rejected. See test-fs-readSync-optional-params.
+    const options = offset;
+    if (options != null && (typeof options !== 'object' || Array.isArray(options))) {
+      throw _ERR_INVALID_ARG_TYPE('options', 'object', options);
+    }
+    ({ offset = 0, length = buffer.byteLength - offset, position = null } = options || {});
   }
   if (offset == null) offset = 0;
   if (!Number.isInteger(offset)) { const e = new RangeError('The value of "offset" is out of range. It must be an integer. Received ' + offset); e.code = 'ERR_OUT_OF_RANGE'; throw e; }
@@ -470,15 +477,36 @@ function readSync(fd, buffer, offset, length, position) {
 }
 
 function writeSync(fd, data, offset, length, position) {
-  if (typeof data === 'string') { data = Buffer.from(data); }
+  const wasString = typeof data === 'string';
+  if (wasString) { data = Buffer.from(data); }
   else if (!Buffer.isBuffer(data) && !ArrayBuffer.isView(data)) {
     throw _ERR_INVALID_ARG_TYPE('buffer', ['string', 'Buffer', 'TypedArray', 'DataView'], data);
   }
-  offset = offset || 0;
-  length = length != null ? length : data.length - offset;
+  if (wasString) {
+    // string form: writeSync(fd, str, position, encoding) — offset/length not used as bounds
+    offset = offset || 0;
+    length = length != null ? length : data.length - offset;
+  } else {
+    const bl = data.byteLength;
+    if (offset == null) offset = 0;
+    else {
+      if (typeof offset !== 'number') throw _ERR_INVALID_ARG_TYPE('offset', 'number', offset);
+      if (!Number.isInteger(offset)) throw _ERR_OUT_OF_RANGE('offset', 'an integer', offset);
+      if (offset < 0 || offset > bl) throw _ERR_OUT_OF_RANGE('offset', `>= 0 && <= ${bl}`, offset);
+    }
+    if (length == null) length = bl - offset;
+    else {
+      if (typeof length !== 'number') throw _ERR_INVALID_ARG_TYPE('length', 'number', length);
+      if (!Number.isInteger(length)) throw _ERR_OUT_OF_RANGE('length', 'an integer', length);
+      if (length < 0 || length > bl - offset) throw _ERR_OUT_OF_RANGE('length', `>= 0 && <= ${bl - offset}`, length);
+    }
+  }
   if (length === 0) return 0;
   if (position != null) b.fdSeek(fd, position, 0);
-  const slice = data.slice(offset, offset + length);
+  // DataView has no subarray/slice; build a byte view over its backing buffer.
+  const slice = (typeof data.subarray === 'function')
+    ? data.subarray(offset, offset + length)
+    : new Uint8Array(data.buffer, data.byteOffset + offset, length);
   return b.fdWrite(fd, slice, slice.length);
 }
 
