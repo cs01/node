@@ -285,7 +285,11 @@ Object.defineProperty(globalThis, '__hasIO', { value: function() {
         if (!srv._unref) return true;
       }
     }
-    if (net._fileWatchers && net._fileWatchers.size > 0) return true;
+    // only ref'd file watchers keep the loop alive (an unref'd watcher still gets
+    // events but won't by itself hold the process open). See FSWatcher.unref().
+    if (net._fileWatchers && net._fileWatchers.size > 0) {
+      for (const w of net._fileWatchers.values()) { if (!w._unref) return true; }
+    }
     if (net.Socket._sockets && net.Socket._sockets.size > 0) {
       for (const sock of net.Socket._sockets.values()) {
         if (!sock._unref) return true;

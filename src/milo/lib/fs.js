@@ -1541,8 +1541,11 @@ class FSWatcher extends EventEmitter {
     this._fd = -1;
     this.emit('close');
   }
-  ref() { return this; }
-  unref() { return this; }
+  // ref/unref toggle whether this watcher keeps the event loop alive. The loop's
+  // __hasIO counts only ref'd watchers (see _timers_init), so an unref'd watcher
+  // still receives events but won't by itself prevent the process from exiting.
+  ref() { this._unref = false; return this; }
+  unref() { this._unref = true; return this; }
 }
 
 function watch(filename, options, listener) {
