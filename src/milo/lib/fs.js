@@ -813,7 +813,10 @@ function _initStreamClasses() {
     constructor(path, options) {
       options = _normalizeStreamOpts(options);
       _assertEncoding(options.encoding);
-      super({ highWaterMark: options.highWaterMark || 65536, encoding: options.encoding });
+      // autoClose:false also disables auto-destroy — after 'end' the stream stays
+      // open (not closed, not destroyed) so the fd can be reused. See read-stream.js.
+      const autoClose = options.autoClose !== undefined ? options.autoClose : true;
+      super({ highWaterMark: options.highWaterMark || 65536, encoding: options.encoding, autoDestroy: autoClose });
       this.fs = options.fs || module.exports;
       this.path = path == null ? undefined : path;
       this.flags = options.flags || 'r';
@@ -825,7 +828,7 @@ function _initStreamClasses() {
       this.pos = this.start != null ? this.start : undefined;
       this.bytesRead = 0;
       this.closed = false;
-      this.autoClose = options.autoClose !== undefined ? options.autoClose : true;
+      this.autoClose = autoClose;
       this._ownFd = options.fd == null;
       this.fd = options.fd != null ? _streamFd(options.fd) : null;
       if (globalThis.__ref) globalThis.__ref();
@@ -840,7 +843,16 @@ function _initStreamClasses() {
     }
     _read(n) {
       if (this.fd == null) { this.once('open', () => this._read(n)); return; }
-      const toRead = this.end !== Infinity ? Math.min(n, this.end - (this.pos || 0) + 1) : n;
+      // `end` is an inclusive absolute byte offset. Track how many bytes remain
+      // by comparing against bytesRead — works even for non-seekable fds where
+      // pos stays null (position-less reads). See read-stream.js {end:1}.
+      let toRead = n;
+      if (this.end !== Infinity) {
+        // total bytes to deliver = end - start + 1 (inclusive); subtract what we
+        // already read. start defaults to 0 when unset.
+        const remaining = (this.end - (this.start || 0) + 1) - this.bytesRead;
+        toRead = Math.min(n, remaining);
+      }
       if (toRead <= 0) { this.push(null); return; }
       const buf = Buffer.alloc(toRead);
       this.fs.read(this.fd, buf, 0, toRead, this.pos == null ? null : this.pos, (er, bytesRead) => {
