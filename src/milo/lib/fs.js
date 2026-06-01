@@ -383,11 +383,17 @@ function readdirSync(path, opts) {
     throw _fsError('ENOENT', 'scandir', sp, 'no such file or directory');
   }
   const entries = result.sort();
-  const asBuffer = (typeof opts === 'string' ? opts : opts && opts.encoding) === 'buffer';
+  const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
+  const asBuffer = encoding === 'buffer';
   if (opts && opts.withFileTypes) {
     return entries.map(name => new Dirent(asBuffer ? Buffer.from(name) : name, sp));
   }
-  return asBuffer ? entries.map(name => Buffer.from(name)) : entries;
+  if (asBuffer) return entries.map(name => Buffer.from(name));
+  // non-utf8 encodings (hex/base64/latin1/...) re-encode each name from its utf8 bytes.
+  if (encoding && encoding !== 'utf8' && encoding !== 'utf-8') {
+    return entries.map(name => Buffer.from(name, 'utf8').toString(encoding));
+  }
+  return entries;
 }
 function realpathSync(path, opts) { _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding)); _validatePath(path, 'path'); return b.realpath(_toPath(path)); }
 function chmodSync(path, mode) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); b.chmod(_toPath(path), mode); }
