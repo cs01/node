@@ -1065,10 +1065,12 @@ function writeFile(path, data, opts, cb) {
   if (typeof path === 'number') {
     // fd mode
     _validateCb(cb);
-    process.nextTick(() => {
-      try { writeSync(path, typeof data === 'string' ? data : data.toString()); cb(null); }
-      catch (e) { cb(e); }
-    });
+    const sig = (opts && typeof opts === 'object') ? opts.signal : undefined;
+    _validateAbortSignal(sig);
+    if (sig && sig.aborted) { process.nextTick(cb, _abortErr(sig)); return; }
+    const writeFd = () => { try { writeSync(path, typeof data === 'string' ? data : data.toString()); cb(null); } catch (e) { cb(e); } };
+    if (sig) { _asyncSignal(sig, () => writeSync(path, typeof data === 'string' ? data : data.toString()), [], (err) => cb(err)); return; }
+    process.nextTick(writeFd);
     return;
   }
   _validatePath(path, 'path');
