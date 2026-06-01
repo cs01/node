@@ -179,7 +179,7 @@ function writeFileSync(path, data, options) {
   _validateWriteData(data);
   if (typeof path === 'number') {
     const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-    if (buf.length > 0) b.fdWrite(path, buf, buf.length);
+    if (buf.length > 0) _fdWriteChecked(path, buf, buf.length, 'write');
     return;
   }
   _validatePath(path, 'path');
@@ -589,8 +589,7 @@ function writevSync(fd, buffers, position) {
   for (const buf of buffers) {
     const data = Buffer.isBuffer(buf) ? buf : Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
     if (data.length === 0) continue;
-    const n = b.fdWrite(fd, data, data.length);
-    if (n > 0) total += n;
+    total += _fdWriteChecked(fd, data, data.length, 'writev');
   }
   return total;
 }
@@ -609,8 +608,7 @@ function writev(fd, buffers, position, cb) {
     for (const buf of buffers) {
       const data = Buffer.isBuffer(buf) ? buf : Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
       if (data.length === 0) continue;
-      const n = b.fdWrite(fd, data, data.length);
-      if (n > 0) total += n;
+      total += _fdWriteChecked(fd, data, data.length, 'writev');
     }
     process.nextTick(cb, null, total, buffers);
   } catch (e) {
