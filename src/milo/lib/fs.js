@@ -200,14 +200,22 @@ function appendFileSync(path, data, options) {
   if (typeof options === 'string') options = { encoding: options };
   const opts = options || {};
   _assertEncoding(opts.encoding);
-  _validatePath(path, 'path');
+  // validate data BEFORE opening — an invalid type must throw without creating the file.
+  _validateWriteData(data);
+  // an fd path skips _validatePath (path is a number); only validate real paths.
+  if (typeof path !== 'number') _validatePath(path, 'path');
+  if (typeof path === 'number') {
+    const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : data;
+    if (buf.length > 0) _fdWriteChecked(path, buf, buf.length, 'write');
+    return;
+  }
   const p = _toPath(path);
   const mode = opts.mode != null ? (typeof opts.mode === 'string' ? parseInt(opts.mode, 8) : opts.mode) : 0o666;
   const fd = b.open(p, stringToFlags('a'), mode);
   if (fd < 0) throw _fsError('ENOENT', 'open', p);
   try {
     const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.from(data);
-    if (buf.length > 0) b.fdWrite(fd, buf, buf.length);
+    if (buf.length > 0) _fdWriteChecked(fd, buf, buf.length, 'write');
   } finally {
     b.close(fd);
   }
@@ -1132,7 +1140,8 @@ realpathSync.native = realpathSync;
 function appendFile(path, data, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
   _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
-  _validatePath(path, 'path');
+  _validateWriteData(data);
+  if (typeof path !== 'number') _validatePath(path, 'path');
   _validateCb(cb); _async(appendFileSync, [path, data, opts], (err) => cb(err));
 }
 function exists(path, cb) {
@@ -1537,6 +1546,10 @@ class Dir {
 }
 
 function _promisify(fn) { return (...args) => { try { return Promise.resolve(fn(...args)); } catch (e) { return Promise.reject(e); } }; }
+// fs.promises.* accept a FileHandle where a path is expected; use its fd.
+function _fdFromMaybeHandle(p) {
+  return (p != null && typeof p === 'object' && typeof p.fd === 'number') ? p.fd : p;
+}
 const promises = {
   readFile: (path, opts) => {
     const sig = opts && typeof opts === 'object' ? opts.signal : undefined;
@@ -1566,7 +1579,7 @@ const promises = {
   readlink: _promisify((p) => readlinkSync(p)),
   realpath: _promisify((p) => realpathSync(p)),
   symlink: _promisify((target, p, type) => symlinkSync(target, p, type)),
-  appendFile: _promisify((p, data) => appendFileSync(p, data)),
+  appendFile: _promisify((p, data, opts) => appendFileSync(_fdFromMaybeHandle(p), data, opts)),
   statfs: _promisify((path) => {
     _validatePath(path, 'path');
     const s = statSync(_toPath(path));
