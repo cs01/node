@@ -1570,16 +1570,22 @@ const _statWatchers = new Map();
 class StatWatcher extends EventEmitter {
   constructor() { super(); this._timer = null; this._stopped = false; }
   start(fname, interval, listener) {
-    let prev = null;
-    try { prev = statSync(fname); } catch {}
     if (listener) this.on('change', listener);
+    // A missing file is reported as an all-zero Stats (not an error), matching Node.
+    const statOrZero = () => { try { return statSync(fname); } catch { return new Stats(0,0,0,0,0,0,0,0,0,0,0,0,0,0); } };
+    let prev = statOrZero();
+    let first = true;
+    // setInterval clamps 0 to 1ms; that's fine for polling.
     this._timer = setInterval(() => {
-      let curr = null;
-      try { curr = statSync(fname); } catch {}
-      if (prev && curr && prev.mtimeMs !== curr.mtimeMs) this.emit('change', curr, prev);
-      else if (!prev && curr) this.emit('change', curr, prev || curr);
+      const curr = statOrZero();
+      // Node fires an initial event once the watch is established (curr==prev),
+      // then on every subsequent mtime/existence change (create/modify/delete).
+      if (first) { first = false; this.emit('change', curr, prev); }
+      else if (curr.mtimeMs !== prev.mtimeMs || curr.ino !== prev.ino || curr.size !== prev.size) {
+        this.emit('change', curr, prev);
+      }
       prev = curr;
-    }, interval);
+    }, interval || 1);
     return this;
   }
   ref() { if (this._timer && this._timer.ref) this._timer.ref(); return this; }
