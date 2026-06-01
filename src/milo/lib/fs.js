@@ -1818,6 +1818,38 @@ const promises = {
     } catch (e) { return Promise.reject(e); }
   },
   get constants() { return internalBinding('constants').fs; },
+  // fs/promises.watch — async iterable yielding {eventType, filename}. Backed by
+  // an FSWatcher; buffers events between for-await pulls; {signal} ends iteration.
+  watch(filename, options) {
+    if (typeof options === 'string') options = { encoding: options };
+    else if (options !== undefined && (options === null || typeof options !== 'object')) throw _ERR_INVALID_ARG_TYPE('options', 'object', options);
+    options = options || {};
+    if (options.persistent !== undefined && typeof options.persistent !== 'boolean') throw _ERR_INVALID_ARG_TYPE('options.persistent', 'boolean', options.persistent);
+    if (options.recursive !== undefined && typeof options.recursive !== 'boolean') throw _ERR_INVALID_ARG_TYPE('options.recursive', 'boolean', options.recursive);
+    _assertEncoding(options.encoding);  // encoding:1 -> ERR_INVALID_ARG_VALUE
+    _validateAbortSignal(options.signal);
+    _validatePath(filename, 'filename');
+    const watcher = watch(filename, options);
+    const queue = [];
+    let pending = null;     // {resolve,reject} of an awaiting next()
+    let done = false;
+    const push = (v) => { if (pending) { const p = pending; pending = null; p.resolve({ value: v, done: false }); } else queue.push(v); };
+    const finish = () => { if (done) return; done = true; try { watcher.close(); } catch {} if (pending) { const p = pending; pending = null; p.resolve({ value: undefined, done: true }); } };
+    watcher.on('change', (eventType, fname) => push({ eventType, filename: fname }));
+    watcher.on('error', (err) => { if (pending) { const p = pending; pending = null; done = true; p.reject(err); } });
+    watcher.on('close', finish);
+    const sig = options.signal;
+    if (sig) { if (sig.aborted) finish(); else sig.addEventListener('abort', finish, { once: true }); }
+    return {
+      [Symbol.asyncIterator]() { return this; },
+      next() {
+        if (queue.length > 0) return Promise.resolve({ value: queue.shift(), done: false });
+        if (done) return Promise.resolve({ value: undefined, done: true });
+        return new Promise((resolve, reject) => { pending = { resolve, reject }; });
+      },
+      return(v) { finish(); return Promise.resolve({ value: v, done: true }); },
+    };
+  },
 };
 
 function _validateUid(uid) {
