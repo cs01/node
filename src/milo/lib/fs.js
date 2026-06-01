@@ -395,7 +395,19 @@ function readdirSync(path, opts) {
   }
   return entries;
 }
-function realpathSync(path, opts) { _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding)); _validatePath(path, 'path'); return b.realpath(_toPath(path)); }
+function realpathSync(path, opts) {
+  const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
+  _assertEncoding(encoding);
+  _validatePath(path, 'path');
+  const resolved = b.realpath(_toPath(path));
+  return _encodePathResult(resolved, encoding);
+}
+// Apply a path-result encoding: 'buffer' -> Buffer, other non-utf8 -> re-encoded string.
+function _encodePathResult(str, encoding) {
+  if (!encoding || encoding === 'utf8' || encoding === 'utf-8') return str;
+  if (encoding === 'buffer') return Buffer.from(str, 'utf8');
+  return Buffer.from(str, 'utf8').toString(encoding);
+}
 function chmodSync(path, mode) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); b.chmod(_toPath(path), mode); }
 function lchmodSync(path, mode) { _validatePath(path, 'path'); mode = _validateMode(mode, 'mode'); b.lchmod ? b.lchmod(_toPath(path), mode) : b.chmod(_toPath(path), mode); }
 function statfsSync(path, opts) {
@@ -1139,7 +1151,7 @@ function realpath(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
   _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
   _validatePath(path, 'path');
-  _async(realpathSync, [path], cb);
+  _async(realpathSync, [path, opts], cb);
 }
 realpath.native = realpath;
 realpathSync.native = realpathSync;
@@ -1622,7 +1634,7 @@ const promises = {
   copyFile: _promisify((src, dst, mode) => copyFileSync(src, dst, mode)),
   mkdtemp: _promisify((prefix) => mkdtempSync(prefix)),
   readlink: _promisify((p) => readlinkSync(p)),
-  realpath: _promisify((p) => realpathSync(p)),
+  realpath: _promisify((p, opts) => realpathSync(p, opts)),
   symlink: _promisify((target, p, type) => symlinkSync(target, p, type)),
   appendFile: _promisify((p, data, opts) => appendFileSync(_fdFromMaybeHandle(p), data, opts)),
   statfs: _promisify((path) => {
