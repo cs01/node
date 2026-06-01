@@ -1568,7 +1568,8 @@ function watch(filename, options, listener) {
   if (typeof options === 'function') { listener = options; options = {}; }
   _assertEncoding(typeof options === 'string' ? options : (options && options.encoding));
   _validatePath(filename, 'filename');
-  const watcher = new FSWatcher(String(filename), options);
+  // accept a file: URL or Buffer path, not just a string
+  const watcher = new FSWatcher(_toPath(filename), options);
   if (listener) watcher.on('change', listener);
   return watcher;
 }
