@@ -937,7 +937,10 @@ function _initStreamClasses() {
     constructor(path, options) {
       options = _normalizeStreamOpts(options);
       _assertEncoding(options.encoding);
-      super({ highWaterMark: options.highWaterMark });
+      // autoClose:false also disables auto-destroy — after 'finish' the stream stays
+      // open (not closed) so the fd can be reused. See write-stream-autoclose-option.
+      const autoClose = options.autoClose !== undefined ? options.autoClose : true;
+      super({ highWaterMark: options.highWaterMark, autoDestroy: autoClose });
       this.fs = options.fs || module.exports;
       this.path = path == null ? undefined : path;
       this.flags = options.flags || 'w';
@@ -948,7 +951,7 @@ function _initStreamClasses() {
       this.pos = this.start;
       this.bytesWritten = 0;
       this.closed = false;
-      this.autoClose = options.autoClose !== undefined ? options.autoClose : true;
+      this.autoClose = autoClose;
       this._ownFd = options.fd == null;
       this.fd = options.fd != null ? _streamFd(options.fd) : null;
       if (globalThis.__ref) globalThis.__ref();
@@ -1016,6 +1019,16 @@ function _initStreamClasses() {
   // instances, and `x instanceof fs.ReadStream` holds.
   ReadStreamCtor.prototype = ReadStream.prototype;
   WriteStreamCtor.prototype = WriteStream.prototype;
+  // Node exposes autoClose as a prototype getter that throws ERR_INVALID_THIS when
+  // accessed off the bare prototype (no instance). Instances set an own `autoClose`
+  // field which shadows this getter, so normal access still works.
+  for (const Cls of [ReadStream, WriteStream]) {
+    Object.defineProperty(Cls.prototype, 'autoClose', {
+      configurable: true,
+      get() { const e = new TypeError('Value of "this" must be of type WriteStream'); e.code = 'ERR_INVALID_THIS'; throw e; },
+      set(v) { Object.defineProperty(this, 'autoClose', { value: v, writable: true, enumerable: true, configurable: true }); },
+    });
+  }
 }
 
 function createReadStream(path, opts) { _initStreamClasses(); return new _ReadStream(path, opts); }
