@@ -1419,6 +1419,12 @@ class FSWatcher extends EventEmitter {
     this._filename = path.resolve(filename);
     this._recursive = !!(options && options.recursive);
     this._encoding = typeof options === 'string' ? options : (options && options.encoding) || 'utf8';
+    // {signal}: abort closes the watcher. Already-aborted closes on next tick.
+    const signal = options && typeof options === 'object' ? options.signal : undefined;
+    if (signal) {
+      if (signal.aborted) process.nextTick(() => this.close());
+      else signal.addEventListener('abort', () => this.close(), { once: true });
+    }
     this._fds = new Map();
     net._ensurePoll();
 
