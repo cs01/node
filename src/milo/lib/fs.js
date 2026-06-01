@@ -190,7 +190,7 @@ function writeFileSync(path, data, options) {
   if (fd < 0) throw _fsError('ENOENT', 'open', p);
   try {
     const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-    if (buf.length > 0) b.fdWrite(fd, buf, buf.length);
+    if (buf.length > 0) _fdWriteChecked(fd, buf, buf.length, 'write');
   } finally {
     b.close(fd);
   }
@@ -558,7 +558,7 @@ function writeSync(fd, data, offset, length, position) {
   const slice = (typeof data.subarray === 'function')
     ? data.subarray(offset, offset + length)
     : new Uint8Array(data.buffer, data.byteOffset + offset, length);
-  return b.fdWrite(fd, slice, slice.length);
+  return _fdWriteChecked(fd, slice, slice.length, 'write');
 }
 
 function writevSync(fd, buffers, position) {
@@ -738,8 +738,25 @@ function _validateAccessMode(mode) {
   if (!Number.isInteger(mode) || mode < 0 || mode > 7) throw _ERR_OUT_OF_RANGE('mode', '>= 0 && <= 7', mode);
 }
 // macOS errno → node error code (the subset access(2) can return)
-const _ERRNO_CODES = { 1: 'EPERM', 2: 'ENOENT', 13: 'EACCES', 20: 'ENOTDIR', 30: 'EROFS', 62: 'ELOOP', 63: 'ENAMETOOLONG' };
-const _ERRNO_MSG = { EPERM: 'operation not permitted', ENOENT: 'no such file or directory', EACCES: 'permission denied', ENOTDIR: 'not a directory', EROFS: 'read-only file system', ELOOP: 'too many symbolic links', ENAMETOOLONG: 'name too long' };
+const _ERRNO_CODES = { 1: 'EPERM', 2: 'ENOENT', 9: 'EBADF', 13: 'EACCES', 20: 'ENOTDIR', 27: 'EFBIG', 28: 'ENOSPC', 30: 'EROFS', 32: 'EPIPE', 62: 'ELOOP', 63: 'ENAMETOOLONG', 69: 'EDQUOT' };
+const _ERRNO_MSG = { EPERM: 'operation not permitted', ENOENT: 'no such file or directory', EBADF: 'bad file descriptor', EACCES: 'permission denied', ENOTDIR: 'not a directory', EFBIG: 'file too large', ENOSPC: 'no space left on device', EROFS: 'read-only file system', EPIPE: 'broken pipe', ELOOP: 'too many symbolic links', ENAMETOOLONG: 'name too long', EDQUOT: 'disk quota exceeded' };
+// b.fdWrite returns bytes written, or a negative errno on failure. Loop over short
+// writes (the kernel may accept fewer bytes, e.g. under RLIMIT_FSIZE the next write
+// then fails EFBIG) and throw the mapped fs error. Returns total bytes written.
+function _fdWriteChecked(fd, buf, len, syscall) {
+  let written = 0;
+  while (written < len) {
+    const chunk = written === 0 ? buf : buf.subarray(written);
+    const n = b.fdWrite(fd, chunk, len - written);
+    if (n < 0) {
+      const code = _ERRNO_CODES[-n] || 'EIO';
+      throw _fsError(code, syscall || 'write', null, _ERRNO_MSG[code] || 'i/o error');
+    }
+    if (n === 0) break; // no progress and no error — avoid infinite loop
+    written += n;
+  }
+  return written;
+}
 // errno (positive, from a native binding) -> fs Error, or null on success.
 function _errnoErr(errno, syscall, path) {
   if (!errno || errno === 0) return null;

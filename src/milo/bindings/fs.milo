@@ -516,7 +516,13 @@ fn fsFdWrite(info: *u8, _ud: *u8): void {
             return
         }
         let n = write(fd, ptr, dataLen as i64)
-        ci.retI32(n as i32)
+        if n < 0 {
+            // surface errno as a negative value so JS can map EFBIG/ENOSPC/etc.
+            let ep = __error()
+            ci.retI32(0 - ep[0])
+        } else {
+            ci.retI32(n as i32)
+        }
     }
 }
 

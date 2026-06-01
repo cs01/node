@@ -757,5 +757,8 @@ int main(int argc, char** argv) {
     // returns EPIPE instead of killing the process by signal. Without this,
     // IPC/net/stream teardown races terminate the process with signal 13.
     signal(SIGPIPE, SIG_IGN);
+    // Ignore SIGXFSZ too: a write exceeding RLIMIT_FSIZE then returns EFBIG instead
+    // of killing the process by signal, letting fs surface the error. Matches Node.
+    signal(SIGXFSZ, SIG_IGN);
     return milo_node_main(argc, argv);
 }
