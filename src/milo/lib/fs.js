@@ -1634,9 +1634,9 @@ const promises = {
   opendir: _promisify((p, opts) => opendirSync(p, opts)),
   chown: (p, uid, gid) => { try { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); } catch(e) { return Promise.reject(e); } return _promisify(chownSync)(p, uid, gid); },
   lchown: (p, uid, gid) => { try { _validatePath(p, 'path'); _validateUid(uid); _validateGid(gid); } catch(e) { return Promise.reject(e); } return _promisify(lchownSync)(p, uid, gid); },
-  lchmod: (p, mode) => { try { _validatePath(p, 'path'); } catch(e) { return Promise.reject(e); } return Promise.resolve(); },
-  lutimes: (p, atime, mtime) => { try { _validatePath(p, 'path'); } catch(e) { return Promise.reject(e); } return Promise.resolve(); },
-  utimes: (p, atime, mtime) => { try { _validatePath(p, 'path'); } catch(e) { return Promise.reject(e); } return Promise.resolve(); },
+  lchmod: _promisify((p, mode) => lchmodSync(p, mode)),
+  lutimes: _promisify((p, atime, mtime) => lutimesSync(p, atime, mtime)),
+  utimes: _promisify((p, atime, mtime) => utimesSync(p, atime, mtime)),
   open: (p, flags, mode) => {
     try {
       const fd = openSync(p, flags || 'r', mode);
