@@ -789,7 +789,7 @@ function _validateStreamStartEnd(start, end) {
   if (start !== undefined && (!Number.isInteger(start) || start < 0 || start > Number.MAX_SAFE_INTEGER)) throw _ERR_OUT_OF_RANGE('start', '>= 0 && <= 2 ** 53 - 1', start);
   // end may be Infinity (its default); only reject NaN, negative, fractional, or unsafe-finite.
   if (end !== undefined && end !== Infinity && (!Number.isInteger(end) || end < 0 || end > Number.MAX_SAFE_INTEGER)) throw _ERR_OUT_OF_RANGE('end', '>= 0 && <= 2 ** 53 - 1', end);
-  if (start !== undefined && end !== undefined && start > end) throw _ERR_OUT_OF_RANGE('start', '<= "end"', start);
+  if (start !== undefined && end !== undefined && start > end) throw _ERR_OUT_OF_RANGE('start', `<= "end" (here: ${end})`, start);
 }
 function _normalizeStreamOpts(opts) {
   if (opts !== undefined && opts !== null && typeof opts !== 'string' && typeof opts !== 'object') {
