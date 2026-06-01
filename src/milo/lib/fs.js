@@ -1552,18 +1552,57 @@ function _promisify(fn) { return (...args) => { try { return Promise.resolve(fn(
 function _fdFromMaybeHandle(p) {
   return (p != null && typeof p === 'object' && typeof p.fd === 'number') ? p.fd : p;
 }
+// Run a sync fs op as a promise under an optional AbortSignal. The op is deferred
+// via setImmediate so an abort scheduled on a microtask/nextTick (after the call
+// returns but before the real I/O would finish) still wins the race, matching Node.
+function _promiseSignal(sig, fn) {
+  try { _validateAbortSignal(sig); } catch (e) { return Promise.reject(e); }
+  if (sig && sig.aborted) return Promise.reject(_abortErr(sig));
+  if (!sig) { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } }
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const onAbort = () => { if (done) return; done = true; reject(_abortErr(sig)); };
+    sig.addEventListener('abort', onAbort, { once: true });
+    setImmediate(() => {
+      if (done) return;
+      try { const r = fn(); if (done) return; done = true; sig.removeEventListener('abort', onAbort); resolve(r); }
+      catch (e) { if (done) return; done = true; sig.removeEventListener('abort', onAbort); reject(e); }
+    });
+  });
+}
 const promises = {
   readFile: (path, opts) => {
     const sig = opts && typeof opts === 'object' ? opts.signal : undefined;
-    try { _validateAbortSignal(sig); } catch (e) { return Promise.reject(e); }
-    if (sig && sig.aborted) return Promise.reject(_abortErr(sig));
-    try { return Promise.resolve(readFileSync(path, opts)); } catch (e) { return Promise.reject(e); }
+    return _promiseSignal(sig, () => readFileSync(path, opts));
   },
   writeFile: (path, data, opts) => {
+    if (typeof opts === 'string') opts = { encoding: opts };
     const sig = opts && typeof opts === 'object' ? opts.signal : undefined;
-    try { _validateAbortSignal(sig); } catch (e) { return Promise.reject(e); }
-    if (sig && sig.aborted) return Promise.reject(_abortErr(sig));
-    try { writeFileSync(path, data, opts); return Promise.resolve(); } catch (e) { return Promise.reject(e); }
+    const enc = (opts && opts.encoding) || 'utf8';
+    // data may be an async/sync iterable (e.g. Readable.from([...])); collect it
+    // into one buffer first, then write. Node's promises.writeFile accepts these.
+    if (data != null && typeof data !== 'string' && !Buffer.isBuffer(data) && !ArrayBuffer.isView(data) &&
+        (typeof data[Symbol.asyncIterator] === 'function' || typeof data[Symbol.iterator] === 'function')) {
+      return (async () => {
+        if (sig) _validateAbortSignal(sig);
+        // yield once so a nextTick/microtask abort (scheduled right after this call)
+        // is observed before we start consuming — matches Node, where draining the
+        // source yields to the loop. Without this a synchronous iterable races past abort.
+        if (sig) { await new Promise((r) => setImmediate(r)); if (sig.aborted) throw _abortErr(sig); }
+        const chunks = [];
+        for await (const chunk of data) {
+          if (sig && sig.aborted) throw _abortErr(sig);
+          // each chunk must be string or buffer-like; reject other types (ERR_INVALID_ARG_TYPE).
+          if (typeof chunk !== 'string' && !Buffer.isBuffer(chunk) && !ArrayBuffer.isView(chunk)) {
+            throw _ERR_INVALID_ARG_TYPE('data', 'string, Buffer, TypedArray, or DataView', chunk);
+          }
+          chunks.push(typeof chunk === 'string' ? Buffer.from(chunk, enc) : Buffer.from(chunk.buffer || chunk, chunk.byteOffset, chunk.byteLength));
+        }
+        if (sig && sig.aborted) throw _abortErr(sig);
+        writeFileSync(path, Buffer.concat(chunks), opts);
+      })();
+    }
+    return _promiseSignal(sig, () => writeFileSync(path, data, opts));
   },
   stat: _promisify((path, opts) => statSync(path, opts)),
   lstat: _promisify((path, opts) => lstatSync(path, opts)),
