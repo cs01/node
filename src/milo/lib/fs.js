@@ -388,7 +388,10 @@ function statfsSync(path, opts) {
   _validatePath(path, 'path');
   const r = b.statvfs(_toPath(path));
   if (r === -1) throw _fsError('EIO', 'statfs', _toPath(path));
-  return { type: 0, bsize: r[0], blocks: r[2], bfree: r[3], bavail: r[4], files: r[5], ffree: r[6] };
+  // r = [f_bsize, f_frsize, f_blocks, f_bfree, f_bavail, f_files, f_ffree]
+  const bigint = !!(opts && opts.bigint);
+  const v = bigint ? (x) => BigInt(Math.floor(Number(x) || 0)) : (x) => x;
+  return { type: v(0), bsize: v(r[0]), frsize: v(r[1]), blocks: v(r[2]), bfree: v(r[3]), bavail: v(r[4]), files: v(r[5]), ffree: v(r[6]) };
 }
 function statfs(path, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
