@@ -782,10 +782,14 @@ function _validateStreamFdPath(path, options) {
   }
 }
 function _validateStreamStartEnd(start, end) {
+  // start/end must be numbers; NaN or negative -> RangeError. end may be Infinity
+  // (its default), so don't require an integer there. See read-stream-throw-type-error.
   if (start !== undefined && typeof start !== 'number') throw _ERR_INVALID_ARG_TYPE('start', 'number', start);
   if (end !== undefined && typeof end !== 'number') throw _ERR_INVALID_ARG_TYPE('end', 'number', end);
-  if (start !== undefined && (!Number.isInteger(start) || start < 0)) throw _ERR_OUT_OF_RANGE('start', '>= 0', start);
-  if (end !== undefined && (!Number.isInteger(end) || end < 0)) throw _ERR_OUT_OF_RANGE('end', '>= 0', end);
+  if (start !== undefined && (!Number.isInteger(start) || start < 0 || start > Number.MAX_SAFE_INTEGER)) throw _ERR_OUT_OF_RANGE('start', '>= 0 && <= 2 ** 53 - 1', start);
+  // end may be Infinity (its default); only reject NaN, negative, fractional, or unsafe-finite.
+  if (end !== undefined && end !== Infinity && (!Number.isInteger(end) || end < 0 || end > Number.MAX_SAFE_INTEGER)) throw _ERR_OUT_OF_RANGE('end', '>= 0 && <= 2 ** 53 - 1', end);
+  if (start !== undefined && end !== undefined && start > end) throw _ERR_OUT_OF_RANGE('start', '<= "end"', start);
 }
 function _normalizeStreamOpts(opts) {
   if (opts !== undefined && opts !== null && typeof opts !== 'string' && typeof opts !== 'object') {
