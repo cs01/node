@@ -1418,6 +1418,7 @@ class FSWatcher extends EventEmitter {
     super();
     this._filename = path.resolve(filename);
     this._recursive = !!(options && options.recursive);
+    this._encoding = typeof options === 'string' ? options : (options && options.encoding) || 'utf8';
     this._fds = new Map();
     net._ensurePoll();
 
@@ -1510,15 +1511,18 @@ class FSWatcher extends EventEmitter {
       // directory change: diff the listing to find which entry changed and report
       // its name. An add/remove is a 'rename'; a content change is a 'change'.
       const changed = this._diffDir(watchedPath);
+      // If the diff can't identify the entry (e.g. a create+unlink that nets to no
+      // listing change), report null rather than the dir's own name — Node passes
+      // null when the filename is unknown, and tests accept null.
       if (changed !== null) { eventType = 'rename'; relPath = changed; }
-      else { eventType = 'change'; relPath = path.basename(this._filename); }
+      else { eventType = 'rename'; relPath = null; }
     } else {
       eventType = isRename ? 'rename' : 'change';
       relPath = watchedPath === this._filename
         ? path.basename(this._filename)
         : path.relative(this._filename, watchedPath);
     }
-    this.emit('change', eventType, relPath);
+    this.emit('change', eventType, relPath === null ? null : _encodePathResult(relPath, this._encoding));
 
     // When a directory changes, scan for new subdirectories to watch
     if (this._recursive && isWrite && !this._closed) {
