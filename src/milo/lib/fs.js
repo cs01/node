@@ -694,10 +694,22 @@ function rmSync(path, opts) {
   }
 }
 
+// Templates ending in X aren't portable (the X isn't substituted like mkdtemp(3)).
+// Node warns once. emitWarning dedups by message, matching common.expectWarning.
+let _mkdtempXWarned = false;
+function _warnMkdtempX(prefix) {
+  if (!_mkdtempXWarned && typeof prefix === 'string' && prefix.endsWith('X')) {
+    _mkdtempXWarned = true;
+    process.emitWarning('mkdtemp() templates ending with X are not portable. For details see: https://nodejs.org/api/fs.html');
+  }
+}
 function mkdtempSync(prefix, opts) {
   _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
+  // prefix accepts a Uint8Array (e.g. TextEncoder output), not just string/Buffer/URL.
+  if (ArrayBuffer.isView(prefix) && !Buffer.isBuffer(prefix)) prefix = Buffer.from(prefix.buffer, prefix.byteOffset, prefix.byteLength);
   _validatePath(prefix, 'prefix');
   prefix = _toPath(prefix);
+  _warnMkdtempX(prefix);
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let suffix = '';
   for (let i = 0; i < 6; i++) suffix += chars[Math.floor(Math.random() * chars.length)];
@@ -709,6 +721,7 @@ function mkdtempSync(prefix, opts) {
 function mkdtemp(prefix, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = undefined; }
   _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
+  if (ArrayBuffer.isView(prefix) && !Buffer.isBuffer(prefix)) prefix = Buffer.from(prefix.buffer, prefix.byteOffset, prefix.byteLength);
   _validatePath(prefix, 'prefix');
   _validateCb(cb);
   _async(mkdtempSync, [prefix, opts], cb);
