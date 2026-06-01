@@ -1431,9 +1431,51 @@ class FSWatcher extends EventEmitter {
     this._fds.set(fd, this._filename);
     net._fileWatchers.set(fd, this);
 
+    // kqueue EVFILT_VNODE on a directory only signals "the dir changed", not which
+    // entry. Snapshot the listing so a change event can diff to find the filename.
+    this._isDir = false;
+    try { this._isDir = statSync(this._filename).isDirectory(); } catch {}
+    this._dirSnapshot = this._isDir ? this._snapshotDir(this._filename) : null;
+
+    // macOS kqueue on a directory fd does NOT report in-place modifications of
+    // files already inside it (only add/remove). To see content changes, also put
+    // a vnode watch on each immediate child file. Maps the child fd back to its
+    // name so _onEvent can report it. (Recursive mode additionally walks subdirs.)
+    if (this._isDir) this._watchDirChildren(this._filename);
+
     if (this._recursive) {
       this._addSubdirs(this._filename);
     }
+  }
+
+  _watchDirChildren(dir) {
+    let entries;
+    try { entries = readdirSync(dir); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry);
+      try {
+        if (statSync(full).isFile()) {
+          const cfd = tcp.watchFile(full);
+          if (cfd >= 0) { this._fds.set(cfd, full); net._fileWatchers.set(cfd, this); }
+        }
+      } catch {}
+    }
+  }
+
+  _snapshotDir(dir) {
+    try { return new Set(readdirSync(dir)); } catch { return new Set(); }
+  }
+
+  // Diff the current directory listing against the snapshot to find the changed
+  // entry (added or removed). Returns the filename, or null if nothing changed.
+  _diffDir(dir) {
+    const before = this._dirSnapshot || new Set();
+    const after = this._snapshotDir(dir);
+    let changed = null;
+    for (const name of after) if (!before.has(name)) { changed = name; break; }
+    if (changed === null) for (const name of before) if (!after.has(name)) { changed = name; break; }
+    this._dirSnapshot = after;
+    return changed;
   }
 
   _addSubdirs(dir) {
@@ -1456,22 +1498,37 @@ class FSWatcher extends EventEmitter {
   }
 
   _onEvent(fflags, eventFd) {
+    // Events already queued in a poll batch can arrive after the handler closed
+    // the watcher (a single change handler often calls close()); drop them so
+    // 'change' isn't re-emitted on a closed watcher. See test-fs-watch.
+    if (this._closed) return;
     const isRename = !!(fflags & 32);
     const isWrite = !!(fflags & 2);
-    const eventType = isRename ? 'rename' : 'change';
     const watchedPath = this._fds.get(eventFd) || this._filename;
-    const relPath = watchedPath === this._filename
-      ? path.basename(this._filename)
-      : path.relative(this._filename, watchedPath);
+    let eventType, relPath;
+    if (this._isDir && watchedPath === this._filename) {
+      // directory change: diff the listing to find which entry changed and report
+      // its name. An add/remove is a 'rename'; a content change is a 'change'.
+      const changed = this._diffDir(watchedPath);
+      if (changed !== null) { eventType = 'rename'; relPath = changed; }
+      else { eventType = 'change'; relPath = path.basename(this._filename); }
+    } else {
+      eventType = isRename ? 'rename' : 'change';
+      relPath = watchedPath === this._filename
+        ? path.basename(this._filename)
+        : path.relative(this._filename, watchedPath);
+    }
     this.emit('change', eventType, relPath);
 
     // When a directory changes, scan for new subdirectories to watch
-    if (this._recursive && isWrite) {
+    if (this._recursive && isWrite && !this._closed) {
       this._addSubdirs(watchedPath);
     }
   }
 
   close() {
+    if (this._closed) return; // closing a closed watcher is a noop
+    this._closed = true;
     for (const [fd] of this._fds) {
       net._fileWatchers.delete(fd);
       tcp.unwatchFile(fd);
