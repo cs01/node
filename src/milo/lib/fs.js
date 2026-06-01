@@ -1569,7 +1569,10 @@ function watch(filename, options, listener) {
   _assertEncoding(typeof options === 'string' ? options : (options && options.encoding));
   _validatePath(filename, 'filename');
   // accept a file: URL or Buffer path, not just a string
-  const watcher = new FSWatcher(_toPath(filename), options);
+  const p = _toPath(filename);
+  // watching a nonexistent path throws ENOENT synchronously (matches Node/libuv).
+  try { statSync(p); } catch { const e = _fsError('ENOENT', 'watch', p, 'no such file or directory'); e.filename = p; throw e; }
+  const watcher = new FSWatcher(p, options);
   if (listener) watcher.on('change', listener);
   return watcher;
 }
