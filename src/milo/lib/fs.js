@@ -441,7 +441,14 @@ function lstatSync(path, options) {
   }
   return _wrapStats(result, options && options.bigint);
 }
-function readlinkSync(path, opts) { _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding)); _validatePath(path, 'path'); const sp = _toPath(path); return b.readlink ? b.readlink(sp) : sp; }
+function readlinkSync(path, opts) {
+  const encoding = typeof opts === 'string' ? opts : (opts && opts.encoding);
+  _assertEncoding(encoding);
+  _validatePath(path, 'path');
+  const sp = _toPath(path);
+  const target = b.readlink ? b.readlink(sp) : sp;
+  return _encodePathResult(target, encoding);
+}
 // POSIX open flags
 const O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0x200, O_TRUNC = 0x400, O_APPEND = 0x8, O_EXCL = 0x800, O_SYNC = 0x80;
 const FLAG_MAP = {
@@ -1633,7 +1640,7 @@ const promises = {
   chmod: _promisify((p, m) => chmodSync(p, m)),
   copyFile: _promisify((src, dst, mode) => copyFileSync(src, dst, mode)),
   mkdtemp: _promisify((prefix) => mkdtempSync(prefix)),
-  readlink: _promisify((p) => readlinkSync(p)),
+  readlink: _promisify((p, opts) => readlinkSync(p, opts)),
   realpath: _promisify((p, opts) => realpathSync(p, opts)),
   symlink: _promisify((target, p, type) => symlinkSync(target, p, type)),
   appendFile: _promisify((p, data, opts) => appendFileSync(_fdFromMaybeHandle(p), data, opts)),
