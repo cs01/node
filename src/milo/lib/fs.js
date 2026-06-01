@@ -1694,12 +1694,12 @@ const promises = {
           try { return Promise.resolve({ bytesWritten: writevSync(fd, buffers, position), buffers }); }
           catch (e) { return Promise.reject(e); }
         },
-        chmod(m) { fchmodSync(fd, m); return Promise.resolve(); },
-        chown(uid, gid) { try { fchownSync(fd, uid, gid); } catch {} return Promise.resolve(); },
-        utimes(atime, mtime) { return Promise.resolve(); },
-        datasync() { fdatasyncSync(fd); return Promise.resolve(); },
-        sync() { fsyncSync(fd); return Promise.resolve(); },
-        truncate(len) { ftruncateSync(fd, len); return Promise.resolve(); },
+        chmod(m) { if (this._closed) return Promise.reject(_ebadf('fchmod')); try { fchmodSync(fd, m); return Promise.resolve(); } catch (e) { return Promise.reject(e); } },
+        chown(uid, gid) { if (this._closed) return Promise.reject(_ebadf('fchown')); try { fchownSync(fd, uid, gid); return Promise.resolve(); } catch (e) { return Promise.reject(e); } },
+        utimes(atime, mtime) { if (this._closed) return Promise.reject(_ebadf('futime')); try { futimesSync(fd, atime, mtime); return Promise.resolve(); } catch (e) { return Promise.reject(e); } },
+        datasync() { if (this._closed) return Promise.reject(_ebadf('fdatasync')); try { fdatasyncSync(fd); return Promise.resolve(); } catch (e) { return Promise.reject(e); } },
+        sync() { if (this._closed) return Promise.reject(_ebadf('fsync')); try { fsyncSync(fd); return Promise.resolve(); } catch (e) { return Promise.reject(e); } },
+        truncate(len) { if (this._closed) return Promise.reject(_ebadf('ftruncate')); try { ftruncateSync(fd, len); return Promise.resolve(); } catch (e) { return Promise.reject(e); } },
         // streams over the handle's fd; autoClose:false so closing the stream
         // doesn't close the handle the caller still owns.
         createReadStream(o) { return createReadStream(undefined, { fd, autoClose: false, ...(o || {}) }); },
