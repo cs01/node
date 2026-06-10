@@ -871,7 +871,10 @@ class Writable extends Stream {
         state.errored = err;
         this.writable = false;
         if (cb) cb(err);
-        process.nextTick(() => this.emit('error', err));
+        // errorOrDestroy: destroy first (closes fds etc), 'error' emits after
+        // _destroy completes — handlers must observe the closed state (fd null)
+        if (state.autoDestroy) this.destroy(err);
+        else process.nextTick(() => this.emit('error', err));
       } else {
         if (cb) cb(err);
       }
@@ -907,7 +910,9 @@ class Writable extends Stream {
         if (err) {
           state.errored = err;
           for (const e of entries) { if (e.cb) e.cb(err); }
-          process.nextTick(() => this.emit('error', err));
+          // see _doWrite — errorOrDestroy ordering
+          if (state.autoDestroy) this.destroy(err);
+          else process.nextTick(() => this.emit('error', err));
         } else {
           for (const e of entries) { if (e.cb) e.cb(null); }
         }

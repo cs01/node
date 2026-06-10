@@ -957,10 +957,12 @@ function _initStreamClasses() {
   };
   ReadStream.prototype._closeFd = function(err, cb) {
     const fd = this.fd;
-    this.fd = null;
     if (fd != null && (this._ownFd || this.autoClose)) {
+      // initiate close while this.fd is still set — monkeypatched fs.close
+      // (read-stream-err) asserts the passed fd equals stream.fd; null after
       this.fs.close(fd, (er) => { cb(er || err); });
-    } else { cb(err); }
+      this.fd = null;
+    } else { this.fd = null; cb(err); }
   };
   ReadStream.prototype.close = function(cb) { if (cb) { if (this.closed || this.destroyed) process.nextTick(cb); else this.once('close', cb); } this.destroy(); };
   Object.defineProperty(ReadStream.prototype, 'pending', { configurable: true, get() { return this.fd == null; } });
@@ -974,6 +976,8 @@ function _initStreamClasses() {
     const autoClose = options.autoClose !== undefined ? options.autoClose : true;
     // _writableInit also runs the Stream/EventEmitter base init
     _writableInit(this, { highWaterMark: options.highWaterMark, autoDestroy: autoClose });
+    // write-side encoding: string chunks decode through it (base64 etc), like Node
+    if (options.encoding) this.setDefaultEncoding(options.encoding);
     this.fs = options.fs || module.exports;
     this.path = path == null ? undefined : path;
     this.flags = options.flags || 'w';
@@ -1041,10 +1045,11 @@ function _initStreamClasses() {
   };
   WriteStream.prototype._closeFd = function(err, cb) {
     const fd = this.fd;
-    this.fd = null;
     if (fd != null && (this._ownFd || this.autoClose)) {
+      // see ReadStream._closeFd — fd must still be set when fs.close is called
       this.fs.close(fd, (er) => { cb(er || err); });
-    } else { cb(err); }
+      this.fd = null;
+    } else { this.fd = null; cb(err); }
   };
   WriteStream.prototype.close = function(cb) { if (cb) { if (this.closed || this.destroyed) process.nextTick(cb); else this.once('close', cb); } this.destroy(); };
   Object.defineProperty(WriteStream.prototype, 'pending', { configurable: true, get() { return this.fd == null; } });
