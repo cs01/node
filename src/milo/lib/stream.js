@@ -234,6 +234,15 @@ class Readable extends Stream {
     if (state._destroyed) return false;
     if (chunk === undefined && !state.objectMode) return state.length <= state.highWaterMark;
     if (chunk === null) {
+      // EOF: flush the decoder's buffered tail as a final data chunk first
+      if (state.decoder && !state._decoderFlushed) {
+        state._decoderFlushed = true;
+        const tail = state.decoder.end();
+        if (tail) {
+          if (state.flowing) this.emit('data', tail);
+          else { state.buffer.push(tail); state.length += tail.length; }
+        }
+      }
       state.ended = true;
       if (state.readableListening && !state._readableEmitScheduled) {
         state._readableEmitScheduled = true;
@@ -267,7 +276,19 @@ class Readable extends Stream {
         return false;
       }
     }
-    if (state.encoding && Buffer.isBuffer(chunk)) chunk = chunk.toString(state.encoding);
+    if (state.encoding && Buffer.isBuffer(chunk)) {
+      chunk = state.decoder ? state.decoder.write(chunk) : chunk.toString(state.encoding);
+      // a chunk that's entirely a partial multibyte/base64 group decodes to ''.
+      // Emit/buffer nothing (empty chunks break flow-control), but keep the
+      // read loop alive so the rest of the group arrives.
+      if (chunk === '') {
+        if (state.flowing && state.length <= state.highWaterMark && !state.ended && !state.reading) {
+          state.reading = true;
+          process.nextTick(() => { state.reading = false; if (state.flowing && !state.ended) this._flow(); });
+        }
+        return state.length < state.highWaterMark;
+      }
+    }
     if (state.flowing) {
       this.emit('data', chunk);
       if (state.readableListening && !state._readableEmitScheduled) {
@@ -335,7 +356,24 @@ class Readable extends Stream {
     return this;
   }
 
-  setEncoding(enc) { this._readableState.encoding = enc || 'utf8'; return this; }
+  setEncoding(enc) {
+    enc = enc || 'utf8';
+    if (!Buffer.isEncoding(enc)) throw _ERR_UNKNOWN_ENCODING(enc);
+    const state = this._readableState;
+    // StringDecoder buffers partial multibyte/base64 groups across chunk
+    // boundaries — per-chunk toString() corrupts them (see read-stream-encoding)
+    const { StringDecoder } = require('string_decoder');
+    state.decoder = new StringDecoder(enc);
+    state.encoding = enc;
+    // re-decode anything already buffered through the new decoder (Node semantics)
+    if (state.buffer.length > 0) {
+      let content = '';
+      for (const c of state.buffer) content += state.decoder.write(Buffer.isBuffer(c) ? c : Buffer.from(c));
+      state.buffer = content.length ? [content] : [];
+      state.length = content.length;
+    }
+    return this;
+  }
   resume() {
     const state = this._readableState;
     if (!state.flowing) {
@@ -845,6 +883,7 @@ class Writable extends Stream {
           this.emit('drain');
         }
       }
+      if (state.ending && state._tryFinish) state._tryFinish();
     });
   }
 
@@ -877,6 +916,7 @@ class Writable extends Stream {
           const hwm = state.highWaterMark != null ? state.highWaterMark : _defaultHWM;
           if (state.length < hwm || state.length === 0) { state.needDrain = false; this.emit('drain'); }
         }
+        if (state.ending && state._tryFinish) state._tryFinish();
       });
       return;
     }
@@ -942,8 +982,13 @@ class Writable extends Stream {
         if (!rState || rState.ended) process.nextTick(() => { if (!this.destroyed) this.destroy(); });
       }
     };
-    const waitDrain = () => {
+    // Event-driven finish: re-checked from each write/writev completion.
+    // Never poll — a user _write that drops its callback must leave the
+    // process free to exit (e.g. read-stream-encoding's assert-only writable),
+    // not spin setImmediate forever.
+    const tryFinish = () => {
       const s = this._writableState;
+      if (s._finishing) return;
       if (s._destroyed || s.errored) {
         const cbs = s._endCbs || [];
         s._endCbs = [];
@@ -951,9 +996,9 @@ class Writable extends Stream {
         for (const c of cbs) c(e);
         return;
       }
-      if (s.buffered.length > 0 || s.writing) {
-        setImmediate(waitDrain);
-      } else if (this._final) {
+      if (s.buffered.length > 0 || s.writing) return;
+      s._finishing = true;
+      if (this._final) {
         prefinish();
         let called = false;
         this._final((err) => {
@@ -966,8 +1011,9 @@ class Writable extends Stream {
         process.nextTick(finish);
       }
     };
+    this._writableState._tryFinish = tryFinish;
     this._flushBuffered();
-    waitDrain();
+    tryFinish();
     return this;
   }
 
@@ -979,6 +1025,8 @@ class Writable extends Stream {
     this.writable = false;
     if (err) this._writableState.errored = err;
     const s = this._writableState;
+    // a pending end() must settle its callbacks now that the stream is dead
+    if (s.ending && s._tryFinish) s._tryFinish();
     while (s.buffered.length > 0) {
       const entry = s.buffered.shift();
       if (entry.cb) {
