@@ -6,13 +6,47 @@ const assert = require('assert');
 class TestContext {
   constructor(name) {
     this.name = name;
+    this.fullName = name;
     this.diagnostic = (msg) => console.log(`# ${msg}`);
     this.signal = new AbortController().signal;
+    this._restores = [];
+    // per-context mock: spies are auto-restored when this test ends, so
+    // consecutive subtests spying the same method don't stack wrappers
+    this.mock = {
+      fn: (...a) => mock.fn(...a),
+      method: (obj, m, impl) => {
+        const mocked = mock.method(obj, m, impl);
+        this._restores.push(() => { try { mocked.mock.restore(); } catch {} });
+        return mocked;
+      },
+      getter: (obj, p, impl) => {
+        const mocked = mock.getter(obj, p, impl);
+        this._restores.push(() => { try { mocked.mock.restore(); } catch {} });
+        return mocked;
+      },
+      reset() {}, restoreAll() {},
+      get timers() { return mock.timers; },
+    };
   }
   todo(msg) { console.log(`# TODO: ${msg || this.name}`); }
   skip(msg) { console.log(`# SKIP: ${msg || this.name}`); }
   assert = assert;
   plan(n) { this._plan = n; }
+  // subtest: runs inline and sequentially; callers await it. A failing subtest
+  // fails the process (exitCode) but does not throw into the parent, like node:test.
+  test(name, options, fn) {
+    if (typeof name === 'function') { fn = name; name = fn.name || '<anonymous>'; options = {}; }
+    if (typeof options === 'function') { fn = options; options = {}; }
+    if (!fn) fn = () => {};
+    return _runTest(`${this.fullName} > ${name}`, fn, options);
+  }
+  after(fn) { this._restores.push(() => fn(new TestContext(this.name + ':after'))); }
+  beforeEach() {}
+  afterEach() {}
+  _cleanup() {
+    for (const r of this._restores.reverse()) { try { r(); } catch {} }
+    this._restores.length = 0;
+  }
 }
 
 let _exitRegistered = false;
@@ -29,32 +63,44 @@ function _registerExit() {
   });
 }
 
+async function _runTest(name, fn, options) {
+  if (options && options.skip) { console.log(`ok - ${name} # SKIP`); _passed++; return; }
+  if (options && options.todo) { console.log(`ok - ${name} # TODO`); _passed++; return; }
+  const ctx = new TestContext(name);
+  try {
+    let result;
+    if (fn.length >= 2) {
+      // (t, done) callback style: completion is the done() call; a returned
+      // promise rejecting still fails the test.
+      result = new Promise((resolve, reject) => {
+        const done = (err) => { if (err) reject(err); else resolve(); };
+        try {
+          const r = fn(ctx, done);
+          if (r && typeof r.then === 'function') r.catch(reject);
+        } catch (e) { reject(e); }
+      });
+    } else {
+      result = fn(ctx);
+    }
+    if (result && typeof result.then === 'function') await result;
+    _passed++;
+  } catch (e) {
+    _failed++;
+    console.log(`not ok - ${name}`);
+    console.log(`  ${e.stack || e.message || e}`);
+    process.exitCode = 1;
+  } finally {
+    ctx._cleanup();
+  }
+}
+
 async function _drain() {
   if (_running) return;
   _running = true;
   while (_queue.length > 0) {
-    const { name, fn, options } = _queue.shift();
-    if (options && options.skip) {
-      console.log(`ok - ${name} # SKIP`);
-      _passed++;
-      continue;
-    }
-    if (options && options.todo) {
-      console.log(`ok - ${name} # TODO`);
-      _passed++;
-      continue;
-    }
-    const ctx = new TestContext(name);
-    try {
-      const result = fn(ctx);
-      if (result && typeof result.then === 'function') await result;
-      _passed++;
-    } catch (e) {
-      _failed++;
-      console.log(`not ok - ${name}`);
-      console.log(`  ${e.stack || e.message || e}`);
-      process.exitCode = 1;
-    }
+    const { name, fn, options, resolve } = _queue.shift();
+    await _runTest(name, fn, options);
+    if (resolve) resolve();
   }
   _running = false;
 }
@@ -103,8 +149,10 @@ const mock = {
   fn(impl) {
     const calls = [];
     const mockFn = function(...args) {
-      const result = impl ? impl.apply(this, args) : undefined;
-      calls.push({ arguments: args, result, this: this });
+      let result, error;
+      try { result = impl ? impl.apply(this, args) : undefined; }
+      catch (e) { error = e; calls.push({ arguments: args, result: undefined, error, this: this }); throw e; }
+      calls.push({ arguments: args, result, error: undefined, this: this });
       return result;
     };
     mockFn.mock = { calls, callCount() { return calls.length; }, resetCalls() { calls.length = 0; } };

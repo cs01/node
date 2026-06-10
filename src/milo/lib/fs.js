@@ -172,14 +172,20 @@ function _validateWriteData(data) {
   }
 }
 
+// flush must be a boolean (null/undefined allowed and mean false)
+function _validateFlush(v) {
+  if (v != null && typeof v !== 'boolean') throw _ERR_INVALID_ARG_TYPE('options.flush', 'boolean', v);
+}
 function writeFileSync(path, data, options) {
   if (typeof options === 'string') options = { encoding: options };
   const opts = options || {};
   _assertEncoding(opts.encoding);
+  _validateFlush(opts.flush);
   _validateWriteData(data);
   if (typeof path === 'number') {
     const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     if (buf.length > 0) _fdWriteChecked(path, buf, buf.length, 'write');
+    if (opts.flush) module.exports.fsyncSync(path);
     return;
   }
   _validatePath(path, 'path');
@@ -191,6 +197,8 @@ function writeFileSync(path, data, options) {
   try {
     const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     if (buf.length > 0) _fdWriteChecked(fd, buf, buf.length, 'write');
+    // through module.exports so test spies on fs.fsyncSync observe the call
+    if (opts.flush) module.exports.fsyncSync(fd);
   } finally {
     b.close(fd);
   }
@@ -200,6 +208,7 @@ function appendFileSync(path, data, options) {
   if (typeof options === 'string') options = { encoding: options };
   const opts = options || {};
   _assertEncoding(opts.encoding);
+  _validateFlush(opts.flush);
   // validate data BEFORE opening — an invalid type must throw without creating the file.
   _validateWriteData(data);
   // an fd path skips _validatePath (path is a number); only validate real paths.
@@ -207,6 +216,7 @@ function appendFileSync(path, data, options) {
   if (typeof path === 'number') {
     const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : data;
     if (buf.length > 0) _fdWriteChecked(path, buf, buf.length, 'write');
+    if (opts.flush) module.exports.fsyncSync(path);
     return;
   }
   const p = _toPath(path);
@@ -216,6 +226,8 @@ function appendFileSync(path, data, options) {
   try {
     const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.from(data);
     if (buf.length > 0) _fdWriteChecked(fd, buf, buf.length, 'write');
+    // through module.exports so test spies on fs.fsyncSync observe the call
+    if (opts.flush) module.exports.fsyncSync(fd);
   } finally {
     b.close(fd);
   }
@@ -1131,11 +1143,37 @@ function writeFile(path, data, opts, cb) {
   _validateCb(cb);
   const signal = (opts && typeof opts === 'object') ? opts.signal : undefined;
   _validateAbortSignal(signal);
+  const flush = (opts && typeof opts === 'object') ? opts.flush : undefined;
+  _validateFlush(flush);
+  if (flush) {
+    // async flush must go through fs.fsync (not the sync variant inside
+    // writeFileSync) so spies/monkeypatches on fs.fsync observe it
+    const noFlush = { ...opts, flush: false };
+    const after = (err) => { if (err) { cb(err); return; } _flushPath(path, cb); };
+    if (signal) {
+      if (signal.aborted) { process.nextTick(cb, _abortErr(signal)); return; }
+      _asyncSignal(signal, writeFileSync, [path, data, noFlush], after); return;
+    }
+    _async(writeFileSync, [path, data, noFlush], after);
+    return;
+  }
   if (signal) {
     if (signal.aborted) { process.nextTick(cb, _abortErr(signal)); return; }
     _asyncSignal(signal, writeFileSync, [path, data, opts], (err) => cb(err)); return;
   }
   _async(writeFileSync, [path, data, opts], (err) => cb(err));
+}
+
+// fsync a just-written path via a fresh fd: fsync flushes the file (inode),
+// not the fd, so a reopened read fd is equivalent and keeps write paths simple
+function _flushPath(path, cb) {
+  let fd;
+  try {
+    const p = _toPath(path);
+    fd = b.open(p, 0, 0);
+    if (fd < 0) { cb(_fsError('ENOENT', 'open', p)); return; }
+  } catch (e) { cb(e); return; }
+  module.exports.fsync(fd, (er) => { try { b.close(fd); } catch {} cb(er || null); });
 }
 
 function stat(path, opts, cb) {
@@ -1198,7 +1236,16 @@ function appendFile(path, data, opts, cb) {
   _assertEncoding(typeof opts === 'string' ? opts : (opts && opts.encoding));
   _validateWriteData(data);
   if (typeof path !== 'number') _validatePath(path, 'path');
-  _validateCb(cb); _async(appendFileSync, [path, data, opts], (err) => cb(err));
+  _validateCb(cb);
+  const flush = (opts && typeof opts === 'object') ? opts.flush : undefined;
+  _validateFlush(flush);
+  if (flush && typeof path !== 'number') {
+    // see writeFile — flush via async fs.fsync so spies observe it
+    const noFlush = { ...opts, flush: false };
+    _async(appendFileSync, [path, data, noFlush], (err) => { if (err) { cb(err); return; } _flushPath(path, cb); });
+    return;
+  }
+  _async(appendFileSync, [path, data, opts], (err) => cb(err));
 }
 function exists(path, cb) {
   if (typeof cb !== 'function') throw _ERR_INVALID_ARG_TYPE('cb', 'function', cb);
