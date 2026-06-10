@@ -554,7 +554,14 @@ function readSync(fd, buffer, offset, length, position) {
     b.fdSeek(fd, Number(position), 0);
   }
   const result = b.fdRead(fd, length);
-  if (typeof result === 'number') return 0;
+  // fdRead returns a typed array, 0 on EOF, or a negative errno on failure.
+  if (typeof result === 'number') {
+    if (result < 0) {
+      const code = _ERRNO_CODES[-result] || 'EIO';
+      throw _fsError(code, 'read', null, _ERRNO_MSG[code] || 'i/o error');
+    }
+    return 0;
+  }
   const bytes = new Uint8Array(result.buffer || result);
   for (let i = 0; i < bytes.length; i++) buffer[offset + i] = bytes[i];
   return bytes.length;
@@ -648,6 +655,10 @@ function readv(fd, buffers, position, cb) {
     let total = 0;
     for (const buf of buffers) {
       const result = b.fdRead(fd, buf.byteLength);
+      if (typeof result === 'number' && result < 0) {
+        const code = _ERRNO_CODES[-result] || 'EIO';
+        throw _fsError(code, 'read', null, _ERRNO_MSG[code] || 'i/o error');
+      }
       if (typeof result === 'number' || !result) break;
       const bytes = new Uint8Array(result.buffer || result);
       for (let i = 0; i < bytes.length; i++) buf[i] = bytes[i];
@@ -670,6 +681,10 @@ function readvSync(fd, buffers, position) {
   let total = 0;
   for (const buf of buffers) {
     const result = b.fdRead(fd, buf.byteLength);
+    if (typeof result === 'number' && result < 0) {
+      const code = _ERRNO_CODES[-result] || 'EIO';
+      throw _fsError(code, 'read', null, _ERRNO_MSG[code] || 'i/o error');
+    }
     if (typeof result === 'number' || !result) break;
     const bytes = new Uint8Array(result.buffer || result);
     for (let i = 0; i < bytes.length; i++) buf[i] = bytes[i];
@@ -852,173 +867,178 @@ function _streamFd(v) { return (v != null && typeof v === 'object' && v.fd != nu
 let _ReadStream, _WriteStream;
 function _initStreamClasses() {
   if (_ReadStream) return;
-  const { Readable, Writable } = require('stream');
+  const { Readable, Writable, _readableInit, _writableInit } = require('stream');
 
+  // ES5-style constructors (like real Node) so graceful-fs and util.inherits
+  // consumers can do `fs.ReadStream.call(this, ...)` and override prototype
+  // methods — notably `open()`, which the constructor dispatches through `this`.
   // fs streams open asynchronously (via the injectable opts.fs, default to the
   // public fs fns so they're patchable) and emit 'open'/'ready'; _read/_write
   // queue behind 'open' since milo's stream base has no _construct hook.
-  class ReadStream extends Readable {
-    constructor(path, options) {
-      options = _normalizeStreamOpts(options);
-      _assertEncoding(options.encoding);
-      // autoClose:false also disables auto-destroy — after 'end' the stream stays
-      // open (not closed, not destroyed) so the fd can be reused. See read-stream.js.
-      const autoClose = options.autoClose !== undefined ? options.autoClose : true;
-      super({ highWaterMark: options.highWaterMark || 65536, encoding: options.encoding, autoDestroy: autoClose });
-      this.fs = options.fs || module.exports;
-      this.path = path == null ? undefined : path;
-      this.flags = options.flags || 'r';
-      this.mode = options.mode != null ? options.mode : 0o666;
-      _validateStreamFdPath(path, options);
-      _validateStreamStartEnd(options.start, options.end);
-      this.start = options.start;
-      this.end = options.end == null ? Infinity : options.end;
-      this.pos = this.start != null ? this.start : undefined;
-      this.bytesRead = 0;
-      this.closed = false;
-      this.autoClose = autoClose;
-      this._ownFd = options.fd == null;
-      this.fd = options.fd != null ? _streamFd(options.fd) : null;
-      if (globalThis.__ref) globalThis.__ref();
-      this.once('close', () => { this.closed = true; });
-      this._opening = this.fd == null;
-      if (this.fd != null) process.nextTick(() => { this.emit('open', this.fd); this.emit('ready'); });
-      else this.fs.open(this.path, this.flags, this.mode, (er, fd) => {
-        this._opening = false;
-        if (er) { if (this.autoClose) this.destroy(er); else this.emit('error', er); return; }
-        this.fd = fd; this.emit('open', fd); this.emit('ready');
-      });
-    }
-    _read(n) {
-      if (this.fd == null) { this.once('open', () => this._read(n)); return; }
-      // `end` is an inclusive absolute byte offset. Track how many bytes remain
-      // by comparing against bytesRead — works even for non-seekable fds where
-      // pos stays null (position-less reads). See read-stream.js {end:1}.
-      let toRead = n;
-      if (this.end !== Infinity) {
-        // total bytes to deliver = end - start + 1 (inclusive); subtract what we
-        // already read. start defaults to 0 when unset.
-        const remaining = (this.end - (this.start || 0) + 1) - this.bytesRead;
-        toRead = Math.min(n, remaining);
-      }
-      if (toRead <= 0) { this.push(null); return; }
-      const buf = Buffer.alloc(toRead);
-      this.fs.read(this.fd, buf, 0, toRead, this.pos == null ? null : this.pos, (er, bytesRead) => {
-        if (er) { this.destroy(er); return; }
-        if (bytesRead > 0) {
-          this.bytesRead += bytesRead;
-          if (this.pos != null) this.pos += bytesRead;
-          this.push(bytesRead < toRead ? buf.subarray(0, bytesRead) : buf);
-        } else { this.push(null); }
-      });
-    }
-    _destroy(err, cb) {
-      // destroy mid-open: wait for the fd, then close it (don't leak it).
-      if (this.fd == null && this._opening) { this.once('open', () => this._closeFd(err, cb)); return; }
-      this._closeFd(err, cb);
-    }
-    _closeFd(err, cb) {
-      const fd = this.fd;
-      this.fd = null;
-      // Unref the loop the moment we initiate close, not inside the close cb:
-      // a user may monkeypatch fs.close to a fn that drops the callback (see
-      // test-fs-write-stream), which would otherwise leave _activeRefs pinned
-      // and hang the process.
-      if (!this._unrefed) { this._unrefed = true; if (globalThis.__unref) globalThis.__unref(); }
-      if (fd != null && (this._ownFd || this.autoClose)) {
-        this.fs.close(fd, (er) => { cb(er || err); });
-      } else { cb(err); }
-    }
-    close(cb) { if (cb) { if (this.closed || this.destroyed) process.nextTick(cb); else this.once('close', cb); } this.destroy(); }
-    get pending() { return this.fd == null; }
+  function ReadStream(path, options) {
+    if (!(this instanceof ReadStream)) return new ReadStream(path, options);
+    options = _normalizeStreamOpts(options);
+    _assertEncoding(options.encoding);
+    // autoClose:false also disables auto-destroy — after 'end' the stream stays
+    // open (not closed, not destroyed) so the fd can be reused. See read-stream.js.
+    const autoClose = options.autoClose !== undefined ? options.autoClose : true;
+    // _readableInit also runs the Stream/EventEmitter base init
+    _readableInit(this, { highWaterMark: options.highWaterMark || 65536, encoding: options.encoding, autoDestroy: autoClose });
+    this.fs = options.fs || module.exports;
+    this.path = path == null ? undefined : path;
+    this.flags = options.flags || 'r';
+    this.mode = options.mode != null ? options.mode : 0o666;
+    _validateStreamFdPath(path, options);
+    _validateStreamStartEnd(options.start, options.end);
+    this.start = options.start;
+    this.end = options.end == null ? Infinity : options.end;
+    this.pos = this.start != null ? this.start : undefined;
+    this.bytesRead = 0;
+    this.closed = false;
+    this.autoClose = autoClose;
+    this._ownFd = options.fd == null;
+    this.fd = options.fd != null ? _streamFd(options.fd) : null;
+    this.once('close', () => { this.closed = true; });
+    this._opening = this.fd == null;
+    if (this.fd != null) process.nextTick(() => { this.emit('open', this.fd); this.emit('ready'); });
+    else this.open();
+    return this;
   }
+  Object.setPrototypeOf(ReadStream.prototype, Readable.prototype);
+  Object.setPrototypeOf(ReadStream, Readable);
 
-  class WriteStream extends Writable {
-    constructor(path, options) {
-      options = _normalizeStreamOpts(options);
-      _assertEncoding(options.encoding);
-      // autoClose:false also disables auto-destroy — after 'finish' the stream stays
-      // open (not closed) so the fd can be reused. See write-stream-autoclose-option.
-      const autoClose = options.autoClose !== undefined ? options.autoClose : true;
-      super({ highWaterMark: options.highWaterMark, autoDestroy: autoClose });
-      this.fs = options.fs || module.exports;
-      this.path = path == null ? undefined : path;
-      this.flags = options.flags || 'w';
-      this.mode = options.mode != null ? options.mode : 0o666;
-      _validateStreamFdPath(path, options);
-      _validateStreamStartEnd(options.start, undefined);
-      this.start = options.start;
-      this.pos = this.start;
-      this.bytesWritten = 0;
-      this.closed = false;
-      this.autoClose = autoClose;
-      this._ownFd = options.fd == null;
-      this.fd = options.fd != null ? _streamFd(options.fd) : null;
-      if (globalThis.__ref) globalThis.__ref();
-      this.once('close', () => { this.closed = true; });
-      this._opening = this.fd == null;
-      if (this.fd != null) process.nextTick(() => { this.emit('open', this.fd); this.emit('ready'); });
-      else this.fs.open(this.path, this.flags, this.mode, (er, fd) => {
-        this._opening = false;
-        if (er) { if (this.autoClose) this.destroy(er); else this.emit('error', er); return; }
-        this.fd = fd; this.emit('open', fd); this.emit('ready');
-      });
+  ReadStream.prototype.open = function() {
+    this.fs.open(this.path, this.flags, this.mode, (er, fd) => {
+      this._opening = false;
+      if (er) { if (this.autoClose) this.destroy(er); else this.emit('error', er); return; }
+      this.fd = fd; this.emit('open', fd); this.emit('ready');
+    });
+  };
+  ReadStream.prototype._read = function(n) {
+    if (this.fd == null) { this.once('open', () => this._read(n)); return; }
+    // `end` is an inclusive absolute byte offset. Track how many bytes remain
+    // by comparing against bytesRead — works even for non-seekable fds where
+    // pos stays null (position-less reads). See read-stream.js {end:1}.
+    let toRead = n;
+    if (this.end !== Infinity) {
+      // total bytes to deliver = end - start + 1 (inclusive); subtract what we
+      // already read. start defaults to 0 when unset.
+      const remaining = (this.end - (this.start || 0) + 1) - this.bytesRead;
+      toRead = Math.min(n, remaining);
     }
-    _write(chunk, enc, cb) {
-      if (this.fd == null) { this.once('open', () => this._write(chunk, enc, cb)); return; }
-      if (typeof chunk === 'string') chunk = Buffer.from(chunk, enc);
-      this.fs.write(this.fd, chunk, 0, chunk.length, this.pos == null ? null : this.pos, (er, bytes) => {
-        if (er) { cb(er); return; }
-        this.bytesWritten += bytes;
-        if (this.pos != null) this.pos += bytes;
-        cb();
-      });
-    }
-    _writev(chunks, cb) {
-      if (this.fd == null) { this.once('open', () => this._writev(chunks, cb)); return; }
-      const buffers = chunks.map((c) => typeof c.chunk === 'string' ? Buffer.from(c.chunk, c.encoding) : c.chunk);
-      if (typeof this.fs.writev !== 'function') {
-        // no injected writev — write each buffer sequentially via _write
-        let i = 0;
-        const next = (er) => {
-          if (er) return cb(er);
-          if (i >= buffers.length) return cb();
-          this._write(buffers[i++], null, next);
-        };
-        next();
-        return;
-      }
-      this.fs.writev(this.fd, buffers, this.pos == null ? null : this.pos, (er, bytes) => {
-        if (er) { cb(er); return; }
-        this.bytesWritten += bytes;
-        if (this.pos != null) this.pos += bytes;
-        cb();
-      });
-    }
-    _destroy(err, cb) {
-      // destroy mid-open: wait for the fd, then close it (don't leak it).
-      if (this.fd == null && this._opening) { this.once('open', () => this._closeFd(err, cb)); return; }
-      this._closeFd(err, cb);
-    }
-    _closeFd(err, cb) {
-      const fd = this.fd;
-      this.fd = null;
-      if (!this._unrefed) { this._unrefed = true; if (globalThis.__unref) globalThis.__unref(); }
-      if (fd != null && (this._ownFd || this.autoClose)) {
-        this.fs.close(fd, (er) => { cb(er || err); });
-      } else { cb(err); }
-    }
-    close(cb) { if (cb) { if (this.closed || this.destroyed) process.nextTick(cb); else this.once('close', cb); } this.destroy(); }
-    get pending() { return this.fd == null; }
+    if (toRead <= 0) { this.push(null); return; }
+    const buf = Buffer.alloc(toRead);
+    this.fs.read(this.fd, buf, 0, toRead, this.pos == null ? null : this.pos, (er, bytesRead) => {
+      // errorOrDestroy semantics: autoClose:false streams emit 'error' but stay open
+      if (er) { if (this.autoClose) this.destroy(er); else this.emit('error', er); return; }
+      if (bytesRead > 0) {
+        this.bytesRead += bytesRead;
+        if (this.pos != null) this.pos += bytesRead;
+        this.push(bytesRead < toRead ? buf.subarray(0, bytesRead) : buf);
+      } else { this.push(null); }
+    });
+  };
+  ReadStream.prototype._destroy = function(err, cb) {
+    // destroy mid-open: wait for the fd, then close it (don't leak it).
+    if (this.fd == null && this._opening) { this.once('open', () => this._closeFd(err, cb)); return; }
+    this._closeFd(err, cb);
+  };
+  ReadStream.prototype._closeFd = function(err, cb) {
+    const fd = this.fd;
+    this.fd = null;
+    if (fd != null && (this._ownFd || this.autoClose)) {
+      this.fs.close(fd, (er) => { cb(er || err); });
+    } else { cb(err); }
+  };
+  ReadStream.prototype.close = function(cb) { if (cb) { if (this.closed || this.destroyed) process.nextTick(cb); else this.once('close', cb); } this.destroy(); };
+  Object.defineProperty(ReadStream.prototype, 'pending', { configurable: true, get() { return this.fd == null; } });
+
+  function WriteStream(path, options) {
+    if (!(this instanceof WriteStream)) return new WriteStream(path, options);
+    options = _normalizeStreamOpts(options);
+    _assertEncoding(options.encoding);
+    // autoClose:false also disables auto-destroy — after 'finish' the stream stays
+    // open (not closed) so the fd can be reused. See write-stream-autoclose-option.
+    const autoClose = options.autoClose !== undefined ? options.autoClose : true;
+    // _writableInit also runs the Stream/EventEmitter base init
+    _writableInit(this, { highWaterMark: options.highWaterMark, autoDestroy: autoClose });
+    this.fs = options.fs || module.exports;
+    this.path = path == null ? undefined : path;
+    this.flags = options.flags || 'w';
+    this.mode = options.mode != null ? options.mode : 0o666;
+    _validateStreamFdPath(path, options);
+    _validateStreamStartEnd(options.start, undefined);
+    this.start = options.start;
+    this.pos = this.start;
+    this.bytesWritten = 0;
+    this.closed = false;
+    this.autoClose = autoClose;
+    this._ownFd = options.fd == null;
+    this.fd = options.fd != null ? _streamFd(options.fd) : null;
+    this.once('close', () => { this.closed = true; });
+    this._opening = this.fd == null;
+    if (this.fd != null) process.nextTick(() => { this.emit('open', this.fd); this.emit('ready'); });
+    else this.open();
+    return this;
   }
+  Object.setPrototypeOf(WriteStream.prototype, Writable.prototype);
+  Object.setPrototypeOf(WriteStream, Writable);
+
+  WriteStream.prototype.open = function() {
+    this.fs.open(this.path, this.flags, this.mode, (er, fd) => {
+      this._opening = false;
+      if (er) { if (this.autoClose) this.destroy(er); else this.emit('error', er); return; }
+      this.fd = fd; this.emit('open', fd); this.emit('ready');
+    });
+  };
+  WriteStream.prototype._write = function(chunk, enc, cb) {
+    if (this.fd == null) { this.once('open', () => this._write(chunk, enc, cb)); return; }
+    if (typeof chunk === 'string') chunk = Buffer.from(chunk, enc);
+    this.fs.write(this.fd, chunk, 0, chunk.length, this.pos == null ? null : this.pos, (er, bytes) => {
+      if (er) { cb(er); return; }
+      this.bytesWritten += bytes;
+      if (this.pos != null) this.pos += bytes;
+      cb();
+    });
+  };
+  WriteStream.prototype._writev = function(chunks, cb) {
+    if (this.fd == null) { this.once('open', () => this._writev(chunks, cb)); return; }
+    const buffers = chunks.map((c) => typeof c.chunk === 'string' ? Buffer.from(c.chunk, c.encoding) : c.chunk);
+    if (typeof this.fs.writev !== 'function') {
+      // no injected writev — write each buffer sequentially via _write
+      let i = 0;
+      const next = (er) => {
+        if (er) return cb(er);
+        if (i >= buffers.length) return cb();
+        this._write(buffers[i++], null, next);
+      };
+      next();
+      return;
+    }
+    this.fs.writev(this.fd, buffers, this.pos == null ? null : this.pos, (er, bytes) => {
+      if (er) { cb(er); return; }
+      this.bytesWritten += bytes;
+      if (this.pos != null) this.pos += bytes;
+      cb();
+    });
+  };
+  WriteStream.prototype._destroy = function(err, cb) {
+    // destroy mid-open: wait for the fd, then close it (don't leak it).
+    if (this.fd == null && this._opening) { this.once('open', () => this._closeFd(err, cb)); return; }
+    this._closeFd(err, cb);
+  };
+  WriteStream.prototype._closeFd = function(err, cb) {
+    const fd = this.fd;
+    this.fd = null;
+    if (fd != null && (this._ownFd || this.autoClose)) {
+      this.fs.close(fd, (er) => { cb(er || err); });
+    } else { cb(err); }
+  };
+  WriteStream.prototype.close = function(cb) { if (cb) { if (this.closed || this.destroyed) process.nextTick(cb); else this.once('close', cb); } this.destroy(); };
+  Object.defineProperty(WriteStream.prototype, 'pending', { configurable: true, get() { return this.fd == null; } });
 
   _ReadStream = ReadStream;
   _WriteStream = WriteStream;
-  // expose the class prototypes on the public constructor functions so both
-  // `new fs.ReadStream()` and legacy `fs.ReadStream()` (no new) yield real
-  // instances, and `x instanceof fs.ReadStream` holds.
-  ReadStreamCtor.prototype = ReadStream.prototype;
-  WriteStreamCtor.prototype = WriteStream.prototype;
   // Node exposes autoClose as a prototype getter that throws ERR_INVALID_THIS when
   // accessed off the bare prototype (no instance). Instances set an own `autoClose`
   // field which shadows this getter, so normal access still works.
@@ -1033,8 +1053,6 @@ function _initStreamClasses() {
 
 function createReadStream(path, opts) { _initStreamClasses(); return new _ReadStream(path, opts); }
 function createWriteStream(path, opts) { _initStreamClasses(); return new _WriteStream(path, opts); }
-function ReadStreamCtor(path, opts) { _initStreamClasses(); return new _ReadStream(path, opts); }
-function WriteStreamCtor(path, opts) { _initStreamClasses(); return new _WriteStream(path, opts); }
 
 // Async callback wrappers — run sync on next tick to match Node.js API shape
 function _validateCb(cb) {
@@ -2039,8 +2057,9 @@ module.exports = {
   promises, assertEncoding, stringToFlags, Utf8Stream,
   constants: internalBinding('constants').fs,
 };
-// ReadStream/WriteStream are real classes (instanceof + prototype work); init
-// lazily to avoid a require('stream') cycle at fs load.
+// ReadStream/WriteStream are ES5-style constructors (instanceof, .call(this),
+// and prototype.open overrides all work); built after module.exports exists
+// since their constructors reference it (injectable this.fs default).
 _initStreamClasses();
-module.exports.ReadStream = ReadStreamCtor;
-module.exports.WriteStream = WriteStreamCtor;
+module.exports.ReadStream = _ReadStream;
+module.exports.WriteStream = _WriteStream;

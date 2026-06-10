@@ -483,9 +483,16 @@ fn fsFdRead(info: *u8, _ud: *u8): void {
             return
         }
         let n = read(fd, buf, size as i64)
-        if n <= 0 {
+        if n < 0 {
             free(buf)
-            ci.retI32(n as i32)
+            // surface errno as a negative value so JS can map EBADF/EIO/etc.
+            let ep = __error()
+            ci.retI32(0 - ep[0])
+            return
+        }
+        if n == 0 {
+            free(buf)
+            ci.retI32(0)
             return
         }
         let ab = iso.arraybufferNew(n)

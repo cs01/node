@@ -100,47 +100,54 @@ Stream.prototype.unpipe = function unpipe(dest) {
   return this;
 };
 
+// Constructor bodies live in standalone init fns so ES5-style inheritance
+// (util.inherits + Readable.call(this, opts), e.g. graceful-fs) can initialize
+// a foreign `this` — class constructors can't be .call()ed.
+function _readableInit(self, opts) {
+  self.readable = true;
+  if (opts) { _validateHWM(opts.highWaterMark, 'highWaterMark'); _validateHWM(opts.readableHighWaterMark, 'readableHighWaterMark'); }
+  const _isDuplex = self instanceof Duplex;
+  const _rOM = opts ? (opts.readableObjectMode != null ? opts.readableObjectMode : !!opts.objectMode) : false;
+  const _rDefaultHWM = _rOM ? _defaultObjectHWM : _defaultHWM;
+  let _rHWM = _rDefaultHWM;
+  if (opts) {
+    if (opts.highWaterMark != null) _rHWM = opts.highWaterMark;
+    else if (_isDuplex && opts.readableHighWaterMark != null) _rHWM = opts.readableHighWaterMark;
+  }
+  self._readableState = {
+    readable: true,
+    flowing: null, ended: false, buffer: [], length: 0,
+    highWaterMark: _rHWM,
+    objectMode: _rOM,
+    encoding: null,
+    pipes: [],
+    errorEmitted: false, errored: null,
+    reading: false, readingMore: false,
+    needReadable: false, emittedReadable: false,
+    resumeScheduled: false, readableListening: false,
+    awaitDrainWriters: null,
+    _destroyed: false,
+    autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true,
+    endEmitted: false,
+  };
+  if (opts && opts.encoding) self.setEncoding(opts.encoding);
+  if (opts && opts.defaultEncoding !== undefined) {
+    if (!Buffer.isEncoding(opts.defaultEncoding)) throw _ERR_UNKNOWN_ENCODING(opts.defaultEncoding);
+    self._readableState.defaultEncoding = opts.defaultEncoding;
+  }
+  if (opts && opts.read) self._read = opts.read;
+  if (opts && opts.destroy) self._destroy = opts.destroy;
+  if (opts && opts.signal) {
+    const signal = opts.signal;
+    if (signal.aborted) self.destroy(new DOMException('The operation was aborted', 'AbortError'));
+    else signal.addEventListener('abort', () => self.destroy(new DOMException('The operation was aborted', 'AbortError')), { once: true });
+  }
+}
+
 class Readable extends Stream {
   constructor(opts) {
     super();
-    this.readable = true;
-    if (opts) { _validateHWM(opts.highWaterMark, 'highWaterMark'); _validateHWM(opts.readableHighWaterMark, 'readableHighWaterMark'); }
-    const _isDuplex = this instanceof Duplex;
-    const _rOM = opts ? (opts.readableObjectMode != null ? opts.readableObjectMode : !!opts.objectMode) : false;
-    const _rDefaultHWM = _rOM ? _defaultObjectHWM : _defaultHWM;
-    let _rHWM = _rDefaultHWM;
-    if (opts) {
-      if (opts.highWaterMark != null) _rHWM = opts.highWaterMark;
-      else if (_isDuplex && opts.readableHighWaterMark != null) _rHWM = opts.readableHighWaterMark;
-    }
-    this._readableState = {
-      readable: true,
-      flowing: null, ended: false, buffer: [], length: 0,
-      highWaterMark: _rHWM,
-      objectMode: _rOM,
-      encoding: null,
-      pipes: [],
-      errorEmitted: false, errored: null,
-      reading: false, readingMore: false,
-      needReadable: false, emittedReadable: false,
-      resumeScheduled: false, readableListening: false,
-      awaitDrainWriters: null,
-      _destroyed: false,
-      autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true,
-      endEmitted: false,
-    };
-    if (opts && opts.encoding) this.setEncoding(opts.encoding);
-    if (opts && opts.defaultEncoding !== undefined) {
-      if (!Buffer.isEncoding(opts.defaultEncoding)) throw _ERR_UNKNOWN_ENCODING(opts.defaultEncoding);
-      this._readableState.defaultEncoding = opts.defaultEncoding;
-    }
-    if (opts && opts.read) this._read = opts.read;
-    if (opts && opts.destroy) this._destroy = opts.destroy;
-    if (opts && opts.signal) {
-      const signal = opts.signal;
-      if (signal.aborted) this.destroy(new DOMException('The operation was aborted', 'AbortError'));
-      else signal.addEventListener('abort', () => this.destroy(new DOMException('The operation was aborted', 'AbortError')), { once: true });
-    }
+    _readableInit(this, opts);
   }
 
   _read(_size) {
@@ -723,31 +730,36 @@ Readable.toWeb = function(readable) {
   });
 };
 
+// see _readableInit — same ES5-inheritance escape hatch for the writable side
+function _writableInit(self, opts) {
+  self.writable = true;
+  if (opts) { _validateHWM(opts.highWaterMark, 'highWaterMark'); _validateHWM(opts.writableHighWaterMark, 'writableHighWaterMark'); }
+  const _wOM2 = !!(opts && opts.objectMode);
+  const _wDefaultHWM2 = _wOM2 ? _defaultObjectHWM : _defaultHWM;
+  const _wHWM2 = (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM2;
+  self._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], bufferedRequestCount: 0, objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2, errorEmitted: false, errored: null, autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true, _destroyed: false, getBuffer() { return this.buffered.slice(); } };
+  if (opts && opts.write) self._write = opts.write;
+  if (opts && opts.writev) self._writev = opts.writev;
+  if (opts && opts.destroy) self._destroy = opts.destroy;
+  if (opts && opts.final) self._final = opts.final;
+  if (opts && opts.defaultEncoding !== undefined) {
+    if (opts.defaultEncoding === null) self._defaultEncoding = 'utf8';
+    else if (!Buffer.isEncoding(opts.defaultEncoding)) throw _ERR_UNKNOWN_ENCODING(opts.defaultEncoding);
+    else self._defaultEncoding = opts.defaultEncoding;
+  }
+  if (opts && opts.decodeStrings === false) self._decodeStrings = false;
+  if (opts && opts.objectMode) self._writableState.objectMode = true;
+  if (opts && opts.signal) {
+    const signal = opts.signal;
+    if (signal.aborted) self.destroy(new DOMException('The operation was aborted', 'AbortError'));
+    else signal.addEventListener('abort', () => self.destroy(new DOMException('The operation was aborted', 'AbortError')), { once: true });
+  }
+}
+
 class Writable extends Stream {
   constructor(opts) {
     super();
-    this.writable = true;
-    if (opts) { _validateHWM(opts.highWaterMark, 'highWaterMark'); _validateHWM(opts.writableHighWaterMark, 'writableHighWaterMark'); }
-    const _wOM2 = !!(opts && opts.objectMode);
-    const _wDefaultHWM2 = _wOM2 ? _defaultObjectHWM : _defaultHWM;
-    const _wHWM2 = (opts && opts.highWaterMark != null) ? opts.highWaterMark : _wDefaultHWM2;
-    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], bufferedRequestCount: 0, objectMode: _wOM2, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM2, errorEmitted: false, errored: null, autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true, _destroyed: false, getBuffer() { return this.buffered.slice(); } };
-    if (opts && opts.write) this._write = opts.write;
-    if (opts && opts.writev) this._writev = opts.writev;
-    if (opts && opts.destroy) this._destroy = opts.destroy;
-    if (opts && opts.final) this._final = opts.final;
-    if (opts && opts.defaultEncoding !== undefined) {
-      if (opts.defaultEncoding === null) this._defaultEncoding = 'utf8';
-      else if (!Buffer.isEncoding(opts.defaultEncoding)) throw _ERR_UNKNOWN_ENCODING(opts.defaultEncoding);
-      else this._defaultEncoding = opts.defaultEncoding;
-    }
-    if (opts && opts.decodeStrings === false) this._decodeStrings = false;
-    if (opts && opts.objectMode) this._writableState.objectMode = true;
-    if (opts && opts.signal) {
-      const signal = opts.signal;
-      if (signal.aborted) this.destroy(new DOMException('The operation was aborted', 'AbortError'));
-      else signal.addEventListener('abort', () => this.destroy(new DOMException('The operation was aborted', 'AbortError')), { once: true });
-    }
+    _writableInit(this, opts);
   }
 
   pipe() { this.emit('error', new Error('Cannot pipe, not readable')); }
@@ -1024,28 +1036,33 @@ class Writable extends Stream {
   }
 }
 
+// see _readableInit — duplex's writable-side setup, callable on a foreign `this`
+function _duplexInit(self, opts) {
+  self.writable = true;
+  if (opts && opts.readable === false) { self.readable = false; self._readableState.readable = false; }
+  if (opts && opts.writable === false) self.writable = false;
+  if (opts) _validateHWM(opts.writableHighWaterMark, 'writableHighWaterMark');
+  self.allowHalfOpen = opts && opts.allowHalfOpen !== undefined ? opts.allowHalfOpen : true;
+  const _wOM = opts ? (opts.writableObjectMode != null ? opts.writableObjectMode : !!opts.objectMode) : false;
+  const _wDefaultHWM = _wOM ? _defaultObjectHWM : _defaultHWM;
+  let _wHWM = _wDefaultHWM;
+  if (opts) {
+    if (opts.highWaterMark != null) _wHWM = opts.highWaterMark;
+    else if (opts.writableHighWaterMark != null) _wHWM = opts.writableHighWaterMark;
+  }
+  self._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM, errorEmitted: false, errored: null, autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true, getBuffer() { return this.buffered.slice(); } };
+  if (opts && opts.write) self._write = opts.write;
+  if (opts && opts.writev) self._writev = opts.writev;
+  if (opts && opts.destroy) self._destroy = opts.destroy;
+  if (opts && opts.final) self._final = opts.final;
+  if (opts && opts.defaultEncoding) self._defaultEncoding = opts.defaultEncoding;
+  if (opts && opts.decodeStrings === false) self._decodeStrings = false;
+}
+
 class Duplex extends Readable {
   constructor(opts) {
     super(opts);
-    this.writable = true;
-    if (opts && opts.readable === false) { this.readable = false; this._readableState.readable = false; }
-    if (opts && opts.writable === false) this.writable = false;
-    if (opts) _validateHWM(opts.writableHighWaterMark, 'writableHighWaterMark');
-    this.allowHalfOpen = opts && opts.allowHalfOpen !== undefined ? opts.allowHalfOpen : true;
-    const _wOM = opts ? (opts.writableObjectMode != null ? opts.writableObjectMode : !!opts.objectMode) : false;
-    const _wDefaultHWM = _wOM ? _defaultObjectHWM : _defaultHWM;
-    let _wHWM = _wDefaultHWM;
-    if (opts) {
-      if (opts.highWaterMark != null) _wHWM = opts.highWaterMark;
-      else if (opts.writableHighWaterMark != null) _wHWM = opts.writableHighWaterMark;
-    }
-    this._writableState = { ended: false, ending: false, finished: false, corked: 0, buffered: [], objectMode: _wOM, needDrain: false, writing: false, length: 0, highWaterMark: _wHWM, errorEmitted: false, errored: null, autoDestroy: opts && opts.autoDestroy !== undefined ? !!opts.autoDestroy : true, getBuffer() { return this.buffered.slice(); } };
-    if (opts && opts.write) this._write = opts.write;
-    if (opts && opts.writev) this._writev = opts.writev;
-    if (opts && opts.destroy) this._destroy = opts.destroy;
-    if (opts && opts.final) this._final = opts.final;
-    if (opts && opts.defaultEncoding) this._defaultEncoding = opts.defaultEncoding;
-    if (opts && opts.decodeStrings === false) this._decodeStrings = false;
+    _duplexInit(this, opts);
   }
 
   get destroyed() { return !!((this._readableState && this._readableState._destroyed) || (this._writableState && this._writableState._destroyed)); }
@@ -1096,26 +1113,31 @@ Object.getOwnPropertyNames(Writable.prototype).forEach(method => {
   }
 });
 
+// see _readableInit — transform state setup, callable on a foreign `this`
+function _transformInit(self, opts) {
+  // Couple readable backpressure to the writable side (Node's algorithm):
+  // hold the write callback until the readable side is read, so a full
+  // readable buffer makes write() return false instead of accepting forever.
+  self._transformState = { transforming: false, writechunk: null, writeencoding: null, writecb: null, needTransform: false };
+  if (opts && opts.transform) self._transform = opts.transform;
+  if (opts && typeof opts.flush === 'function') self._flush = opts.flush;
+  if (opts && typeof opts.final === 'function') self._final = opts.final;
+  self.on('prefinish', () => {
+    if (typeof self._flush === 'function' && !self.destroyed) {
+      self._flush((err, data) => {
+        if (data != null) self.push(data);
+        if (!err) self.push(null);
+      });
+    } else {
+      self.push(null);
+    }
+  });
+}
+
 class Transform extends Duplex {
   constructor(opts) {
     super(opts);
-    // Couple readable backpressure to the writable side (Node's algorithm):
-    // hold the write callback until the readable side is read, so a full
-    // readable buffer makes write() return false instead of accepting forever.
-    this._transformState = { transforming: false, writechunk: null, writeencoding: null, writecb: null, needTransform: false };
-    if (opts && opts.transform) this._transform = opts.transform;
-    if (opts && typeof opts.flush === 'function') this._flush = opts.flush;
-    if (opts && typeof opts.final === 'function') this._final = opts.final;
-    this.on('prefinish', () => {
-      if (typeof this._flush === 'function' && !this.destroyed) {
-        this._flush((err, data) => {
-          if (data != null) this.push(data);
-          if (!err) this.push(null);
-        });
-      } else {
-        this.push(null);
-      }
-    });
+    _transformInit(this, opts);
   }
 
   _transform(chunk, encoding, cb) { throw _ERR_METHOD_NOT_IMPLEMENTED('_transform()'); }
@@ -1231,17 +1253,32 @@ const promises = {
 };
 
 // Allow calling stream classes without new (Node.js compat)
-function _proxyClass(Cls) {
-  return new Proxy(Cls, { apply(target, _, args) { return new target(...args); } });
+// Calling a stream class as a function either constructs (legacy `Readable(opts)`)
+// or, when `this` is already an instance (ES5 inheritance: util.inherits +
+// `Readable.call(this, opts)`, e.g. graceful-fs, readable-stream consumers),
+// initializes that instance in place via the extracted init fns.
+function _proxyClass(Cls, initInPlace) {
+  return new Proxy(Cls, { apply(target, thisArg, args) {
+    if (initInPlace && thisArg instanceof target) { initInPlace(thisArg, args[0]); return thisArg; }
+    return new target(...args);
+  } });
 }
-const _Readable = _proxyClass(Readable);
-const _Writable = _proxyClass(Writable);
-const _Duplex = _proxyClass(Duplex);
-const _Transform = _proxyClass(Transform);
-const _PassThrough = _proxyClass(PassThrough);
+const _initR = (s, o) => { Stream.call(s); _readableInit(s, o); };
+const _initW = (s, o) => { Stream.call(s); _writableInit(s, o); };
+const _initD = (s, o) => { Stream.call(s); _readableInit(s, o); _duplexInit(s, o); };
+const _initT = (s, o) => { _initD(s, o); _transformInit(s, o); };
+const _Readable = _proxyClass(Readable, _initR);
+const _Writable = _proxyClass(Writable, _initW);
+const _Duplex = _proxyClass(Duplex, _initD);
+const _Transform = _proxyClass(Transform, _initT);
+const _PassThrough = _proxyClass(PassThrough, _initT);
 
 module.exports = Stream;
 module.exports.Stream = Stream;
+// internal: lets fs.js build ES5-style ReadStream/WriteStream (overridable
+// prototype.open, graceful-fs compat) on top of the class-based internals
+module.exports._readableInit = _initR;
+module.exports._writableInit = _initW;
 module.exports.Readable = _Readable;
 module.exports.Writable = _Writable;
 module.exports.Duplex = _Duplex;
