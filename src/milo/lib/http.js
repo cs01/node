@@ -276,6 +276,30 @@ class ServerResponse extends OutgoingMessage {
     socket.on('close', () => { this.emit('close'); });
   }
   _implicitHeader() { this.writeHead(this.statusCode); }
+  // 100-continue: node emits 'checkContinue' instead of 'request' when the client sends
+  // Expect: 100-continue and a listener exists; the handler answers with writeContinue().
+  // Ported from lib/_http_server.js (writeContinue -> writeInformation(100)).
+  writeInformation(statusCode, headers, cb) {
+    if (this._headersSent) { const e = new Error('Cannot write headers after they are sent to the client'); e.code = 'ERR_HTTP_HEADERS_SENT'; throw e; }
+    if (!Number.isInteger(statusCode) || statusCode < 100 || statusCode > 199) {
+      const e = new RangeError(`Invalid status code: ${statusCode}`); e.code = 'ERR_HTTP_INVALID_STATUS_CODE'; throw e;
+    }
+    if (statusCode === 101) { const e = new RangeError(`Invalid status code: ${statusCode}`); e.code = 'ERR_HTTP_INVALID_STATUS_CODE'; throw e; }
+    const statusMessage = STATUS_CODES[statusCode] || 'unknown';
+    let head = `HTTP/1.1 ${statusCode} ${statusMessage}\r\n`;
+    if (headers) {
+      if (Array.isArray(headers)) {
+        for (let i = 0; i < headers.length; i += 2) head += `${headers[i]}: ${headers[i+1]}\r\n`;
+      } else {
+        for (const [k, v] of Object.entries(headers)) head += `${k}: ${v}\r\n`;
+      }
+    }
+    head += '\r\n';
+    // an interim response does NOT set _headersSent — the real response still follows
+    this._socket.write(head, cb);
+    return this;
+  }
+  writeContinue(cb) { this.writeInformation(100, null, cb); this._sent100 = true; return this; }
   writeHead(code, reason, headers) {
     if (typeof reason === 'object' || Array.isArray(reason)) { headers = reason; reason = undefined; }
     code = +code;
@@ -507,7 +531,20 @@ class Server extends EventEmitter {
               if (this._closing || req.headers['connection'] === 'close') socket.destroy();
             });
             try {
+              // Expect: 100-continue -> node emits 'checkContinue' if anyone listens, else
+              // auto-answers 100 and emits 'request' (lib/_http_server.js:1351-1357).
+              const _expect = req.headers['expect'];
+              if (_expect !== undefined && /^\s*100-continue\s*$/i.test(String(_expect))) {
+                res._expect_continue = true;
+                if (this.listenerCount('checkContinue') > 0) {
+                  this.emit('checkContinue', req, res);
+                } else {
+                  res.writeContinue();
+                  this.emit('request', req, res);
+                }
+              } else {
               this.emit('request', req, res);
+              }
             } catch (e) {
               // Node treats an exception from a request handler as an uncaughtException: it
               // does NOT answer 500 and does NOT report it as 'clientError' (that event is
