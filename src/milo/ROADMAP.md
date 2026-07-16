@@ -44,7 +44,7 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | tls        | 18/82     | 21%  | med      | connection lifecycle, error codes |
 | child      | 24/85     | 28%  | med      | **CORRECTED 2026-07-16: 24/85.** my earlier "really 2/85!" was MY OWN ARTIFACT: test_safe_runner.sh sets `ulimit -u 30` but RLIMIT_NPROC is PER-USER and this box has ~283 ambient procs, so every fork/spawn inside every test failed EAGAIN. child is 85/85 fork-dependent. **Measure fork-dependent modules with `--compat --module child all 8 400`.** The recorded 17 was closer to truth than my measurement, and reality is BETTER than recorded — the opposite of the "baselines rot optimistically" story. child.send, spawn edge cases |
 | crypto     | 19/94     | 20%  | med      | ECDH, sign/verify gaps |
-| dgram      | 11/64     | 17%  | low      | bind/send permissions, multicast |
+| dgram      | 12/64     | 19%  | low      | **MEASURED 2026-07-16.** binary corruption FIXED (udp was utf8 in both directions — every non-utf8 byte became U+FFFD on the wire; no test caught it). remaining: IPv4-only binding (tcp.milo udpSocket), no-op ref/unref, multicast |
 | http2      | 27/165    | 16%  | low      | frame codec + HPACK exist; stream/session edge cases |
 | readline   | 2/17      | 11%  | low      | interface, cursor |
 | async      | 1/18      | 5%   | med      | async_hooks createHook tracking (ALS propagation DONE) |
