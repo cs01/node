@@ -587,6 +587,35 @@ node's resets both sides. That is why the readable reset above had to be done by
 net.js. Fixing `_undestroy` properly is probably the right move — but it is stream.js, so
 ladder net+http+timers after.
 
+## 5l. THE LAST 3 SPINS IN THE SUITE — tls.js needs a redesign, not a patch (2026-07-16)
+
+`test-tls-inception`, `test-tls-on-empty-socket`, `test-tls-reuse-host-from-socket` are the
+ONLY spins left in 681 tests (everything else now sleeps). Signature:
+`poll#200 fd=7 filter=-2 eof=false known=true destroyed=false` at **9.5s CPU** — a known
+socket, EVFILT_WRITE re-firing forever on a stalled handshake.
+
+**Cause:** tls.js registers EVFILT_WRITE for the handshake (`:157` client, `:230` server) and
+only removes it on `result === 1` (success). Any other outcome — and a stalled handshake never
+reaches success — leaks the registration onto an always-writable fd.
+
+**MY FIX WAS WRONG. Do not repeat it.** I made the handshake drop WRITE when SSL reports
+WANT_READ. It killed all 3 spins (9.5s -> 0.05s), TLS round-trip stayed green, and it looked
+perfect — but it cost `test-tls-connect-no-host` (PASS -> TIMEOUT). A/B proved it:
+reverting tls.js alone fixed that test; reverting net.js did not. **Why: milo drives the
+handshake from `_onReadable`, which `_pollOnce` invokes for BOTH filters, so the WRITE
+registration is load-bearing as a general wakeup — not merely SSL's WANT_WRITE signal.**
+Trade measured: 3 OOMs eliminated for 1 pass lost. Rejected (pass count must not regress).
+
+**The real fix is node's model:** register READ; write only when SSL asks (WANT_WRITE), using
+the now-available signal from `nm_ssl_connect_continue`/`accept_continue` (2=want_read,
+3=want_write — landed, unused). That means restructuring tls.js's handshake so it does not
+depend on WRITE as a wakeup. tls.js is 269 lines vs node's ~3000; this is a redesign of its
+event wiring, so do it FIRST in a session with the full ladder (net+tls+http) after.
+
+Note `_wantWrite` bookkeeping gotcha if you rebuild it: the flag starts `undefined`, so a
+naive `if (on === !!this._writeRegistered) return;` early-returns on the first
+deregister-while-actually-registered and the fd spins anyway. Set the flag at EVERY pollAdd site.
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
