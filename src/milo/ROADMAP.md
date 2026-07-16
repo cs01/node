@@ -36,8 +36,8 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | timers     | 45/55     | 82%  | low      | **MEASURED 2026-07-16.** the old "51" was stale drift, not a regression (verified identical with and without the lifecycle fixes) |
 | whatwg     | 19/41     | 46%  | med      | URL↔searchParams live-sync, TextDecoder, webstreams |
 | stream     | 75/156    | 48%  | high     | re-tallied 2026-07-15; async-fn map/flatMap, web streams, pipe edge cases |
-| http       | 82/210    | 39%  | high     | **MEASURED 2026-07-16** (old "91" was stale; real pre-fix was 79). 40 timeout + 8 oom — biggest remaining lifecycle pool |
-| net        | 46/106    | 43%  | high     | **MEASURED 2026-07-16** (old "49" was wrong; real pre-fix was 44). Socket DOES extend Duplex already — that roadmap claim is stale. 12 timeout + 1 oom left; see src/milo/lifecycle-probes/PLAYBOOK.md |
+| http       | 85/210    | 40%  | high     | **MEASURED 2026-07-16** (old "91" was stale; real pre-fix 79). lifecycle fixes: 79->85, oom 11->0. 40 timeout left — top blocker is keep-alive socket reuse (req 2 never sent), see lifecycle-probes/PLAYBOOK.md 5a |
+| net        | 46/106    | 43%  | high     | **MEASURED 2026-07-16** (old "49" was wrong; real pre-fix 44). lifecycle fixes: 44->46, oom 3->0. Socket DOES extend Duplex already — that blocker is stale. 13 timeout left; see lifecycle-probes/PLAYBOOK.md |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |
@@ -89,7 +89,14 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 ## high
 
 ### event loop drain / timeout fixes (~414 tests)
-- [ ] net: connections never close, socket 'end' event not firing (6 timeout tests)
+2026-07-16: four real lifecycle bugs found+fixed (see lifecycle-probes/PLAYBOOK.md). ALL OOMs
+in net+http are gone (net 3->0, http 11->0) — every one was a busy-spin to v8 fatal-OOM from a
+stale/orphaned kqueue registration. net 44->46, http 79->85. Remaining timeouts are NOT spins
+(they sleep at ~0.05s cpu); they are missing-feature/logic bugs, chiefly http keep-alive reuse.
+- [x] ~~net: socket 'end' event not firing~~ — STALE: verified firing (probe p09). Real bugs were
+      the liveness model (map membership vs libuv active-handle) + fd-reuse orphaning.
+- [ ] **http keep-alive socket reuse: request 2 is never sent** (playbook 5a) — likely gates a
+      large share of http's 40 timeouts; every multi-request test through the default agent stalls
 - [ ] http: server/client timeout and abort handling (6 timeout tests)
 - [ ] tls: connection lifecycle (4 timeout tests)
 - [ ] cluster: worker wait/disconnect (4 timeout tests)
