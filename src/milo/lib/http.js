@@ -349,6 +349,12 @@ class ServerResponse extends OutgoingMessage {
     }
     const statusMsg = STATUS_CODES[this.statusCode] || 'Unknown';
     let head = `HTTP/1.1 ${this.statusCode} ${statusMsg}\r\n`;
+    // RFC 7231 7.1.1.2 requires a Date on responses; node sends one unless res.sendDate is
+    // set false, honouring an explicit user Date header. `sendDate` was assigned in the
+    // constructor and read by nothing, so milo never sent it at all.
+    if (this.sendDate !== false && this._headers['date'] === undefined) {
+      head += `Date: ${new Date().toUTCString()}\r\n`;
+    }
     for (const [k,v] of Object.entries(this._headers)) {
       if (Array.isArray(v)) { for (const item of v) head += `${k}: ${item}\r\n`; }
       else head += `${k}: ${v}\r\n`;
