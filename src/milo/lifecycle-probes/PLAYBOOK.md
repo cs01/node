@@ -466,6 +466,29 @@ leaves the identical 1 listener milo does. Checking against the oracle before im
 is what caught it; acting on the note would have produced a fix that matched node LESS well.
 **Scoped notes in this file are hypotheses, not findings — re-verify before acting on them.**
 
+## 5i. WHAT'S ACTUALLY LEFT (measured 2026-07-16 end of session)
+
+net 53/106 (5 timeout, 0 oom) · http 93/210 (18 timeout, 0 oom) · probes 9/9.
+The one-line gaps are exhausted. Both remaining pools are concentrated in TWO real features:
+
+**A. DNS lookup in connect — owns ~all 5 remaining net timeouts.** See §5g for the design.
+`connect()` hands the hostname to C, so `'lookup'` never fires and hostname-error messages
+are wrong (test-net-better-error-messages-port-hostname, -connect-options-port,
+-dns-lookup, -dns-error, -dns-custom-lookup). **Do this FIRST in a session** — it makes
+`connect()` async and every net (53) and http (93) pass routes through it.
+
+**B. 100-continue — several http tests.** `checkContinue`/`writeContinue` are absent (zero
+hits in http.js). Server: on `Expect: 100-continue`, emit **'checkContinue'** INSTEAD of
+'request' (if there is a listener; else auto-send 100), and add `res.writeContinue(cb)`
+sending `HTTP/1.1 100 Continue\r\n\r\n`. Client: parse the interim 1xx response WITHOUT
+treating it as the real response, and emit **'continue'** on the request. Blocks at least
+test-http-expect-continue and test-http-write-callbacks (the latter's whole flow is inside
+`server.on('checkContinue')`). Port from lib/_http_server.js + lib/_http_client.js.
+
+Everything else in the http pool looks individually shaped (response-close, outgoing-buffer,
+header-overflow, agent-remove, server-delete-parser). Triage each against
+`./out/Release/node` before assuming it is milo's bug.
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
