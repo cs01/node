@@ -244,6 +244,7 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
       _lcLastDump = _now();
       const socks = net && net.Socket._sockets ? [...net.Socket._sockets.keys()] : [];
       const srvs = net && net.Server._servers ? [...net.Server._servers.keys()] : [];
+      if (globalThis.__lcTrace && globalThis.__lcTrace.length) { _lcLog('TRACE: ' + globalThis.__lcTrace.join(' | ')); globalThis.__lcTrace.length = 0; }
       _lcLog(`iter=${_lcIter} timers=${hasTimers} io=${hasIO} ticks=${hasTicks} imm=${hasImmediates} pclose=${_pendingCloseRefs} workers=${hasWorkers} socks=[${socks}] srvs=[${srvs}]`);
     }
     if (!hasTimers && !hasIO && !hasTicks && !hasImmediates && !hasPendingClose && !hasWorkers) {

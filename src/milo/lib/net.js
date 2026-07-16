@@ -213,7 +213,14 @@ class Socket extends Duplex {
       tcp.close(fd);
       this._fd = -1;
       if (globalThis.__pendingCloseRef) globalThis.__pendingCloseRef();
-      this.once('close', () => { Socket._sockets.delete(fd); if (globalThis.__pendingCloseUnref) globalThis.__pendingCloseUnref(); });
+      this.once('close', () => {
+        // fd numbers are recycled aggressively: close(5) frees 5, and the very next accept()
+        // can hand 5 to a NEW socket before this deferred cleanup runs. Deleting by fd alone
+        // then evicts the new owner's entry, orphaning a live socket — its events stop being
+        // dispatched, 'close' never fires, and the process hangs. Only delete our own entry.
+        if (Socket._sockets.get(fd) === this) Socket._sockets.delete(fd);
+        if (globalThis.__pendingCloseUnref) globalThis.__pendingCloseUnref();
+      });
     }
     cb(err);
   }
@@ -406,7 +413,11 @@ class Server extends EventEmitter {
       tcp.close(fd);
       this._fd = -1;
       if (globalThis.__pendingCloseRef) globalThis.__pendingCloseRef();
-      this.once('close', () => { Server._servers.delete(fd); if (globalThis.__pendingCloseUnref) globalThis.__pendingCloseUnref(); });
+      this.once('close', () => {
+        // Same fd-recycling hazard as Socket._destroy — only evict our own entry.
+        if (Server._servers.get(fd) === this) Server._servers.delete(fd);
+        if (globalThis.__pendingCloseUnref) globalThis.__pendingCloseUnref();
+      });
     }
     process.nextTick(() => this.emit('close'));
     return this;
@@ -431,6 +442,9 @@ function _emitSocketError(sock, e) {
 // in this trace names it. See lifecycle-probes/PLAYBOOK.md.
 // lazy: net.js loads before process.env is populated, so check per-call not at module scope
 function _lcOn() { return !!(process.env && process.env.MILO_LIFECYCLE_DEBUG); }
+// Hot-path trace: an array push, NO syscall. writeSync here is slow enough to make tight
+// lifecycle races vanish (heisenbug); the loop's 500ms dump flushes this later instead.
+function _lcTrace(msg) { if (_lcOn()) { (globalThis.__lcTrace || (globalThis.__lcTrace = [])).push(msg); } }
 let _lcPollEvents = 0;
 function _lcLog(msg) {
   try { require('fs').writeSync(2, `[lc] ${msg}\n`); } catch {}
@@ -468,12 +482,14 @@ function _pollOnce(timeout) {
 
     const sock = Socket._sockets.get(fd);
     if (!sock) {
-      // No socket owns this fd, so nothing can ever consume the event. A writable fd is
-      // essentially always ready, so a stale EVFILT_WRITE re-fires on every pollWait
-      // (level-triggered) and busy-spins the loop until v8 OOMs. Deregister it.
-      // Only WRITE: stdin/IPC/child_process legitimately poll READ on fds that are not in
-      // Socket._sockets and drain them elsewhere, and an idle READ does not re-fire.
-      if (filter === EVFILT_WRITE) { try { tcp.pollRemove(fd, EVFILT_WRITE); } catch {} }
+      // Orphaned registration: no owner, so nothing can ever consume this event, and the
+      // kqueue is level-triggered — a writable fd is always ready and an EOF'd fd is
+      // permanently readable, so it re-fires on every pollWait and spins the loop to a v8
+      // OOM. Deregistering is safe for BOTH filters: every legitimate non-Socket consumer
+      // (stdin, IPC, child_process pipes) registers its fd in Socket._sockets too
+      // (_console_init.js:65, _process_init.js:645, child_process.js:366), so reaching here
+      // means the fd truly has no owner.
+      try { tcp.pollRemove(fd, filter === EVFILT_WRITE ? EVFILT_WRITE : EVFILT_READ); } catch {}
       continue;
     }
 

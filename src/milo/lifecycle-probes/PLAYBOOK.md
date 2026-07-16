@@ -52,6 +52,31 @@ the EV_EOF branch). p01 went from 7.32s CPU + fatal-OOM to 0.03s CPU.
 **Note the loop itself was never the problem** — it correctly sleeps when nothing is
 pending (idle server = 0 iterations). The bug was purely a stale kqueue registration.
 
+## 0a. THE fd-REUSE RACE (H7) — found + fixed 2026-07-16. Root cause of the p04 "flake".
+
+`Socket._destroy` closed the fd immediately but **deferred `Socket._sockets.delete(fd)` to
+the 'close' event**. fd numbers are recycled aggressively — `close(5)` frees 5, and the very
+next `accept()` hands 5 to a NEW socket. When the deferred handler finally ran, it deleted
+the *new* owner's entry. The live server-side socket was orphaned: `_pollOnce` could no
+longer find it, its 'close' never fired, `s.close()` never ran, process hung forever.
+
+Caught by this trace from every hanging run (and never a passing one):
+```
+fd5 startReading | fd5 _destroy | server fd4 acceptable | accept -> 5 | fd5 startReading | emit connection fd5
+```
+Fix: only evict your own entry — `if (Socket._sockets.get(fd) === this) delete(fd)` — in
+BOTH `Socket._destroy` and `Server.close`. p04 went 4/10 → **12/12** (real node: 10/10).
+
+This was also the true source of the orphaned-fd storms (§0, §5c): an orphaned socket's
+registration has no owner left to clean it up. Fix the eviction, and the orphans stop being
+created in the first place.
+
+**TECHNIQUE THAT MATTERED — the heisenbug trap.** This race vanishes under observation:
+`writeSync` per event is slow enough that the fd never gets recycled in the window (6/6
+passed while logging, 4/10 without). If adding a log makes your bug disappear, DO NOT
+conclude it's gone. Trace into an in-memory array (`_lcTrace` in net.js — an array push, no
+syscall) and flush it later from the loop's 500ms dump. Perturb after the race, never during.
+
 ## 0b. THE ARCHITECTURAL BUG (H6) — found + fixed 2026-07-16
 
 **Milo counted "socket exists in `Socket._sockets`" as "keeps the loop alive". Node/libuv
