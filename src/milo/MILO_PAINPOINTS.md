@@ -135,13 +135,72 @@ documented index enum) instead of bare positional arrays would prevent off-by-on
 
 ---
 
+## 8. `extern struct` layout is an unverified claim — wrong offsets fail SILENTLY
+
+**Status 2026-07-16.** The one that bites every Milo user, not just this port.
+
+**Symptom.** `extern struct` reads as though the compiler knows the C type's layout. It does not —
+it's an assertion the compiler takes on faith. Get a field's order/type/size wrong and there is no
+error and no crash: the read lands on a *neighbouring field* and returns plausible garbage. This is
+the worst failure shape available — looks safe, fails silently, corrupts data quietly.
+
+**Repro.** Declare a struct with one field's type wrong (`st_ino: u32` instead of `u64`). Everything
+after it shifts by 4 bytes. `stat().size` returns some other field's bytes. Compiles clean, runs,
+returns wrong numbers forever. Nothing on the Milo side can catch it — Milo never sees `<sys/stat.h>`.
+
+**Why it's worse than it looks.** The workaround requires you to (a) already know the trap exists,
+and (b) have a C compilation unit in your build to put `_Static_assert(offsetof(...))` in. A pure-Milo
+program has neither. We only found it here because this port happens to have `entry.c`.
+
+**What we did (node-milo, commits 5c28a8f5d93 + aea032fc35c).** Hand-wrote 23 `_Static_assert`s in
+`entry.c` guarding `Stat`/`Timespec`/`Timeval`/`Rusage` — C sees the real headers, so a drifted layout
+now breaks the build with a named error. Verified the guard bites by deliberately breaking an offset.
+This works but it does NOT generalize: it's manual, opt-in, per-struct, per-field, and unavailable to
+anyone without a C file. Nothing warns when a *new* `extern struct` ships with no guard.
+
+**Fixes, cheapest first:**
+
+1. **Docs** (~1hr) — the `extern struct` section must state plainly that layout is unchecked and a wrong
+   field silently reads garbage. Right now nothing warns you. Even node-milo's own CLAUDE.md presents
+   `extern struct` as the *safe* option vs manual offsets — true for readability, silent on verification.
+2. **Compiler-emitted layout guards** (~1-2 days) — best cost/benefit. Let the user annotate:
+   ```milo
+   #[c_layout("struct stat", "sys/stat.h")]
+   extern struct Stat { st_dev: i32, ... }
+   ```
+   Compiler computes each field's offset (it already does this for codegen), emits a throwaway C TU of
+   `_Static_assert(offsetof(struct stat, st_dev) == 0, ...)`, and compiles it with the system cc as part
+   of the build. Turns a faith-based claim into a compile-time-checked one, for every user, with no C
+   file of their own. Field names already match in practice; annotation carries the header + C type name.
+3. **`@cImport`-style header ingestion** (weeks) — derive the layout from the header, delete the
+   hand-transcription entirely. What zig does. Correct endgame, big lift. #2 gets ~90% of the safety
+   for ~5% of the work, and is a stepping stone (same offset-computing machinery).
+
+**Adjacent.** Same faith-based hole applies to `extern fn` decls: node-milo has **341** hand-written
+extern signatures, none checked against the real symbol. A wrong arity/type is UB that no `unsafe`
+marker would flag — the mistake is in the *description* of the boundary, not the crossing of it.
+`#[c_layout]`-style checking could extend to signatures (`_Static_assert(sizeof(&fn) ...)`-ish, or
+just emitting a C TU that takes the function's address at the declared type — a mismatched decl then
+fails to compile). Lower priority than structs; scalar ABI mismatches are usually loud-ish, struct
+layout drift is always silent.
+
+**Related.** `unsafe` correctly does NOT cover this (it tracks memory *provenance*, not layout claims
+or side effects) — which is itself worth a docs note, since "no unsafe" reads as "verified" to newcomers.
+
+---
+
 ## Summary priority for the language/tooling agent
 
-1. **Parse error quality** (#1, #2) — source line + caret + "expected" set. Biggest daily friction.
-2. **JS error stack attribution** (#6) — biggest *correctness* blocker; causes hours lost on
+1. **`extern struct` layout unverified** (#8) — **silent data corruption**, affects every user of the
+   feature, and the workaround needs a C file most users don't have. Highest *severity* on this list;
+   fix #2 (compiler-emitted guards) is ~1-2 days.
+2. **Parse error quality** (#1, #2) — source line + caret + "expected" set. Biggest daily friction.
+   [RESOLVED]
+3. **JS error stack attribution** (#6) — biggest *correctness* blocker; causes hours lost on
    non-reproducible-in-isolation failures.
-3. **`unsafe` redundancy lint** (#3) — removes guess-and-rebuild cycles.
-4. Build failure summarization (#4), native-rebuild signaling (#5), struct returns (#7) — nice-to-haves.
+4. **`unsafe` redundancy lint** (#3) — removes guess-and-rebuild cycles. [RESOLVED — shipped; used it
+   to strip 91 redundant `unsafe` from node-milo, commit 489fbd941dc. Worked exactly as asked.]
+5. Build failure summarization (#4), native-rebuild signaling (#5), struct returns (#7) — nice-to-haves.
 
-None of these are blockers for *shipping* features (I've landed ~20 fs commits this session).
-They're velocity + debuggability taxes. #1 and #6 are where an hour here and there keeps going.
+Most of these are velocity + debuggability taxes, not shipping blockers. **#8 is the exception** — it's
+a correctness/silent-corruption issue in a feature the docs actively recommend.
