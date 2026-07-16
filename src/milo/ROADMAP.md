@@ -40,7 +40,7 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | net        | 56/106    | 53%  | high     | **MEASURED 2026-07-16.** pre-session 44 (oom 3, timeout 12). session: **44->56, oom 3->0, timeout 12->4**. Socket DOES extend Duplex already — that blocker is stale. dns-lookup lever DONE. remaining 4 timeouts: write-slow, listen-fd0, local-address, connect-options-port |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
-| cluster    | 14/54     | 25%  | low      | worker lifecycle |
+| cluster    | 20/54     | 37%  | low      | **MEASURED 2026-07-16 with `--compat --module cluster all 8 400`** (the default `ulimit -u 30` makes every fork fail EAGAIN — see playbook trap 5b). worker-side cluster.worker is now a real Worker (was a bare {id}): 17->20. 18 timeouts left |
 | tls        | 18/82     | 21%  | med      | connection lifecycle, error codes |
 | child      | 24/85     | 28%  | med      | **CORRECTED 2026-07-16: 24/85.** my earlier "really 2/85!" was MY OWN ARTIFACT: test_safe_runner.sh sets `ulimit -u 30` but RLIMIT_NPROC is PER-USER and this box has ~283 ambient procs, so every fork/spawn inside every test failed EAGAIN. child is 85/85 fork-dependent. **Measure fork-dependent modules with `--compat --module child all 8 400`.** The recorded 17 was closer to truth than my measurement, and reality is BETTER than recorded — the opposite of the "baselines rot optimistically" story. child.send, spawn edge cases |
 | crypto     | 19/94     | 20%  | med      | ECDH, sign/verify gaps |
