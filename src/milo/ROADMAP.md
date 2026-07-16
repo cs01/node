@@ -42,7 +42,7 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |
 | tls        | 18/82     | 21%  | med      | connection lifecycle, error codes |
-| child      | 17/85     | 20%  | med      | child.send, spawn edge cases |
+| child      | 2/85      | 2%   | med      | **MEASURED 2026-07-16: really 2/85, not the 17 recorded** (verified identical with and without the session's changes — pre-existing, not a regression). child.send, spawn edge cases |
 | crypto     | 19/94     | 20%  | med      | ECDH, sign/verify gaps |
 | dgram      | 11/64     | 17%  | low      | bind/send permissions, multicast |
 | http2      | 27/165    | 16%  | low      | frame codec + HPACK exist; stream/session edge cases |
