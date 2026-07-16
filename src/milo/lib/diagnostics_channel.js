@@ -128,6 +128,7 @@ class TracingChannel {
   traceCallback(fn, position, ctx, thisArg, ...args) {
     if (ctx === undefined) ctx = {};
     const origCb = args[position];
+    if (typeof origCb !== 'function') { const e = new TypeError('The "callback" argument must be of type function. Received ' + (origCb === null ? 'null' : typeof origCb)); e.code = 'ERR_INVALID_ARG_TYPE'; throw e; }
     const self = this;
     args[position] = function(...cbArgs) {
       if (cbArgs[0]) { ctx.error = cbArgs[0]; self.error.publish(ctx); }
