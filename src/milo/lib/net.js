@@ -283,11 +283,17 @@ class Socket extends Duplex {
     // code writes right after connect(). Node buffers those writes; rejecting them with
     // 'Socket is closed' broke every write-before-connect caller. Park in the same slot the
     // EAGAIN path uses and flush from _onConnected.
-    if (this._fd < 0 && this._connecting) {
+    // Park ANY write issued before the connection is up. connect() is ALWAYS async
+    // (EINPROGRESS) — http2 writes its preface before 'connect' fires — and since sockets
+    // became genuinely non-blocking that write returns ENOTCONN(-57) instead of blocking
+    // until connected as it used to. Covers both fd<0 (dns still resolving) and fd>=0
+    // (connect in flight). See playbook 5o.
+    if (this._connecting) {
       let b;
       if (Buffer.isBuffer(data)) b = data;
       else if (data instanceof Uint8Array) b = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
       else b = Buffer.from(typeof data === 'string' ? data : String(data), encoding);
+      this._bytesWritten = (this._bytesWritten || 0) + b.length; // dispatched, just not sent yet
       this._preConnectWrites = this._preConnectWrites || [];
       this._preConnectWrites.push({ buf: b, cb });
       return;
@@ -297,6 +303,7 @@ class Socket extends Duplex {
     if (Buffer.isBuffer(data)) buf = data;
     else if (data instanceof Uint8Array) buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     else buf = Buffer.from(typeof data === 'string' ? data : String(data), encoding);
+    this._bytesWritten = (this._bytesWritten || 0) + buf.length; // dispatched
     this._sendFrom(buf, 0, cb);
   }
 
@@ -316,7 +323,6 @@ class Socket extends Duplex {
       }
       if (n < 0) { this._pendingWrite = null; cb(_writeError(n)); return; }
       offset += n;
-      this._bytesWritten = (this._bytesWritten || 0) + n;
     }
     this._pendingWrite = null;
     cb();
@@ -455,7 +461,22 @@ class Socket extends Duplex {
   get connecting() { return this._connecting; }
 
   get bytesRead() { return this._bytesRead || 0; }
-  get bytesWritten() { if (this._fd === undefined) return undefined; return this._bytesWritten || 0; } // undefined on the prototype (no instance fd), like node
+  // node: _bytesDispatched + every chunk still in writableBuffer (lib/net.js:1047). Counting
+  // only bytes that reached the kernel reports 3 instead of 7 for
+  // cork(); write('one'); write('two\n') — the test asserts WHILE corked, so the buffered
+  // chunks must count. NB _writableState.length is not a byte count here; sum the chunks.
+  get bytesWritten() {
+    if (this._fd === undefined) return undefined; // undefined on the prototype, like node
+    let bytes = this._bytesWritten || 0;
+    const buffered = this._writableState && this._writableState.buffered;
+    if (buffered) {
+      for (const el of buffered) {
+        bytes += Buffer.isBuffer(el.chunk) ? el.chunk.length
+               : Buffer.byteLength(el.chunk, el.encoding === 'buffer' ? undefined : el.encoding);
+      }
+    }
+    return bytes;
+  }
 }
 Socket._sockets = new Map();
 
