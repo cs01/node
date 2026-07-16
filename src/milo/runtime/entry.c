@@ -12,6 +12,35 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <signal.h>
+#include <sys/stat.h>
+#include <stddef.h>
+
+// Layout guards for fs.milo's `extern struct Stat`.
+// Milo has no C-header ingestion, so that struct is a hand-transcribed claim about
+// the platform's `struct stat` and nothing on the Milo side can check it — a wrong
+// offset reads a neighbouring field and silently returns garbage. C sees the real
+// header, so it validates the claim here at compile time: if the layout ever drifts
+// (OS update, new arch), the BUILD BREAKS instead of stat() quietly lying.
+// Keep in sync with the field offsets in src/milo/bindings/fs.milo.
+_Static_assert(offsetof(struct stat, st_dev)           ==   0, "Stat.st_dev drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_mode)          ==   4, "Stat.st_mode drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_nlink)         ==   6, "Stat.st_nlink drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_ino)           ==   8, "Stat.st_ino drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_uid)           ==  16, "Stat.st_uid drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_gid)           ==  20, "Stat.st_gid drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_rdev)          ==  24, "Stat.st_rdev drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_atimespec)     ==  32, "Stat.st_atimespec drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_mtimespec)     ==  48, "Stat.st_mtimespec drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_ctimespec)     ==  64, "Stat.st_ctimespec drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_birthtimespec) ==  80, "Stat.st_birthtimespec drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_size)          ==  96, "Stat.st_size drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_blocks)        == 104, "Stat.st_blocks drifted vs fs.milo");
+_Static_assert(offsetof(struct stat, st_blksize)       == 112, "Stat.st_blksize drifted vs fs.milo");
+// Milo's Timespec {tv_sec, tv_nsec} must match the real timespec.
+_Static_assert(offsetof(struct timespec, tv_sec)  == 0, "Timespec.tv_sec drifted vs fs.milo");
+_Static_assert(offsetof(struct timespec, tv_nsec) == 8, "Timespec.tv_nsec drifted vs fs.milo");
+// fs.milo stats into a fixed [u8; 256] scratch buffer — it must hold a whole struct stat.
+_Static_assert(sizeof(struct stat) <= 256, "struct stat outgrew fs.milo's 256-byte statBuf");
 
 extern int milo_node_main(int argc, char** argv);
 extern char **environ;
