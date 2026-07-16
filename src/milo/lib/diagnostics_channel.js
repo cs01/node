@@ -53,7 +53,12 @@ class Channel {
 
   publish(message) {
     const subs = this._subscribers.slice();
-    for (const fn of subs) fn(message, this.name);
+    for (const fn of subs) {
+      // a throwing subscriber must not stop later subscribers or the publisher —
+      // surface it asynchronously as an uncaughtException (node semantics).
+      try { fn(message, this.name); }
+      catch (e) { process.nextTick(() => { throw e; }); }
+    }
   }
 }
 
