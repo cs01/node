@@ -409,7 +409,9 @@
     // decodeURIComponent which throws). Serializer emits '+' for space.
     // WHATWG USVString coercion: toString-hint (so {toString} throws before valueOf),
     // and Symbols throw (String(sym) does NOT throw in this V8, unlike spec ToString).
-    const _toStr = (v) => { if (typeof v === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string'); return String(v); };
+    // USVString: also replace lone surrogates with U+FFFD ON STORE (node normalizes
+    // input, so iterating back yields the replacement char, not the raw surrogate).
+    const _toStr = (v) => { if (typeof v === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string'); return String(v).replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�'); };
     // Branded iterator so .next.call(wrongThis) throws ERR_INVALID_THIS like Node.
     const _spIterBrand = new WeakSet();
     // Shared iterator prototype so BOTH the iterator and its prototype carry the
