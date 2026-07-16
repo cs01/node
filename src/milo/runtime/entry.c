@@ -407,12 +407,19 @@ long long nm_ssl_connect_start(int fd, const char* hostname) {
 }
 
 // Continue non-blocking SSL handshake. Returns: 1=done, 0=want_read/write, -1=error
+// 1 = handshake complete, 2 = WANT_READ, 3 = WANT_WRITE, -1 = error.
+// It used to collapse WANT_READ and WANT_WRITE into 0, which left the JS layer unable to
+// know whether SSL was waiting to write. tls.js therefore kept EVFILT_WRITE registered for
+// the whole handshake — and a connected socket is essentially always writable, so a stalled
+// handshake re-fired every poll and spun the loop to a v8 OOM. (0 is still accepted by
+// callers that treat any non-1/-1 as "keep waiting".)
 int nm_ssl_connect_continue(long long ssl_ptr) {
     SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
     int ret = SSL_do_handshake(ssl);
     if (ret == 1) return 1;
     int err = SSL_get_error(ssl, ret);
-    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) return 0;
+    if (err == SSL_ERROR_WANT_READ) return 2;
+    if (err == SSL_ERROR_WANT_WRITE) return 3;
     return -1;
 }
 
@@ -516,12 +523,14 @@ long long nm_ssl_accept_new(long long ctx_ptr, int fd) {
 }
 
 // Continue SSL handshake (accept side). Returns: 1=done, 0=want_read/want_write, -1=error
+// Same contract as nm_ssl_connect_continue: 1 = done, 2 = WANT_READ, 3 = WANT_WRITE, -1 = error.
 int nm_ssl_accept_continue(long long ssl_ptr) {
     SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
     int ret = SSL_do_handshake(ssl);
     if (ret == 1) return 1;
     int err = SSL_get_error(ssl, ret);
-    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) return 0;
+    if (err == SSL_ERROR_WANT_READ) return 2;
+    if (err == SSL_ERROR_WANT_WRITE) return 3;
     return -1;
 }
 

@@ -686,6 +686,18 @@ function _pollOnce(timeout) {
       continue;
     }
 
+    // A WRITE event that reached here is wanted by nobody: the socket is not connecting,
+    // has no parked write, and is not mid-TLS-handshake (those branches are above and
+    // `continue`). A connected socket is essentially always writable, so leaving the
+    // registration in a level-triggered kqueue re-fires it every poll — this is the last
+    // spin class in the suite (tls handshake paths register EVFILT_WRITE and only remove it
+    // on success, so any other exit leaks it). Deregister; nothing can consume it.
+    if (filter === EVFILT_WRITE) {
+      try { tcp.pollRemove(fd, EVFILT_WRITE); } catch {}
+      sock._writeRegistered = false; // keep tls.js's _wantWrite bookkeeping honest
+      continue;
+    }
+
     if (filter === EVFILT_READ) {
       try { sock._onReadable(); } catch (e) { _emitSocketError(sock, e); }
     }
