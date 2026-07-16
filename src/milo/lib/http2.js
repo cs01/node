@@ -184,9 +184,10 @@ class Http2Session extends EventEmitter {
     if (type === constants.NGHTTP2_SESSION_CLIENT) socket.write(F.PREFACE);
     this._send(F.serializeFrame(F.FRAME.SETTINGS, 0, 0, F.packSettings({ [F.SETTINGS.INITIAL_WINDOW_SIZE]: 0x7fffffff, [F.SETTINGS.ENABLE_PUSH]: 0 })));
   }
-  _send(buf) { if (this.socket && !this.socket.destroyed) this.socket.write(buf); }
+  _send(buf) { if (this._timeoutMs > 0) this._armTimeout(); if (this.socket && !this.socket.destroyed) this.socket.write(buf); }
 
   _onData(chunk) {
+    if (this._timeoutMs > 0) this._armTimeout(); // inbound traffic resets the idle timer
     this._buf = this._buf.length ? Buffer.concat([this._buf, chunk]) : chunk;
     if (!this._gotPreface) {
       if (this._buf.length < F.PREFACE.length) return;
@@ -316,6 +317,7 @@ class Http2Session extends EventEmitter {
   close(cb) { this.closed = true; if (cb) this.once('close', cb); this.goaway(0); process.nextTick(() => this.destroy()); }
   destroy(err) {
     if (this.destroyed) return;
+    this._clearTimeout();
     this.destroyed = true;
     if (this.socket && !this.socket.destroyed) this.socket.destroy();
     if (err) this.emit('error', err);
@@ -323,7 +325,29 @@ class Http2Session extends EventEmitter {
   }
   ref() { if (this.socket) this.socket.ref(); return this; }
   unref() { if (this.socket) this.socket.unref(); return this; }
-  setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
+  // Was a stub: registered the callback and armed nothing, so session.setTimeout() could
+  // never fire. Modeled on net.js's socket timeout — node's is an IDLE timeout, so it must
+  // be unref'd (or it pins the loop for the full duration), rearmed on activity (or the
+  // ubiquitous setTimeout(60000, mustNotCall) guard fires spuriously), and cleared on
+  // destroy. Getting any of those wrong costs passing tests; net.js proved it.
+  setTimeout(ms, cb) {
+    if (cb) this.once('timeout', cb);
+    this._timeoutMs = ms;
+    this._armTimeout();
+    return this;
+  }
+  _armTimeout() {
+    if (this._timeoutTimer) { clearTimeout(this._timeoutTimer); this._timeoutTimer = null; }
+    if (this._timeoutMs > 0 && !this.destroyed) {
+      const t = setTimeout(() => { this._timeoutTimer = null; this.emit('timeout'); }, this._timeoutMs);
+      if (t && typeof t.unref === 'function') t.unref();
+      this._timeoutTimer = t;
+    }
+  }
+  _clearTimeout() {
+    if (this._timeoutTimer) { clearTimeout(this._timeoutTimer); this._timeoutTimer = null; }
+    this._timeoutMs = 0;
+  }
 }
 
 class ClientHttp2Session extends Http2Session {
