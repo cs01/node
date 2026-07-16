@@ -458,6 +458,8 @@
     }
     globalThis.URLSearchParams = class URLSearchParams {
       #p = [];
+      _onChange = null; // set by a parent URL so mutations propagate to url.search/.href
+      _notify() { if (this._onChange) this._onChange(); }
       constructor(init) {
         if (init === undefined || init === null) return;
         if (typeof init === 'string') {
@@ -480,15 +482,15 @@
       get(k) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 1) throw _ERR_MISSING_ARGS('name'); k = _toStr(k); const e = this.#p.find(([a]) => a === k); return e ? e[1] : null; }
       getAll(k) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 1) throw _ERR_MISSING_ARGS('name'); k = _toStr(k); return this.#p.filter(([a]) => a === k).map(([, v]) => v); }
       has(k) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 1) throw _ERR_MISSING_ARGS('name'); k = _toStr(k); return this.#p.some(([a]) => a === k); }
-      set(k, v) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 2) throw _ERR_MISSING_ARGS('name', 'value'); k = _toStr(k); v = _toStr(v); let found = false; this.#p = this.#p.filter(([a]) => { if (a === k) { if (!found) { found = true; return true; } return false; } return true; }); if (found) this.#p.find(([a]) => a === k)[1] = v; else this.#p.push([k, v]); }
-      append(k, v) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 2) throw _ERR_MISSING_ARGS('name', 'value'); this.#p.push([_toStr(k), _toStr(v)]); }
-      delete(k, v) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 1) throw _ERR_MISSING_ARGS('name'); k = _toStr(k); if (arguments.length > 1 && v !== undefined) { v = _toStr(v); this.#p = this.#p.filter(([a, b]) => !(a === k && b === v)); } else { this.#p = this.#p.filter(([a]) => a !== k); } }
+      set(k, v) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 2) throw _ERR_MISSING_ARGS('name', 'value'); k = _toStr(k); v = _toStr(v); let found = false; this.#p = this.#p.filter(([a]) => { if (a === k) { if (!found) { found = true; return true; } return false; } return true; }); if (found) this.#p.find(([a]) => a === k)[1] = v; else this.#p.push([k, v]); this._notify(); }
+      append(k, v) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 2) throw _ERR_MISSING_ARGS('name', 'value'); this.#p.push([_toStr(k), _toStr(v)]); this._notify(); }
+      delete(k, v) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (arguments.length < 1) throw _ERR_MISSING_ARGS('name'); k = _toStr(k); if (arguments.length > 1 && v !== undefined) { v = _toStr(v); this.#p = this.#p.filter(([a, b]) => !(a === k && b === v)); } else { this.#p = this.#p.filter(([a]) => a !== k); } this._notify(); }
       forEach(fn, thisArg) { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('callback', 'function', fn); for (const [k, v] of this.#p.slice()) fn.call(thisArg, v, k, this); }
       keys() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); return _spIterator(this.#p.map(([k]) => k)); }
       values() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); return _spIterator(this.#p.map(([, v]) => v)); }
       entries() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); return _spIterator(this.#p.map(([k, v]) => [k, v])); }
       [Symbol.iterator]() { return this.entries(); }
-      sort() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); this.#p.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0); }
+      sort() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); this.#p.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0); this._notify(); }
       toString() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); return this.#p.map(([k, v]) => _formEncode(k) + '=' + _formEncode(v)).join('&'); }
       get size() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); return this.#p.length; }
       get [Symbol.toStringTag]() { return 'URLSearchParams'; }
@@ -508,6 +510,18 @@
         for (const k of ['protocol','username','password','hostname','port','pathname','search','hash','host','origin','href','searchParams']) {
           Object.defineProperty(this, k, { value: this[k], enumerable: false, writable: true, configurable: true });
         }
+        // live-sync: mutating searchParams updates the parent URL's search + href
+        // (wired AFTER construction so the initial parse doesn't fire it).
+        this.searchParams._onChange = () => {
+          const q = this.searchParams.toString();
+          this.search = q ? '?' + q : '';
+          this._rebuildHref();
+        };
+      }
+      _rebuildHref() {
+        let s = this.protocol ? this.protocol + '//' : '';
+        if (this.username) { s += this.username; if (this.password) s += ':' + this.password; s += '@'; }
+        this.href = s + this.host + this.pathname + this.search + this.hash;
       }
       toString() { return this.href; }
       toJSON() { return this.href; }
