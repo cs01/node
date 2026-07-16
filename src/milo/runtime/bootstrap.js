@@ -464,6 +464,18 @@
       #p = [];
       _onChange = null; // set by a parent URL so mutations propagate to url.search/.href
       _notify() { if (this._onChange) this._onChange(); }
+      // reparse contents from a query string WITHOUT firing _onChange — used when the
+      // parent URL's href/search is reassigned and must repopulate this same object.
+      _reset(str) {
+        this.#p = [];
+        str = String(str || '').replace(/^\?/, '');
+        if (str) for (const p of str.split('&')) {
+          if (p === '') continue;
+          const eq = p.indexOf('=');
+          if (eq === -1) this.#p.push([_formDecode(p), '']);
+          else this.#p.push([_formDecode(p.slice(0, eq)), _formDecode(p.slice(eq + 1))]);
+        }
+      }
       constructor(init) {
         if (init === undefined || init === null) return;
         if (typeof init === 'string') {
@@ -499,39 +511,60 @@
       get size() { if (typeof this !== 'object' || this === null || !(#p in this)) throw _ERR_INVALID_THIS('URLSearchParams'); return this.#p.length; }
       get [Symbol.toStringTag]() { return 'URLSearchParams'; }
     };
+    // node exposes the SAME function for [Symbol.iterator] and entries (===).
+    globalThis.URLSearchParams.prototype[Symbol.iterator] = globalThis.URLSearchParams.prototype.entries;
+    // Every component is a backing field (_protocol, _hostname, ...) with a
+    // prototype getter/setter; host/origin are derived. Setting any part rebuilds
+    // href; setting href/search reparses and repopulates the SAME searchParams
+    // object. Prototype accessors are non-enumerable, so {...url} copies nothing
+    // (matches node, where URL props are prototype getters).
     globalThis.URL = class URL {
       constructor(url, base) {
         if (url === undefined || url === null) throw new TypeError(`Invalid URL: ${url}`);
         url = String(url);
         if (base) { const b = typeof base === 'string' ? base : base.href; url = b.replace(/\/$/, '') + '/' + url.replace(/^\//, ''); }
-        const m = url.match(/^([a-z]+):\/\/(?:([^@]+)@)?([^/:?#]+)?(?::(\d+))?(\/[^?#]*)?(\?[^#]*)?(#.*)?$/i);
-        this.protocol = m?.[1] ? m[1] + ':' : ''; this.username = m?.[2]?.split(':')[0] || ''; this.password = m?.[2]?.split(':')[1] || '';
-        this.hostname = m?.[3] || ''; this.port = m?.[4] || ''; this.pathname = m?.[5] || '/'; this.search = m?.[6] || ''; this.hash = m?.[7] || '';
-        this.host = this.hostname + (this.port ? ':' + this.port : ''); this.origin = this.protocol + '//' + this.host;
-        this.href = url; this.searchParams = new URLSearchParams(this.search);
-        // WHATWG URL props are non-enumerable (proto getters in Node); spreading a URL
-        // must NOT copy them ({ ...url } yields no protocol/host/etc). Keep writable.
-        for (const k of ['protocol','username','password','hostname','port','pathname','search','hash','host','origin','href','searchParams']) {
+        this._parse(url);
+        for (const k of ['_protocol','_username','_password','_hostname','_port','_pathname','_search','_hash','_href']) {
           Object.defineProperty(this, k, { value: this[k], enumerable: false, writable: true, configurable: true });
         }
-        // normalize href from the parsed parts (adds the trailing "/" node gives an
-        // empty path, canonicalizes) instead of echoing the raw input string.
+        Object.defineProperty(this, 'searchParams', { value: new URLSearchParams(this._search), enumerable: false, writable: true, configurable: true });
+        // mutating searchParams writes the _search backing directly (NOT the setter,
+        // which would _reset searchParams and clobber the change).
+        this.searchParams._onChange = () => { const q = this.searchParams.toString(); this._search = q ? '?' + q : ''; this._rebuildHref(); };
+      }
+      _parse(url) {
+        const m = url.match(/^([a-z]+):\/\/(?:([^@]+)@)?([^/:?#]+)?(?::(\d+))?(\/[^?#]*)?(\?[^#]*)?(#.*)?$/i);
+        this._protocol = m?.[1] ? m[1] + ':' : ''; this._username = m?.[2]?.split(':')[0] || ''; this._password = m?.[2]?.split(':')[1] || '';
+        this._hostname = m?.[3] || ''; this._port = m?.[4] || ''; this._pathname = m?.[5] || '/'; this._search = m?.[6] || ''; this._hash = m?.[7] || '';
         this._rebuildHref();
-        // live-sync: mutating searchParams updates the parent URL's search + href
-        // (wired AFTER construction so the initial parse doesn't fire it).
-        this.searchParams._onChange = () => {
-          const q = this.searchParams.toString();
-          this.search = q ? '?' + q : '';
-          this._rebuildHref();
-        };
       }
       _rebuildHref() {
-        let s = this.protocol ? this.protocol + '//' : '';
-        if (this.username) { s += this.username; if (this.password) s += ':' + this.password; s += '@'; }
-        this.href = s + this.host + this.pathname + this.search + this.hash;
+        let s = this._protocol ? this._protocol + '//' : '';
+        if (this._username) { s += this._username; if (this._password) s += ':' + this._password; s += '@'; }
+        // a URL with an authority always has at least "/" as its path (node normalizes
+        // an empty pathname to "/" for special schemes), so "http://h" -> "http://h/".
+        const path = this._pathname || (this._hostname ? '/' : '');
+        this._href = s + this.host + path + this._search + this._hash;
       }
-      toString() { return this.href; }
-      toJSON() { return this.href; }
+      get protocol() { return this._protocol; }
+      set protocol(v) { v = String(v); this._protocol = v && !v.endsWith(':') ? v + ':' : v; this._rebuildHref(); }
+      get username() { return this._username; } set username(v) { this._username = String(v); this._rebuildHref(); }
+      get password() { return this._password; } set password(v) { this._password = String(v); this._rebuildHref(); }
+      get hostname() { return this._hostname; } set hostname(v) { this._hostname = String(v); this._rebuildHref(); }
+      get port() { return this._port; } set port(v) { this._port = v === '' || v == null ? '' : String(v); this._rebuildHref(); }
+      get host() { return this._hostname + (this._port ? ':' + this._port : ''); }
+      set host(v) { const i = String(v).indexOf(':'); if (i === -1) { this._hostname = String(v); this._port = ''; } else { this._hostname = v.slice(0, i); this._port = v.slice(i + 1); } this._rebuildHref(); }
+      get pathname() { return this._pathname; }
+      set pathname(v) { v = String(v); this._pathname = v === '' ? '' : (v[0] === '/' ? v : '/' + v); this._rebuildHref(); }
+      get search() { return this._search; }
+      set search(v) { v = String(v); this._search = v === '' ? '' : (v[0] === '?' ? v : '?' + v); this._rebuildHref(); this.searchParams._reset(this._search); }
+      get hash() { return this._hash; }
+      set hash(v) { v = String(v); this._hash = v === '' ? '' : (v[0] === '#' ? v : '#' + v); this._rebuildHref(); }
+      get origin() { return this._protocol && this._hostname ? this._protocol + '//' + this.host : 'null'; }
+      get href() { return this._href; }
+      set href(v) { this._parse(String(v)); this.searchParams._reset(this._search); }
+      toString() { return this._href; }
+      toJSON() { return this._href; }
       get [Symbol.toStringTag]() { return 'URL'; }
     };
   }
