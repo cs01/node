@@ -453,12 +453,18 @@ cost a cycle:** `connect()` reassigns `port` from the options object to `opts.po
 the signal must be captured while the object is still in scope (`_signalOpt`) — reading
 `port.signal` after that point silently yields undefined and the fix does nothing.
 
-test-net-connect-abort-controller still HANGS. It additionally asserts
-`listenerCount(signal, 'abort')` — i.e. the abort listener must be REMOVED when the socket
-closes without aborting. Node uses `addAbortListener`'s disposable (lib/net.js:1720
-`addClientAbortSignalOption`) and disposes it. Our `{once:true}` listener leaks on the
-signal for every socket that closes normally. Fix: keep a reference and remove it on
-'close'/'connect'. Also uses `host:'localhost'` so it may additionally need §5g (dns lookup).
+**DONE — test-net-connect-abort-controller PASSES.** The real gap was that node honors
+`signal` on `new net.Socket({signal})` as well (inherited from Duplex), and a connect-only
+fix left the test's three constructor cases hanging forever. Shared `_addAbortSignal` helper
+now used by both paths. Subtlety worth keeping: a PRE-ABORTED signal must register ZERO
+listeners (nextTick the abort instead), while a live one registers exactly one — the test
+asserts both counts.
+
+**A WRONG GUESS, RECORDED AS A WARNING:** this section previously claimed the blocker was
+leaked abort listeners needing node's disposable pattern. It was wrong — measured, node
+leaves the identical 1 listener milo does. Checking against the oracle before implementing
+is what caught it; acting on the note would have produced a fix that matched node LESS well.
+**Scoped notes in this file are hypotheses, not findings — re-verify before acting on them.**
 
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
