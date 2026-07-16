@@ -36,7 +36,7 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | timers     | 45/55     | 82%  | low      | **MEASURED 2026-07-16.** the old "51" was stale drift, not a regression (verified identical with and without the lifecycle fixes) |
 | whatwg     | 19/41     | 46%  | med      | URL↔searchParams live-sync, TextDecoder, webstreams |
 | stream     | 75/156    | 48%  | high     | re-tallied 2026-07-15; async-fn map/flatMap, web streams, pipe edge cases |
-| http       | 87/210    | 41%  | high     | **MEASURED 2026-07-16** (old "91" was stale; real pre-fix 79). lifecycle+timeout fixes: 79->87, oom 11->0. 38 timeout left. keep-alive reuse was a symptom of the fd-reuse race (fixed). next: IncomingMessage/Server setTimeout are still no-op stubs (http.js:42,526) |
+| http       | 83/210    | 40%  | high     | **MEASURED 2026-07-16, HONEST COUNT.** pre-session 79 (oom 11); lifecycle+timeout fixes took it to 87 (oom 0), then unmasking swallowed handler exceptions revealed ~5 of those were FALSE passes -> 83 real. timeout 40->26: the rest are now readable assertion failures, not opaque hangs. next levers: playbook 5e (#1 variadic-fcntl blocking fds, #3 write-after-end codes) |
 | net        | 48/106    | 45%  | high     | **MEASURED 2026-07-16** (old "49" was wrong; real pre-fix 44). lifecycle+timeout fixes: 44->48, oom 3->0. Socket DOES extend Duplex already — that blocker is stale. 13 timeout left; ~5 are the variadic-fcntl blocking-fd bug (playbook 5e#1) |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
