@@ -446,6 +446,13 @@ class Server extends EventEmitter {
   _onAcceptable() {
     const clientFd = tcp.accept(this._fd);
     if (clientFd < 0) return;
+    // maxConnections was never enforced (the property existed but nothing read it), so a
+    // server accepted unboundedly. Node accepts the fd then immediately closes it — the
+    // peer sees the connection drop, and no 'connection' event fires.
+    if (this.maxConnections > 0 && this._connections >= this.maxConnections) {
+      try { tcp.close(clientFd); } catch {}
+      return;
+    }
     const sock = new Socket({ _fd: clientFd, allowHalfOpen: this.allowHalfOpen });
     sock._server = this;
     const peer = tcp.getPeerName(clientFd);
