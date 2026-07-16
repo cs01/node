@@ -545,13 +545,26 @@
   // V8 without ICU has a broken TextDecoder (Latin-1 only); always override with proper UTF-8
   globalThis.TextDecoder = class TextDecoder {
     constructor(label, opts) {
-      this.encoding = (label || 'utf-8').toLowerCase().replace(/[^a-z0-9-]/g, '');
-      if (this.encoding === 'utf8') this.encoding = 'utf-8';
+      // WHATWG label parsing strips ONLY ASCII whitespace (tab/LF/FF/CR/space);
+      // other whitespace (U+00A0, U+2028, U+2029, ...) stays part of the label and
+      // makes it unsupported, so it must throw rather than be silently scrubbed.
+      let enc = String(label === undefined ? 'utf-8' : label).replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '').toLowerCase();
+      if (enc === '') enc = 'utf-8';
+      if (!/^[a-z0-9._-]+$/.test(enc)) { const e = new RangeError(`The "${label}" encoding is not supported`); e.code = 'ERR_ENCODING_NOT_SUPPORTED'; throw e; }
+      if (enc === 'utf8') enc = 'utf-8';
+      this.encoding = enc;
       this.fatal = !!(opts && opts.fatal);
       this.ignoreBOM = !!(opts && opts.ignoreBOM);
     }
     decode(buf) {
-      if (!buf) return '';
+      if (buf === undefined) return '';
+      // WHATWG: input must be a BufferSource (ArrayBuffer / TypedArray / DataView).
+      if (!(buf instanceof ArrayBuffer || ArrayBuffer.isView(buf) ||
+            (typeof SharedArrayBuffer !== 'undefined' && buf instanceof SharedArrayBuffer))) {
+        const e = new TypeError('The "input" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView. Received ' + (buf === null ? 'null' : typeof buf));
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
+      if (buf.byteLength === 0) return '';
       const a = new Uint8Array(buf.buffer ? buf.buffer : buf, buf.byteOffset || 0, buf.byteLength != null ? buf.byteLength : buf.length);
       if (this.encoding !== 'utf-8') {
         let s = ''; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return s;
