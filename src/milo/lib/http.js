@@ -313,6 +313,21 @@ class ServerResponse extends OutgoingMessage {
       if (Array.isArray(v)) { for (const item of v) head += `${k}: ${item}\r\n`; }
       else head += `${k}: ${v}\r\n`;
     }
+    // keep-alive logic, ported from node's lib/_http_outgoing.js:470-495. Appended here
+    // rather than stored in _headers because that map lowercases its keys, and these two
+    // go on the wire with node's exact casing. An explicit user Connection header wins.
+    if (this._headers['connection'] === undefined) {
+      if (this.shouldKeepAlive) {
+        head += 'Connection: keep-alive\r\n';
+        if (this._keepAliveTimeout > 0) {
+          const timeoutSeconds = Math.floor(this._keepAliveTimeout / 1000);
+          const max = ~~this._maxRequestsPerSocket > 0 ? `, max=${this._maxRequestsPerSocket}` : '';
+          head += `Keep-Alive: timeout=${timeoutSeconds}${max}\r\n`;
+        }
+      } else {
+        head += 'Connection: close\r\n';
+      }
+    }
     head += '\r\n';
     this._socket.write(head);
   }
@@ -366,7 +381,7 @@ class Server extends EventEmitter {
     this._server = null;
     this._listening = false;
     this.timeout = 0;
-    this.keepAliveTimeout = (opts && opts.keepAliveTimeout != null) ? opts.keepAliveTimeout : 5000;
+    this.keepAliveTimeout = (opts && opts.keepAliveTimeout != null) ? opts.keepAliveTimeout : 65000; // node 27 default (lib/_http_server.js:544)
     this.maxHeadersCount = (opts && opts.maxHeadersCount != null) ? opts.maxHeadersCount : 2000;
     this.maxRequestsPerSocket = (opts && opts.maxRequestsPerSocket != null) ? opts.maxRequestsPerSocket : 0;
     this.maxConnections = (opts && opts.maxConnections != null) ? opts.maxConnections : 0;
@@ -470,6 +485,11 @@ class Server extends EventEmitter {
 
             socket._httpActive = true;
             const res = new (this[kServerResponse])(socket);
+            // node derives keep-alive from the request and the server's settings; milo
+            // never wired either up, so no Connection/Keep-Alive header was ever emitted.
+            res.shouldKeepAlive = req.httpVersion !== '1.0' && String(req.headers['connection'] || '').toLowerCase() !== 'close';
+            res._keepAliveTimeout = this.keepAliveTimeout;
+            res._maxRequestsPerSocket = this.maxRequestsPerSocket;
             res.on('finish', () => {
               socket._httpActive = false;
               if (this._closing || req.headers['connection'] === 'close') socket.destroy();

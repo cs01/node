@@ -2,11 +2,23 @@
 
 ## READ FIRST: four traps that will fool you (learned the hard way, 2026-07-16)
 
-1. **Validate every probe against real node before believing it.** `node <probe>` is
-   installed (v25.3.0) and is the ONLY ground truth. Two of the original nine probes
-   asserted the wrong thing: p01 and p02 hang in REAL NODE too (p01's server never reads
-   the buffered data, so 'end' correctly never fires; p02's accepted server-side socket is
-   never unref'd). Milo matched node and I called it a bug. **A "hang" is often correct.**
+1. **Validate every probe against real node — and use the RIGHT node.**
+   **THE ORACLE IS `./out/Release/node` (v27.0.0-pre, built from THIS tree). NOT the `node`
+   on PATH (v25.3.0).** This repo is node **27.0.0** (src/node_version.h); v27 is not
+   released (nvm's newest is 26.x), so the only correct binary is the one already built in
+   out/Release. I used PATH node all session and it silently misled me: three keep-alive
+   tests "fail in real node" only because 25.3.0 predates node 27's `Keep-Alive: timeout=65`
+   default. PATH node is a fine oracle for semantics unchanged 25->27 (most things), but for
+   anything version-specific it is WRONG. Second-best oracle, always correct: the repo's own
+   `lib/*.js` IS node 27's canonical source — port from it rather than inventing.
+   Still true: **a "hang" is often correct** — p01 hangs in real node too (its server never
+   reads the buffered data, so 'end' correctly never fires).
+1b. **A probe that races is not ground truth, in EITHER runtime.** The original p02 unref'd
+   inside the client's connect callback, racing the server's accept: real node returned 124
+   under no load and 0 under load. I sampled it ONCE, wrote "node hangs here" into this file
+   as fact, and then "confirmed" milo matched — two coin flips agreeing. Rewritten to unref
+   only after both ends are established; now node27 and milo agree 5/5 at exit 0. If a probe
+   can race, fix the probe; do not record either outcome as truth.
 2. **`timeout` on this PATH is milo-built and DOES NOT KILL ITS CHILD** — it returns 124
    and leaves the process running. The orphan keeps spinning, and (if you reuse one temp
    file) writes its later OOM into the NEXT probe's log. That fabricated both a phantom

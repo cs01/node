@@ -1,8 +1,10 @@
 #!/bin/bash
 # Event-loop lifecycle probe harness.
 #
-# EXPECT_EXIT is GROUND TRUTH FROM REAL NODE (v25.3.0) — verify with `node <probe>` before
-# changing one. Several probes are SUPPOSED to hang (EXPECT_EXIT=124): an open handle must
+# EXPECT_EXIT is GROUND TRUTH FROM ./out/Release/node (v27.0.0-pre, built from THIS tree) —
+# verify with `ORACLE=1 bash run-probes.sh` or `./out/Release/node <probe>` before changing
+# one. Do NOT use the `node` on PATH: it is v25.3.0, this repo is node 27, and version-skewed
+# behavior (e.g. node 27's Keep-Alive: timeout=65 default) makes it silently wrong. Several probes are SUPPOSED to hang (EXPECT_EXIT=124): an open handle must
 # keep the process alive. 124 here means "still running when the watchdog fired".
 #
 # MAX_CPU is the assertion that matters. A correct hang and a busy-loop-to-OOM both look like
@@ -16,7 +18,10 @@
 #
 # Run: bash src/milo/lifecycle-probes/run-probes.sh
 cd "$(dirname "$0")/../../.."
+# ORACLE=1 runs the probes against the repo-built node instead of milo — use it to
+# re-derive EXPECT_EXIT values from ground truth.
 BIN=${BIN:-./out/Release/milo-node}
+[ -n "$ORACLE" ] && BIN=./out/Release/node
 WALL=${WALL:-6}
 LOGDIR=$(mktemp -d)
 trap 'rm -rf "$LOGDIR"' EXIT
