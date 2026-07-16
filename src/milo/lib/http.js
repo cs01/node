@@ -344,7 +344,10 @@ class ServerResponse extends OutgoingMessage {
       else data = Buffer.from(typeof chunk === 'string' ? chunk : String(chunk), encoding);
       this._socket.write(data.length.toString(16) + '\r\n');
       this._socket.write(data);
-      this._socket.write('\r\n');
+      // cb must ride the LAST piece of the chunk — it was passed to none of the three, so
+      // res.write(data, cb) silently never called back on any chunked response (the default
+      // whenever there is no content-length).
+      this._socket.write('\r\n', cb);
     } else {
       this._socket.write(chunk, encoding, cb);
     }
