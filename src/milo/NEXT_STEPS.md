@@ -89,9 +89,14 @@ returns bare -1 — capture errno, return -errno. Note prior session already did
 dodging an FFI clobber — read that commit (git log --oneline | grep errno) before touching. One
 binding per commit, re-run fs module each time.
 
-## do NOT attempt (big levers, need the human engaged)
+## big lever IN PROGRESS: event-loop lifecycle
 
-- event-loop lifecycle / handle unref / sockets-never-close timeouts (~400 tests — core loop rewrite)
+See `src/milo/lifecycle-probes/PLAYBOOK.md` — self-contained diagnosis+fix guide with probe
+harness, architecture map, ranked hypotheses, instrumentation recipe. Start there before
+any tier above. Probes: `bash src/milo/lifecycle-probes/run-probes.sh`.
+
+## do NOT attempt (other big levers, need the human engaged)
+
 - net.Socket → Duplex refactor
 - http timeout/abort/keep-alive
 - streams: web streams, async-iter edge cases
