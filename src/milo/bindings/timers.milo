@@ -174,7 +174,7 @@ fn timerSleepMs(info: *u8, _ud: *u8): void {
 }
 
 fn timerDrainMicrotasks(_info: *u8, _ud: *u8): void {
-    unsafe { v8c_isolate_run_microtasks(stored_iso) }
+     v8c_isolate_run_microtasks(stored_iso) 
 }
 
 fn nm_init_timers(_iso: *u8, ctx: *u8, exports: i32): void {

@@ -55,21 +55,21 @@ fn osGetHostname(info: *u8, _ud: *u8): void {
 
 fn osGetCpus(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe {
+    
         var n = sysconf(58) as i32
         if n < 1 { n = 1 }
         ci.retI32(n)
-    }
+    
 }
 
 fn osGetPid(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe { ci.retI32(getpid()) }
+     ci.retI32(getpid()) 
 }
 
 fn osGetPpid(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe { ci.retI32(getppid()) }
+     ci.retI32(getppid()) 
 }
 
 fn osGetCpuModel(info: *u8, _ud: *u8): void {
@@ -166,24 +166,24 @@ fn osGetOsRelease(info: *u8, _ud: *u8): void {
 
 fn osSetPriority(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe {
+    
         let pid = ci.i32Arg(0, 0)
         let prio = ci.i32Arg(1, 0)
         ci.retI32(setpriority(0, pid, prio))
-    }
+    
 }
 
 fn osGetPriority(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe {
+    
         let pid = ci.i32Arg(0, 0)
         ci.retI32(getpriority(0, pid))
-    }
+    
 }
 
 fn osUmask(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe {
+    
         if ci.length() > 0 {
             let new_mask = ci.i32Arg(0, -1)
             if new_mask >= 0 {
@@ -195,12 +195,12 @@ fn osUmask(info: *u8, _ud: *u8): void {
         let cur = umask(0)
         umask(cur)
         ci.retU32(cur)
-    }
+    
 }
 
 fn osGetCpuSpeed(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe { ci.retI32(nm_cpu_speed() as i32) }
+     ci.retI32(nm_cpu_speed() as i32) 
 }
 
 fn osGetCpuTimes(info: *u8, _ud: *u8): void {
@@ -281,17 +281,17 @@ fn nm_init_os(_iso: *u8, ctx: *u8, exports: i32): void {
 
 fn osGetUid(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe { ci.retU32(getuid()) }
+     ci.retU32(getuid()) 
 }
 
 fn osGetGid(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe { ci.retU32(getgid()) }
+     ci.retU32(getgid()) 
 }
 
 fn osGetEuid(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe { ci.retU32(geteuid()) }
+     ci.retU32(geteuid()) 
 }
 
 fn osGetMachine(info: *u8, _ud: *u8): void {
@@ -333,7 +333,7 @@ fn osGetUserInfo(info: *u8, _ud: *u8): void {
 
 fn osGetEgid(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe { ci.retU32(getegid()) }
+     ci.retU32(getegid()) 
 }
 
 fn osSetUid(info: *u8, _ud: *u8): void {
@@ -343,7 +343,7 @@ fn osSetUid(info: *u8, _ud: *u8): void {
         ci.retI32(-1)
         return
     }
-    unsafe { ci.retI32(setuid(id as u32)) }
+     ci.retI32(setuid(id as u32)) 
 }
 
 fn osSetGid(info: *u8, _ud: *u8): void {
@@ -353,7 +353,7 @@ fn osSetGid(info: *u8, _ud: *u8): void {
         ci.retI32(-1)
         return
     }
-    unsafe { ci.retI32(setgid(id as u32)) }
+     ci.retI32(setgid(id as u32)) 
 }
 
 fn osSetEuid(info: *u8, _ud: *u8): void {
@@ -363,7 +363,7 @@ fn osSetEuid(info: *u8, _ud: *u8): void {
         ci.retI32(-1)
         return
     }
-    unsafe { ci.retI32(seteuid(id as u32)) }
+     ci.retI32(seteuid(id as u32)) 
 }
 
 fn osSetEgid(info: *u8, _ud: *u8): void {
@@ -373,7 +373,7 @@ fn osSetEgid(info: *u8, _ud: *u8): void {
         ci.retI32(-1)
         return
     }
-    unsafe { ci.retI32(setegid(id as u32)) }
+     ci.retI32(setegid(id as u32)) 
 }
 
 fn osResolveUser(info: *u8, _ud: *u8): void {

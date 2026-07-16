@@ -11,7 +11,7 @@ fn asyncContextGet(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let iso = ci.isolate()
     var slot: i32 = -1
-    unsafe { slot = v8c_isolate_get_continuation_data(iso.ptr) }
+     slot = v8c_isolate_get_continuation_data(iso.ptr) 
     if slot < 0 {
         ci.retUndefined()
     } else {
@@ -26,7 +26,7 @@ fn asyncContextSet(info: *u8, _ud: *u8): void {
     if ci.length() > 0 {
         slot = ci.arg(0).slot
     }
-    unsafe { v8c_isolate_set_continuation_data(iso.ptr, slot) }
+     v8c_isolate_set_continuation_data(iso.ptr, slot) 
 }
 
 fn utilGetOwnNonIndexProperties(info: *u8, _ud: *u8): void {
@@ -104,7 +104,7 @@ fn utilArrayBufferViewHasBuffer(info: *u8, _ud: *u8): void {
     }
     let iso = ci.isolate()
     var r: i32 = 0
-    unsafe { r = v8c_array_buffer_view_has_buffer(iso.ptr, ci.arg(0).slot) }
+     r = v8c_array_buffer_view_has_buffer(iso.ptr, ci.arg(0).slot) 
     ci.retBool(r)
 }
 

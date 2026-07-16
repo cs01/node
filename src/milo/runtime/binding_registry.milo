@@ -17,12 +17,12 @@ extern fn v8c_exception_error(iso: *u8, msg: *u8): i32
 
 // Wrapper so C can call v8c_object_new via function pointer
 fn makeObject(iso: *u8): i32 {
-    unsafe { return v8c_object_new(iso) }
+     return v8c_object_new(iso) 
 }
 
 // Register a binding — called from main.milo at startup
 fn nm_binding_register(name: *u8, init: *u8): void {
-    unsafe { nm_registry_add(name, init) }
+     nm_registry_add(name, init) 
 }
 
 // V8 callback: internalBinding(name)

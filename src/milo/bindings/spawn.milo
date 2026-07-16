@@ -437,7 +437,7 @@ fn writePipeBinding(info: *u8, _ud: *u8): void {
 fn closeFdBinding(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let fd = ci.i32Arg(0, -1)
-    if fd >= 0 { unsafe { close(fd) } }
+    if fd >= 0 {  close(fd)  }
 }
 
 // waitpidNH(pid) → undefined if still running, else { code, signal }.
@@ -485,7 +485,7 @@ fn killPidBinding(info: *u8, _ud: *u8): void {
     // dead pid → -1/ESRCH); discarding it made every kill look successful.
     if pid > 0 {
         var r: i32 = 0
-        unsafe { r = kill(pid, sig) }
+         r = kill(pid, sig) 
         ci.retI32(r)
     } else {
         ci.retI32(-1)
@@ -517,10 +517,10 @@ fn setNonBlockingBinding(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let fd = ci.i32Arg(0, -1)
     if fd < 0 { return }
-    unsafe {
+    
         let fl = fcntl(fd, 3, 0)
         fcntl(fd, 4, fl | 4)
-    }
+    
 }
 
 fn nm_init_spawn(_iso: *u8, ctxPtr: *u8, exports: i32): void {

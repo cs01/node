@@ -83,7 +83,7 @@ fn vmRun(info: *u8, _ud: *u8): void {
     copyProps(iso, mainCtx, targetCtx, sandbox, global)
 
     var need: i32 = -1
-    unsafe { need = codeArg.writeUtf8(iso, 0 as *u8, 0) }
+     need = codeArg.writeUtf8(iso, 0 as *u8, 0) 
     if need < 0 {
         ci.retUndefined()
         return

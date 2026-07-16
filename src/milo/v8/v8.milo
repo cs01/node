@@ -98,11 +98,11 @@ struct TryCatch { ptr: *u8 }
 
 impl CallbackInfo {
     fn length(self: CallbackInfo): i32 {
-        unsafe { return v8c_fci_length(self.ptr) }
+         return v8c_fci_length(self.ptr) 
     }
 
     fn arg(self: CallbackInfo, idx: i32): Value {
-        unsafe { return Value { slot: v8c_fci_arg(self.ptr, idx) } }
+         return Value { slot: v8c_fci_arg(self.ptr, idx) } 
     }
 
     fn isolate(self: CallbackInfo): Isolate {
@@ -114,35 +114,35 @@ impl CallbackInfo {
     }
 
     fn ret(self: CallbackInfo, val: Value): void {
-        unsafe { v8c_fci_return(self.ptr, val.slot) }
+         v8c_fci_return(self.ptr, val.slot) 
     }
 
     fn retI32(self: CallbackInfo, val: i32): void {
-        unsafe { v8c_fci_return_int32(self.ptr, val) }
+         v8c_fci_return_int32(self.ptr, val) 
     }
 
     fn retU32(self: CallbackInfo, val: u32): void {
-        unsafe { v8c_fci_return_uint32(self.ptr, val) }
+         v8c_fci_return_uint32(self.ptr, val) 
     }
 
     fn retF64(self: CallbackInfo, val: f64): void {
-        unsafe { v8c_fci_return_double(self.ptr, val) }
+         v8c_fci_return_double(self.ptr, val) 
     }
 
     fn retBool(self: CallbackInfo, val: i32): void {
-        unsafe { v8c_fci_return_bool(self.ptr, val) }
+         v8c_fci_return_bool(self.ptr, val) 
     }
 
     fn retUndefined(self: CallbackInfo): void {
-        unsafe { v8c_fci_return_undefined(self.ptr) }
+         v8c_fci_return_undefined(self.ptr) 
     }
 
     fn retStr(self: CallbackInfo, str: *u8): void {
-        unsafe { v8c_fci_return_string(self.ptr, str) }
+         v8c_fci_return_string(self.ptr, str) 
     }
 
     fn retStrLen(self: CallbackInfo, str: *u8, len: i32): void {
-        unsafe { v8c_fci_return_string_len(self.ptr, str, len) }
+         v8c_fci_return_string_len(self.ptr, str, len) 
     }
 
     fn i32Arg(self: CallbackInfo, idx: i32, defaultVal: i32): i32 {
@@ -172,67 +172,67 @@ impl CallbackInfo {
 
 impl Isolate {
     fn int32(self: Isolate, val: i32): Value {
-        unsafe { return Value { slot: v8c_int32(self.ptr, val) } }
+         return Value { slot: v8c_int32(self.ptr, val) } 
     }
 
     fn number(self: Isolate, val: f64): Value {
-        unsafe { return Value { slot: v8c_number(self.ptr, val) } }
+         return Value { slot: v8c_number(self.ptr, val) } 
     }
 
     fn string(self: Isolate, data: *u8): Value {
-        unsafe { return Value { slot: v8c_string_utf8(self.ptr, data) } }
+         return Value { slot: v8c_string_utf8(self.ptr, data) } 
     }
 
     fn stringLen(self: Isolate, data: *u8, len: i32): Value {
-        unsafe { return Value { slot: v8c_string_utf8_len(self.ptr, data, len) } }
+         return Value { slot: v8c_string_utf8_len(self.ptr, data, len) } 
     }
 
     fn object(self: Isolate): Value {
-        unsafe { return Value { slot: v8c_object_new(self.ptr) } }
+         return Value { slot: v8c_object_new(self.ptr) } 
     }
 
     fn array(self: Isolate, length: i32): Value {
-        unsafe { return Value { slot: v8c_array_new(self.ptr, length) } }
+         return Value { slot: v8c_array_new(self.ptr, length) } 
     }
 
     fn undefined(self: Isolate): Value {
-        unsafe { return Value { slot: v8c_undefined(self.ptr) } }
+         return Value { slot: v8c_undefined(self.ptr) } 
     }
 
     fn nullVal(self: Isolate): Value {
-        unsafe { return Value { slot: v8c_null(self.ptr) } }
+         return Value { slot: v8c_null(self.ptr) } 
     }
 
     fn trueVal(self: Isolate): Value {
-        unsafe { return Value { slot: v8c_true(self.ptr) } }
+         return Value { slot: v8c_true(self.ptr) } 
     }
 
     fn falseVal(self: Isolate): Value {
-        unsafe { return Value { slot: v8c_false(self.ptr) } }
+         return Value { slot: v8c_false(self.ptr) } 
     }
 
     fn bigintI64(self: Isolate, val: i64): Value {
-        unsafe { return Value { slot: v8c_bigint_i64(self.ptr, val) } }
+         return Value { slot: v8c_bigint_i64(self.ptr, val) } 
     }
 
     fn symbolNew(self: Isolate, desc: *u8): Value {
-        unsafe { return Value { slot: v8c_symbol_new(self.ptr, desc) } }
+         return Value { slot: v8c_symbol_new(self.ptr, desc) } 
     }
 
     fn arraybufferNew(self: Isolate, size: i64): Value {
-        unsafe { return Value { slot: v8c_arraybuffer_new(self.ptr, size) } }
+         return Value { slot: v8c_arraybuffer_new(self.ptr, size) } 
     }
 
     fn uint32arrayNew(self: Isolate, ab: Value, offset: i64, length: i64): Value {
-        unsafe { return Value { slot: v8c_uint32array_new(self.ptr, ab.slot, offset, length) } }
+         return Value { slot: v8c_uint32array_new(self.ptr, ab.slot, offset, length) } 
     }
 
     fn uint8arrayNew(self: Isolate, ab: Value, offset: i64, length: i64): Value {
-        unsafe { return Value { slot: v8c_uint8array_new(self.ptr, ab.slot, offset, length) } }
+         return Value { slot: v8c_uint8array_new(self.ptr, ab.slot, offset, length) } 
     }
 
     fn biguint64arrayNew(self: Isolate, ab: Value, offset: i64, length: i64): Value {
-        unsafe { return Value { slot: v8c_biguint64array_new(self.ptr, ab.slot, offset, length) } }
+         return Value { slot: v8c_biguint64array_new(self.ptr, ab.slot, offset, length) } 
     }
 }
 
@@ -240,43 +240,43 @@ impl Isolate {
 
 impl Value {
     fn isObject(self: Value, iso: Isolate): i32 {
-        unsafe { return v8c_value_is_object(iso.ptr, self.slot) }
+         return v8c_value_is_object(iso.ptr, self.slot) 
     }
 
     fn isFunction(self: Value, iso: Isolate): i32 {
-        unsafe { return v8c_value_is_function(iso.ptr, self.slot) }
+         return v8c_value_is_function(iso.ptr, self.slot) 
     }
 
     fn isString(self: Value, iso: Isolate): i32 {
-        unsafe { return v8c_value_is_string(iso.ptr, self.slot) }
+         return v8c_value_is_string(iso.ptr, self.slot) 
     }
 
     fn isNumber(self: Value, iso: Isolate): i32 {
-        unsafe { return v8c_value_is_number(iso.ptr, self.slot) }
+         return v8c_value_is_number(iso.ptr, self.slot) 
     }
 
     fn isArray(self: Value, iso: Isolate): i32 {
-        unsafe { return v8c_value_is_array(iso.ptr, self.slot) }
+         return v8c_value_is_array(iso.ptr, self.slot) 
     }
 
     fn isNullOrUndefined(self: Value, iso: Isolate): i32 {
-        unsafe { return v8c_value_is_null_or_undefined(iso.ptr, self.slot) }
+         return v8c_value_is_null_or_undefined(iso.ptr, self.slot) 
     }
 
     fn toI32(self: Value, iso: Isolate, out: *i32): i32 {
-        unsafe { return v8c_to_int32(iso.ptr, self.slot, out) }
+         return v8c_to_int32(iso.ptr, self.slot, out) 
     }
 
     fn toF64(self: Value, iso: Isolate, out: *f64): i32 {
-        unsafe { return v8c_to_double(iso.ptr, self.slot, out) }
+         return v8c_to_double(iso.ptr, self.slot, out) 
     }
 
     fn writeUtf8(self: Value, iso: Isolate, buf: *u8, bufsize: i32): i32 {
-        unsafe { return v8c_string_write_utf8(iso.ptr, self.slot, buf, bufsize) }
+         return v8c_string_write_utf8(iso.ptr, self.slot, buf, bufsize) 
     }
 
     fn arrayLength(self: Value, iso: Isolate): i32 {
-        unsafe { return v8c_array_length(iso.ptr, self.slot) }
+         return v8c_array_length(iso.ptr, self.slot) 
     }
 
     fn typedArrayData(self: Value, iso: Isolate): *u8 {
@@ -284,7 +284,7 @@ impl Value {
     }
 
     fn typedArrayByteLength(self: Value, iso: Isolate): i64 {
-        unsafe { return v8c_typedarray_byte_length(iso.ptr, self.slot) }
+         return v8c_typedarray_byte_length(iso.ptr, self.slot) 
     }
 
     fn arraybufferData(self: Value, iso: Isolate): *u8 {
@@ -292,7 +292,7 @@ impl Value {
     }
 
     fn stringLength(self: Value, iso: Isolate): i32 {
-        unsafe { return v8c_string_length(iso.ptr, self.slot) }
+         return v8c_string_length(iso.ptr, self.slot) 
     }
 }
 
@@ -300,42 +300,42 @@ impl Value {
 
 impl Context {
     fn global(self: Context): Value {
-        unsafe { return Value { slot: v8c_context_global(self.ptr) } }
+         return Value { slot: v8c_context_global(self.ptr) } 
     }
 
     fn objectSet(self: Context, obj: Value, key: *u8, val: Value): i32 {
-        unsafe { return v8c_object_set(self.ptr, obj.slot, key, val.slot) }
+         return v8c_object_set(self.ptr, obj.slot, key, val.slot) 
     }
 
     fn objectGet(self: Context, obj: Value, key: *u8): Value {
-        unsafe { return Value { slot: v8c_object_get(self.ptr, obj.slot, key) } }
+         return Value { slot: v8c_object_get(self.ptr, obj.slot, key) } 
     }
 
     fn objectSetIndex(self: Context, obj: Value, idx: u32, val: Value): i32 {
-        unsafe { return v8c_object_set_index(self.ptr, obj.slot, idx, val.slot) }
+         return v8c_object_set_index(self.ptr, obj.slot, idx, val.slot) 
     }
 
     fn objectGetIndex(self: Context, obj: Value, idx: u32): Value {
-        unsafe { return Value { slot: v8c_object_get_index(self.ptr, obj.slot, idx) } }
+         return Value { slot: v8c_object_get_index(self.ptr, obj.slot, idx) } 
     }
 
     fn functionNew(self: Context, cb: *u8, data: *u8): Value {
-        unsafe { return Value { slot: v8c_function_new(self.ptr, cb, data) } }
+         return Value { slot: v8c_function_new(self.ptr, cb, data) } 
     }
 
     fn getPropertyNames(self: Context, obj: Value, filter: i32): Value {
-        unsafe { return Value { slot: v8c_object_get_property_names(self.ptr, obj.slot, filter) } }
+         return Value { slot: v8c_object_get_property_names(self.ptr, obj.slot, filter) } 
     }
 
     fn compileRun(self: Context, source: *u8, sourceLen: i32, filename: *u8): Value {
-        unsafe { return Value { slot: v8c_script_compile_run(self.ptr, source, sourceLen, filename) } }
+         return Value { slot: v8c_script_compile_run(self.ptr, source, sourceLen, filename) } 
     }
 
     fn setMethod(self: Context, obj: Value, name: *u8, cb: *u8): void {
-        unsafe {
+        
             let fnVal = v8c_function_new(self.ptr, cb, 0 as *u8)
             v8c_object_set(self.ptr, obj.slot, name, fnVal)
-        }
+        
     }
 }
 

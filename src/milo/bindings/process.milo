@@ -78,7 +78,7 @@ fn processKill(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let pid = ci.i32Arg(0, 0)
     let sig = ci.i32Arg(1, 15)
-    unsafe { ci.retI32(kill(pid, sig)) }
+     ci.retI32(kill(pid, sig)) 
 }
 
 fn processCpuUsage(info: *u8, _ud: *u8): void {

@@ -470,7 +470,7 @@ fn fsClose(info: *u8, _ud: *u8): void {
         ci.retI32(-1)
         return
     }
-    unsafe { ci.retI32(close(fd)) }
+     ci.retI32(close(fd)) 
 }
 
 fn fsFdRead(info: *u8, _ud: *u8): void {
@@ -550,10 +550,10 @@ fn fsFdSeek(info: *u8, _ud: *u8): void {
         ci.retI32(-1)
         return
     }
-    unsafe {
+    
         let r = lseek(fd, offset, whence)
         ci.retI32(r as i32)
-    }
+    
 }
 
 fn fsSymlink(info: *u8, _ud: *u8): void {
@@ -608,7 +608,7 @@ fn fsFsync(info: *u8, _ud: *u8): void {
         ci.retI32(-1)
         return
     }
-    unsafe { ci.retI32(fsync(fd)) }
+     ci.retI32(fsync(fd)) 
 }
 
 fn fsFdatasync(info: *u8, _ud: *u8): void {
@@ -618,7 +618,7 @@ fn fsFdatasync(info: *u8, _ud: *u8): void {
         ci.retI32(-1)
         return
     }
-    unsafe { ci.retI32(fdatasync(fd)) }
+     ci.retI32(fdatasync(fd)) 
 }
 
 fn fsFtruncate(info: *u8, _ud: *u8): void {

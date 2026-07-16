@@ -115,17 +115,17 @@ extern struct WChannel {
 }
 
 fn printStr(s: *u8): void {
-    unsafe {
+    
         let len = strlen(s)
         write(1, s, len)
-    }
+    
 }
 
 fn printErr(s: *u8): void {
-    unsafe {
+    
         let len = strlen(s)
         write(2, s, len)
-    }
+    
 }
 
 fn printVal(iso: Isolate, val: Value): void {
@@ -165,7 +165,7 @@ fn printVal(iso: Isolate, val: Value): void {
 }
 
 fn i64ToStr(val: i64, buf: *u8, _bufsize: i32): i32 {
-    unsafe {
+    
         var n = val
         if n == 0 {
             buf[0] = 48
@@ -200,7 +200,7 @@ fn i64ToStr(val: i64, buf: *u8, _bufsize: i32): i32 {
         }
 
         return pos as i32
-    }
+    
 }
 
 fn readFile(path: *u8, out_len: *i64): *u8 {
@@ -238,7 +238,7 @@ fn readFile(path: *u8, out_len: *i64): *u8 {
 fn nativeGc(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let iso = ci.isolate()
-    unsafe { v8c_isolate_request_gc(iso.ptr) }
+     v8c_isolate_request_gc(iso.ptr) 
 }
 
 fn nativeLoadBuiltin(info: *u8, _ud: *u8): void {
@@ -323,7 +323,7 @@ fn processCwd(info: *u8, _ud: *u8): void {
 fn processExit(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let code = ci.i32Arg(0, 0)
-    unsafe { exit(code) }
+     exit(code) 
 }
 
 fn setupProcessObject(iso: Isolate, ctx: Context, argc: i32, argv: *i64): Value {
@@ -461,17 +461,17 @@ fn ttyGetWindowSize(info: *u8, _ud: *u8): void {
     let row = (ws[0] as i32) | ((ws[1] as i32) << 8)
     let col = (ws[2] as i32) | ((ws[3] as i32) << 8)
     let arr = iso.array(2)
-    unsafe {
+    
         ctx.objectSetIndex(arr, 0, iso.int32(col))
         ctx.objectSetIndex(arr, 1, iso.int32(row))
-    }
+    
     ci.ret(arr)
 }
 
 fn consoleIsatty(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let fd = ci.i32Arg(0, 0)
-    unsafe { ci.retI32(isatty(fd)) }
+     ci.retI32(isatty(fd)) 
 }
 
 fn nm_init_console(_iso: *u8, ctx_ptr: *u8, exports: i32): void {

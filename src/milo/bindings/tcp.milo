@@ -219,7 +219,7 @@ fn tcpListen(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let fd = ci.i32Arg(0, -1)
     let backlog = ci.i32Arg(1, 128)
-    unsafe { ci.retI32(listen(fd, backlog)) }
+     ci.retI32(listen(fd, backlog)) 
 }
 
 // tcpAccept(fd) -> new_fd or -1
@@ -301,10 +301,10 @@ fn tcpSendBinary(info: *u8, _ud: *u8): void {
         ci.retI32(0)
         return
     }
-    unsafe {
+    
         let n = write(fd, dataPtr, dataLen)
         ci.retI32(n as i32)
-    }
+    
 }
 
 // tcpRecv(fd) -> string or empty string if EAGAIN, or undefined if closed
@@ -357,14 +357,14 @@ fn tcpShutdown(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let fd = ci.i32Arg(0, -1)
     let how = ci.i32Arg(1, 1)
-    unsafe { shutdown(fd, how) }
+     shutdown(fd, how) 
 }
 
 // tcpClose(fd)
 fn tcpClose(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let fd = ci.i32Arg(0, -1)
-    unsafe { close(fd) }
+     close(fd) 
 }
 
 // tcpGetSockName(fd) -> {port, address}
@@ -425,10 +425,10 @@ fn tcpGetPeerName(info: *u8, _ud: *u8): void {
 // pollInit() -> kqueue fd
 fn pollInit(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe {
+    
         kq_fd = kqueue()
         ci.retI32(kq_fd)
-    }
+    
 }
 
 // pollAdd(fd, filter) — add fd to kqueue (filter: -1=read, -2=write)
@@ -823,14 +823,14 @@ fn sslCtxFree(info: *u8, _ud: *u8): void {
 // udpSocket() → fd  (AF_INET=2, SOCK_DGRAM=2)
 fn udpSocket(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
-    unsafe {
+    
         let fd = socket(2, 2, 0)
         if fd >= 0 {
             let flags = fcntl(fd, 3, 0)
             fcntl(fd, 4, flags | 4)
         }
         ci.retI32(fd)
-    }
+    
 }
 
 // udpBind(fd, port, host)
