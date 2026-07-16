@@ -36,8 +36,8 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | timers     | 45/55     | 82%  | low      | **MEASURED 2026-07-16.** the old "51" was stale drift, not a regression (verified identical with and without the lifecycle fixes) |
 | whatwg     | 19/41     | 46%  | med      | URL↔searchParams live-sync, TextDecoder, webstreams |
 | stream     | 75/156    | 48%  | high     | re-tallied 2026-07-15; async-fn map/flatMap, web streams, pipe edge cases |
-| http       | 85/210    | 40%  | high     | **MEASURED 2026-07-16, HONEST COUNT.** pre-session 79 (oom 11, timeout 40). now **85, oom 0, timeout 24** — and this 85 is real, unlike the mid-session 87 which included ~5 false passes from swallowed handler exceptions. next levers: playbook 5e #2 (OutgoingMessage write/end error codes, ~6-8 tests, JS-only), createServer({IncomingMessage,ServerResponse}) ignored, 100-continue |
-| net        | 49/106    | 46%  | high     | **MEASURED 2026-07-16.** pre-session 44 (oom 3, timeout 12). lifecycle + idle-timeout + nonblock/backpressure fixes: **44->49, oom 3->0, timeout 12->9**. Socket DOES extend Duplex already — that blocker is stale |
+| http       | 89/210    | 42%  | high     | **MEASURED 2026-07-16, HONEST COUNT.** pre-session 79 (oom 11, timeout 40). now **89, oom 0, timeout 22** — and honest, unlike the mid-session 87 which included ~5 false passes from swallowed handler exceptions. next: 100-continue (checkContinue/writeContinue absent), res/server setTimeout stubs, header-parse clientError |
+| net        | 51/106    | 48%  | high     | **MEASURED 2026-07-16.** pre-session 44 (oom 3, timeout 12). session fixes: **44->51, oom 3->0, timeout 12->7**. Socket DOES extend Duplex already — that blocker is stale |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |
