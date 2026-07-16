@@ -52,24 +52,64 @@
         owner_symbol: Symbol('owner_symbol'),
       },
     },
-    uv: {
-      errname(code) {
-        const names = { [-2]: 'ENOENT', [-1]: 'EPERM', [-13]: 'EACCES', [-17]: 'EEXIST', [-22]: 'EINVAL', [-4058]: 'ENOENT', [-4048]: 'EPERM', [-48]: 'EADDRINUSE', [-61]: 'ECONNREFUSED', [-54]: 'ECONNRESET', [-60]: 'ETIMEDOUT', [-9]: 'EBADF', [-40]: 'EMSGSIZE', [-56]: 'EISCONN', [-57]: 'ENOTCONN', [-53]: 'ECONNABORTED', [-49]: 'EADDRNOTAVAIL', [-4]: 'EINTR', [-35]: 'EAGAIN', [-32]: 'EPIPE' };
-        return names[code] || `Unknown system error ${code}`;
-      },
-      getErrorMap() {
-        return new Map([
-          [-2, ['ENOENT', 'no such file or directory']],
-          [-1, ['EPERM', 'operation not permitted']],
-          [-13, ['EACCES', 'permission denied']],
-          [-17, ['EEXIST', 'file already exists']],
-          [-22, ['EINVAL', 'invalid argument']],
-          [-4058, ['ENOENT', 'no such file or directory']],
-          [-4048, ['EPERM', 'operation not permitted']],
-        ]);
-      },
-      UV_EAI_MEMORY: -3000,
-    },
+    // uv binding derived from os.errno: on darwin libuv errno == -(system errno),
+    // so the UV_* constants and errmap are generated, not hand-maintained (was a
+    // stale 20-entry subset that also had UV_EAI_MEMORY wrong as -3000).
+    uv: (function() {
+      const oe = _constants.os.errno; // { ENOENT:2, EACCES:13, ... } positive macOS
+      const msg = {
+        EPERM:'operation not permitted', ENOENT:'no such file or directory', ESRCH:'no such process',
+        EINTR:'interrupted system call', EIO:'i/o error', E2BIG:'argument list too long',
+        EBADF:'bad file descriptor', ECHILD:'no child processes', EDEADLK:'resource deadlock avoided',
+        ENOMEM:'not enough memory', EACCES:'permission denied', EFAULT:'bad address',
+        EBUSY:'resource busy or locked', EEXIST:'file already exists', EXDEV:'cross-device link not permitted',
+        ENODEV:'no such device', ENOTDIR:'not a directory', EISDIR:'illegal operation on a directory',
+        EINVAL:'invalid argument', ENFILE:'file table overflow', EMFILE:'too many open files',
+        EFBIG:'file too large', ENOSPC:'no space left on device', ESPIPE:'invalid seek',
+        EROFS:'read-only file system', EMLINK:'too many links', EPIPE:'broken pipe',
+        ERANGE:'result too large', EAGAIN:'resource temporarily unavailable',
+        EINPROGRESS:'operation in progress', EALREADY:'connection already in progress',
+        ENOTSOCK:'socket operation on non-socket', EDESTADDRREQ:'destination address required',
+        EMSGSIZE:'message too long', ENOTSUP:'operation not supported on socket',
+        EADDRINUSE:'address already in use', EADDRNOTAVAIL:'address not available',
+        ENETDOWN:'network is down', ENETUNREACH:'network is unreachable',
+        ECONNABORTED:'software caused connection abort', ECONNRESET:'connection reset by peer',
+        ENOBUFS:'no buffer space available', EISCONN:'socket is already connected',
+        ENOTCONN:'socket is not connected', ETIMEDOUT:'connection timed out',
+        ECONNREFUSED:'connection refused', ELOOP:'too many symbolic links encountered',
+        ENAMETOOLONG:'name too long', EHOSTUNREACH:'host is unreachable',
+        ENOTEMPTY:'directory not empty', ECANCELED:'operation canceled', ENOSYS:'function not implemented',
+        EDOM:'numerical argument out of domain',
+      };
+      // libuv synthetic codes — platform-independent negatives, not system errno
+      const synth = {
+        EOF:[-4095,'end of file'], UNKNOWN:[-4094,'unknown error'],
+        ECHARSET:[-4080,'invalid Unicode character'], ENONET:[-4056,'machine is not on the network'],
+        EAI_ADDRFAMILY:[-3000,'address family not supported'], EAI_AGAIN:[-3001,'temporary failure'],
+        EAI_BADFLAGS:[-3002,'bad ai_flags value'], EAI_CANCELED:[-3003,'request canceled'],
+        EAI_FAIL:[-3004,'permanent failure'], EAI_FAMILY:[-3005,'ai_family not supported'],
+        EAI_MEMORY:[-3006,'out of memory'], EAI_NODATA:[-3007,'no address'],
+        EAI_NONAME:[-3008,'unknown node or service'], EAI_OVERFLOW:[-3009,'argument buffer overflow'],
+        EAI_SERVICE:[-3010,'service not available for socket type'], EAI_SOCKTYPE:[-3011,'socket type not supported'],
+        EAI_BADHINTS:[-3013,'invalid value for hints'], EAI_PROTOCOL:[-3014,'resolved protocol is unknown'],
+      };
+      const byErrno = new Map();
+      const consts = {};
+      for (const code in oe) {
+        const uvno = -oe[code];
+        consts['UV_' + code] = uvno;
+        if (!byErrno.has(uvno)) byErrno.set(uvno, [code, msg[code] || code]);
+      }
+      for (const code in synth) {
+        const uvno = synth[code][0];
+        consts['UV_' + code] = uvno;
+        byErrno.set(uvno, [code, synth[code][1]]);
+      }
+      return Object.assign({
+        errname(code) { const e = byErrno.get(code); return e ? e[0] : `Unknown system error ${code}`; },
+        getErrorMap() { return new Map(byErrno); },
+      }, consts);
+    })(),
     icu: { transcode: (source) => source },
     options: { getOptions() { return new Map(); } },
     credentials: { implementsPosixCredentials: true },

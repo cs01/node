@@ -16,7 +16,7 @@ Run safely: `bash test_safe_runner.sh --compat --module <mod>` (root runner — 
 The per-module `zsh src/milo/test-compat.sh` only caps V8 heap + wall-time — NOT off-heap mem or proc count, so it can OOM/forkbomb on child_process/cluster/large-file tests.
 List: `src/milo/bun-curated-tests.txt` (2,143 tests present in our repo)
 
-### current pass rates (snapshot 2026-05-30)
+### current pass rates (snapshot 2026-05-30; fs+stream re-tallied 2026-07-15 — fs jumped 99→174, so overall is meaningfully above 36% but full suite not re-run)
 
 Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 36% is test-weighted across all 30+ modules: the big low-scoring modules (http 210, http2 165, stream 156, crypto 94, child 85, tls 82) dominate the total, so 100% on small modules (buffer 63, process 57) barely moves it.
@@ -33,9 +33,9 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | v8         | 3/5       | 60%  | —        | mostly passing |
 | diagnostics| 10/17     | 58%  | low      | tracingChannel+ALS async propagation, udp |
 | util       | 10/19     | 53%  | med      | inspect getters/showHidden, callbackify, deprecate |
-| fs         | 99/201    | 49%  | high     | dispose ERR_DIR_CLOSED, readFile+signal, error codes |
+| fs         | 174/201   | 86%  | high     | re-tallied 2026-07-15 (was 99 in May snapshot); 25 fail + 2 timeout left: errno fidelity (access EACCES→ENOENT mislabel, readfile-error EIO), readdir withFileTypes .map, watchfile/patch-open timeouts |
 | whatwg     | 19/41     | 46%  | med      | URL↔searchParams live-sync, TextDecoder, webstreams |
-| stream     | 73/156    | 46%  | high     | async-fn map/flatMap, web streams, pipe edge cases |
+| stream     | 75/156    | 48%  | high     | re-tallied 2026-07-15; async-fn map/flatMap, web streams, pipe edge cases |
 | http       | 91/210    | 43%  | high     | timeout/abort, keep-alive, error codes |
 | net        | 44/106    | 41%  | high     | Socket not extending Duplex |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
@@ -53,9 +53,8 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ## quick wins (biggest compat % gain per effort)
 
-### error codes (cross-module) — unlocks ~11 process, ~dozens elsewhere
-- [ ] "Missing expected exception" is #1 failure pattern across all modules
-- [ ] just adding `.code` to thrown errors would flip many tests
+### error codes (cross-module) — see `## critical` for ground truth (2026-07-15)
+- [x] ~~just adding `.code` to thrown errors~~ — STALE: `.code` now attached on most validation paths (ERR_OUT_OF_RANGE, ERR_UNKNOWN_ENCODING, ERR_ASSERTION all verified live). Remaining work is error *fidelity*, itemized in critical section.
 
 ### process (small remaining gaps)
 - [ ] `process.seteuid()`, `process.setegid()`, `process.getegid()` — trivial syscall bindings (3 tests)
@@ -76,10 +75,16 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ## critical
 
-### error code validation (~435 tests)
-- [ ] native bindings throw errors without `.code` property — tests match on `{ code: 'ERR_xxx' }` in `assert.throws`
-- [ ] add `makeNodeError(code, type, msg)` helper, use in all validation paths (fs, buffer, net, dgram, crypto, etc.)
-- [ ] covers both "code mismatch" and "Missing expected exception" failure categories
+### error fidelity (fact-checked 2026-07-15 — old "~435 tests need .code" framing was stale)
+`.code` is now present on most throw paths (fs ENOENT, ERR_OUT_OF_RANGE, ERR_UNKNOWN_ENCODING, ERR_ASSERTION verified live). Real remaining gaps:
+- [ ] **bindings drop/mangle errno** — no uniform convention: `nm_fs_open` (binding_registry.c:65) returns bare `open()` -1 and never captures errno; fsAccess/nm_fs_utimes return +errno; fsFdRead/fsFdWrite return -errno. Standardize on negative errno (libuv-style) everywhere.
+- [ ] **fs.js hardcodes 'ENOENT'** at 8 sites (fs.js:198,227,304,375,397,454,504,1213) because open/stat bindings give it no errno — EACCES/EISDIR mislabeled ENOENT. Route through a `uvException`-style factory once bindings surface errno.
+- [ ] **no real `internalBinding('uv')` errno constants/errmap** — THE reason the prior errno-on-fsError attempt was reverted (commit 3a6553a444: copyfile tests assert on missing UV_* map). Port from vendored `lib/internal/errors.js` (`uvErrmapGet` at errors.js:629, `uvException` ~:646).
+- [ ] **4 duplicate errno tables with clashing sign conventions** — bootstrap.js:56 (uv map, mixes darwin/win32 numbers), util.js:691 `_errnoMap`, util.js:718 `_sysErrors`, fs.js:801 `_ERRNO_CODES` (macOS-positive). Consolidate to one libuv-negative-keyed table; normalize macOS errno → libuv at the seam.
+- [ ] `.errno` numeric property missing on all fs errors (code/syscall/path present, errno undefined)
+- [ ] missing arg-type validation throws wrong code: `fs.readFileSync(123)` → EBADF (uses 123 as fd) instead of ERR_INVALID_ARG_TYPE
+- [ ] dns lookup failure constructs bare Error (dns.js:17) with no `.code`, crashes process as uncaught — should be ENOTFOUND w/ code
+- [ ] `new URL('::::')` doesn't throw — parser too lenient, should be ERR_INVALID_URL
 
 ## high
 
@@ -112,6 +117,7 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ## low
 
+- [ ] native addons / N-API: only ~4 of 2143 curated tests touch dlopen/.node (2 test dlopen *error* paths, passable without addons) — ≈0% compat leverage. Defer until goal shifts to ecosystem reach (better-sqlite3/sharp); then port Bun's split: engine-seam C++ (bun src/jsc/bindings/napi*.cpp → our v8capi.cc) + safe body (napi_body.rs → napi.milo). Reference checkout: ~/git/bun (full Rust rewrite, 2026).
 - [ ] `stream.Writable.toWeb()` / `Readable.toWeb()` — needs ReadableStream/WritableStream globals in V8
 - [ ] `cluster` module
 - [ ] `worker_threads` — `Worker` class (needs V8 isolate threading)

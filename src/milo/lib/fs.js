@@ -14,7 +14,9 @@ function _ERR_INVALID_ARG_TYPE(name, expected, actual) {
     if (inspected.length > 28) inspected = inspected.slice(0, 25) + '...';
     actualStr = 'type ' + typeof actual + ' (' + inspected + ')';
   }
-  const e = new TypeError(`The "${name}" argument must be of type ${expected}. Received ${actualStr}`);
+  // node: dotted names ("options.fs.open") are properties, bare names arguments
+  const kind = name.includes('.') ? 'property' : 'argument';
+  const e = new TypeError(`The "${name}" ${kind} must be of type ${expected}. Received ${actualStr}`);
   e.code = 'ERR_INVALID_ARG_TYPE';
   return e;
 }
@@ -27,7 +29,13 @@ function _assertEncoding(encoding) {
   }
 }
 function _getEncoding(opts) {
-  const enc = typeof opts === 'string' ? opts : (opts && opts.encoding);
+  let enc = typeof opts === 'string' ? opts : (opts && opts.encoding);
+  // node normalizes encoding names case-insensitively ('uTf8' -> 'utf8'); only
+  // fold when it resolves to a known encoding so bad names still throw as-received.
+  if (typeof enc === 'string') {
+    const lc = enc.toLowerCase();
+    if (_validEncodings.has(lc)) enc = lc;
+  }
   _assertEncoding(enc);
   return enc || null;
 }
@@ -156,11 +164,21 @@ function readFileSync(path, opts) {
   try { return readFileSync(fd, opts); } finally { closeSync(fd); }
 }
 
+let _uvBinding;
+// negative libuv errno for a code string ('ENOENT' -> -2), from the uv binding's
+// generated UV_* constants — keeps err.errno and err.code from ever disagreeing.
+function _codeToErrno(code) {
+  if (_uvBinding === undefined) _uvBinding = internalBinding('uv');
+  const n = _uvBinding['UV_' + code];
+  return typeof n === 'number' ? n : undefined;
+}
 function _fsError(code, syscall, path, msg, dest) {
   const pathStr = path != null ? ` '${path}'` : '';
   const destStr = dest != null ? ` -> '${dest}'` : '';
   const e = new Error(`${code}: ${msg}, ${syscall}${pathStr}${destStr}`);
   e.code = code; e.syscall = syscall;
+  const errno = _codeToErrno(code);
+  if (errno !== undefined) e.errno = errno;
   if (path != null) e.path = String(path);
   if (dest != null) e.dest = String(dest);
   return e;
@@ -875,6 +893,11 @@ function _normalizeStreamOpts(opts) {
   return opts || {};
 }
 function _streamFd(v) { return (v != null && typeof v === 'object' && v.fd != null) ? v.fd : v; }
+function _validateStreamFs(fsImpl, fns) {
+  for (const fn of fns) {
+    if (typeof fsImpl[fn] !== 'function') throw _ERR_INVALID_ARG_TYPE(`options.fs.${fn}`, 'function', fsImpl[fn]);
+  }
+}
 
 let _ReadStream, _WriteStream;
 function _initStreamClasses() {
@@ -895,7 +918,8 @@ function _initStreamClasses() {
     // open (not closed, not destroyed) so the fd can be reused. See read-stream.js.
     const autoClose = options.autoClose !== undefined ? options.autoClose : true;
     // _readableInit also runs the Stream/EventEmitter base init
-    _readableInit(this, { highWaterMark: options.highWaterMark || 65536, encoding: options.encoding, autoDestroy: autoClose });
+    _readableInit(this, { highWaterMark: options.highWaterMark || 65536, encoding: options.encoding, autoDestroy: autoClose, signal: options.signal });
+    if (options.fs) _validateStreamFs(options.fs, ['open', 'read', 'close']);
     this.fs = options.fs || module.exports;
     this.path = path == null ? undefined : path;
     this.flags = options.flags || 'r';
@@ -910,6 +934,16 @@ function _initStreamClasses() {
     this.autoClose = autoClose;
     this._ownFd = options.fd == null;
     this.fd = options.fd != null ? _streamFd(options.fd) : null;
+    if (options.fd != null && typeof options.fd === 'object' && typeof options.fd.close === 'function') {
+      if (options.fs) { const e = new Error('The FileHandle with fs method is not implemented'); e.code = 'ERR_METHOD_NOT_IMPLEMENTED'; throw e; }
+      // FileHandle: route ops through it so its read/close (and 'close' event,
+      // spies in tests) are used instead of the raw-fd fs functions
+      const handle = options.fd;
+      this.fs = {
+        read: (fd, buf, off, len, pos, cb) => handle.read(buf, off, len, pos).then((r) => cb(null, r.bytesRead, r.buffer), cb),
+        close: (fd, cb) => handle.close().then(() => cb(null), cb),
+      };
+    }
     this.once('close', () => { this.closed = true; });
     this._opening = this.fd == null;
     if (this.fd != null) process.nextTick(() => { this.emit('open', this.fd); this.emit('ready'); });
@@ -975,9 +1009,16 @@ function _initStreamClasses() {
     // open (not closed) so the fd can be reused. See write-stream-autoclose-option.
     const autoClose = options.autoClose !== undefined ? options.autoClose : true;
     // _writableInit also runs the Stream/EventEmitter base init
-    _writableInit(this, { highWaterMark: options.highWaterMark, autoDestroy: autoClose });
+    _writableInit(this, { highWaterMark: options.highWaterMark, autoDestroy: autoClose, signal: options.signal });
     // write-side encoding: string chunks decode through it (base64 etc), like Node
     if (options.encoding) this.setDefaultEncoding(options.encoding);
+    if (options.fs) {
+      _validateStreamFs(options.fs, ['open', 'write', 'close']);
+      // writev is optional, but if supplied it must be callable
+      if (options.fs.writev != null && typeof options.fs.writev !== 'function') {
+        throw _ERR_INVALID_ARG_TYPE('options.fs.writev', 'function', options.fs.writev);
+      }
+    }
     this.fs = options.fs || module.exports;
     this.path = path == null ? undefined : path;
     this.flags = options.flags || 'w';
@@ -991,6 +1032,15 @@ function _initStreamClasses() {
     this.autoClose = autoClose;
     this._ownFd = options.fd == null;
     this.fd = options.fd != null ? _streamFd(options.fd) : null;
+    if (options.fd != null && typeof options.fd === 'object' && typeof options.fd.close === 'function') {
+      if (options.fs) { const e = new Error('The FileHandle with fs method is not implemented'); e.code = 'ERR_METHOD_NOT_IMPLEMENTED'; throw e; }
+      // FileHandle: see ReadStream — write/close go through the handle
+      const handle = options.fd;
+      this.fs = {
+        write: (fd, buf, off, len, pos, cb) => handle.write(buf, off, len, pos).then((r) => cb(null, r.bytesWritten, r.buffer), cb),
+        close: (fd, cb) => handle.close().then(() => cb(null), cb),
+      };
+    }
     this.once('close', () => { this.closed = true; });
     this._opening = this.fd == null;
     if (this.fd != null) process.nextTick(() => { this.emit('open', this.fd); this.emit('ready'); });
@@ -1894,8 +1944,8 @@ const promises = {
         truncate(len) { if (this._closed) return Promise.reject(_ebadf('ftruncate')); try { ftruncateSync(fd, len); return Promise.resolve(); } catch (e) { return Promise.reject(e); } },
         // streams over the handle's fd; autoClose:false so closing the stream
         // doesn't close the handle the caller still owns.
-        createReadStream(o) { return createReadStream(undefined, { fd, autoClose: false, ...(o || {}) }); },
-        createWriteStream(o) { return createWriteStream(undefined, { fd, autoClose: false, ...(o || {}) }); },
+        createReadStream(o) { if (o) _validateAbortSignal(o.signal); return createReadStream(undefined, { fd, autoClose: false, ...(o || {}) }); },
+        createWriteStream(o) { if (o) _validateAbortSignal(o.signal); return createWriteStream(undefined, { fd, autoClose: false, ...(o || {}) }); },
         // explicit resource management: `await using fh = await open(...)` closes on scope exit
         [Symbol.asyncDispose]() { return this.close(); },
         [Symbol.dispose]() { try { this.close(); } catch {} },
