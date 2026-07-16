@@ -287,6 +287,25 @@ function go(i) { http.get({port: s.address().port}, (res) => {
 Before §0a milo completed request 1 then request 2 NEVER REACHED THE SERVER. Now: 3 requests,
 exits 0, same as real node.
 
+## 5d. H10 — http request timeouts (found + fixed 2026-07-16)
+
+`ClientRequest.setTimeout()` (http.js ~843) was a **no-op stub**: `if (cb) this.once('timeout',
+cb); return this;` — it registered the callback and armed NOTHING, so `req.on('timeout')` could
+never fire. Also, the client never emitted **'socket'** on the request (node does, once the
+socket is assigned in `doConnect`), so anything deferring work to that event waited forever.
+Fix: emit 'socket' on a nextTick from doConnect, and make ClientRequest.setTimeout arm the
+underlying socket + forward the socket's 'timeout' onto the request.
+Flipped `test-http-client-timeout` and `test-http-client-timeout-agent` to PASS.
+
+**TRAP — patch the class that's actually used.** http.js defines FOUR `setTimeout(ms, cb)`
+methods (IncomingMessage:42, OutgoingMessage:94, Server:526, ClientRequest:843). I "fixed"
+OutgoingMessage first and nothing changed, because **ClientRequest extends EventEmitter, NOT
+OutgoingMessage** — its own stub shadowed everything. Before editing a method that exists in
+several classes, confirm which one the object really is:
+`awk 'NR<=850 && /^class /{cls=$2} /methodName/{print NR": ["cls"] "$0}' http.js`
+Note IncomingMessage:42 and Server:526 are still stubs — likely the same bug for
+`res.setTimeout()` / `server.setTimeout()`. Untested; a candidate next lever.
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not

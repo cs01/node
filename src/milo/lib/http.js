@@ -675,6 +675,12 @@ class ClientRequest extends EventEmitter {
       }
       this.socket = socket;
       if (!socket) return;
+      // Node emits 'socket' on the request once its socket is assigned. Tests listen for it
+      // (and req.setTimeout defers arming to it, since the socket does not exist yet when
+      // setTimeout is called). Emit on a tick so listeners attached after http.request()
+      // returns — the normal pattern — still see it.
+      this.connection = socket;
+      process.nextTick(() => this.emit('socket', socket));
 
       let responseChunks = [];
       let responseLen = 0;
@@ -828,7 +834,24 @@ class ClientRequest extends EventEmitter {
     }
   }
 
-  setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
+  setTimeout(ms, cb) {
+    if (cb) this.once('timeout', cb);
+    // Was a no-op stub: it registered the callback but never armed anything, so
+    // req.on('timeout') could never fire. Arm the underlying socket and surface its
+    // 'timeout' on the request (node does both). The socket does not exist yet when
+    // setTimeout() is called, hence the deferral to the 'socket' event.
+    const arm = (s) => {
+      if (!s) return;
+      s.setTimeout(ms);
+      if (!s._reqTimeoutFwd) {
+        s._reqTimeoutFwd = true;
+        s.on('timeout', () => this.emit('timeout'));
+      }
+    };
+    if (this.socket) arm(this.socket);
+    else this.once('socket', arm);
+    return this;
+  }
   setNoDelay(noDelay) { if (this.socket) this.socket.setNoDelay(noDelay); }
   setSocketKeepAlive(enable, delay) { if (this.socket) this.socket.setKeepAlive(enable, delay); }
   abort() {
