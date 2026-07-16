@@ -1,5 +1,24 @@
 # event-loop lifecycle playbook (self-contained — no human needed)
 
+## READ FIRST: four traps that will fool you (learned the hard way, 2026-07-16)
+
+1. **Validate every probe against real node before believing it.** `node <probe>` is
+   installed (v25.3.0) and is the ONLY ground truth. Two of the original nine probes
+   asserted the wrong thing: p01 and p02 hang in REAL NODE too (p01's server never reads
+   the buffered data, so 'end' correctly never fires; p02's accepted server-side socket is
+   never unref'd). Milo matched node and I called it a bug. **A "hang" is often correct.**
+2. **`timeout` on this PATH is milo-built and DOES NOT KILL ITS CHILD** — it returns 124
+   and leaves the process running. The orphan keeps spinning, and (if you reuse one temp
+   file) writes its later OOM into the NEXT probe's log. That fabricated both a phantom
+   "p07 idle server OOMs" and the p04 "flake". Use SIGKILL + a hand-rolled watchdog +
+   per-probe logs (run-probes.sh does). `gtimeout` (homebrew) is a working alternative.
+   Note test_safe_runner.sh does NOT use timeout(1), so the module suites are unaffected.
+3. **Exit code alone cannot distinguish "correctly asleep" from "spinning to death"** —
+   both look like a hang. CPU time is the real assertion. Sample it BEFORE killing
+   (`ps -o time= -p PID`). Sleeping ≈0.03s over 6s; spinning ≈6s then fatal-OOM.
+4. **Never conclude from one run of a flaky probe.** p04 is ~50/50 both with and without
+   any fix; a single A/B sample "proved" a regression that did not exist. Run 10x.
+
 Mission: fix TCP handle lifecycle so processes exit when work is done, don't busy-spin,
 and honor ref/unref. Prize: 12 TIMEOUT + 3 OOM tests in net alone, plus http/tls/cluster
 timeouts downstream (~400 total across modules).
@@ -17,30 +36,35 @@ iteration). kqueue is level-triggered, so a dead/EOF'd fd that stays registered 
 → V8 heap dies. Any OOM with `pollWait` in the stack = "an fd was left in the kqueue
 that shouldn't be there." Find WHICH fd and WHY it wasn't removed; that is the whole game.
 
+**CONFIRMED + FIXED (H1), 2026-07-16.** Instrumentation named the fd precisely:
+`poll#200 fd=6 filter=-1 eof=true known=true destroyed=false rEnded=true` — the
+server-side accepted socket, readable side ALREADY ended, still registered for
+EVFILT_READ, re-firing EV_EOF on every poll. The old EOF branch (`net.js:462`) was
+guarded on `!ended`, so an already-ended socket hit it and did *nothing* — the event
+just re-fired forever. Fix: `Socket._stopReading()` deregisters EVFILT_READ exactly once
+when the peer's FIN is seen (called from `_onReadable` on EOF, and unconditionally from
+the EV_EOF branch). p01 went from 7.32s CPU + fatal-OOM to 0.03s CPU.
+**Note the loop itself was never the problem** — it correctly sleeps when nothing is
+pending (idle server = 0 iterations). The bug was purely a stale kqueue registration.
+
 ## 1. probe harness (acceptance tests — run first, run after every change)
 
 ```
 bash src/milo/lifecycle-probes/run-probes.sh
 ```
 
-Status at baseline:
-| probe | status | meaning |
-|---|---|---|
-| p01 graceful end, server.close from client side | **FAIL (OOM busy-loop; server.close cb never fires)** | primary target |
-| p02 socket/server unref | **FAIL (hang)** | unref broken for TCP |
-| p03 graceful end, server.close from server side | PASS | graceful path CAN work |
-| p04 destroy path | **FLAKY** (passed standalone, OOM under harness) | race in fd deregistration |
-| p05 close idle server | PASS | |
-| p06 timer unref | PASS | timers are fine — don't touch |
-| p07 open server keeps process alive | PASS (exit 124 = correct) | don't break this while fixing exits |
-| p08 http roundtrip + close exits | PASS | don't regress |
-| p09 data/end/close event sequence | PASS | FIN→'end' wiring works — don't touch stream.js first |
-
-p01 vs p03 differential is the sharpest clue: same graceful FIN/FIN traffic; only the
-*context* of the `server.close()` call differs. p03 (called from server-side socket
-'close' handler) exits clean; p01 (called from client-side 'close' handler) busy-loops
-and the close callback NEVER fires — not even early. Something about that emit path
-throws or never runs.
+Status after the H1 fix (2026-07-16) — all EXPECT_EXIT values verified against real node:
+| probe | expect | status | meaning |
+|---|---|---|---|
+| p01 graceful end, server.close from client side | 124 | PASS (0.03s cpu) | hangs in real node TOO; guards no-spin. Was 7.32s + OOM before H1 fix |
+| p02 socket/server unref | 124 | PASS (0.03s cpu) | hangs in real node TOO (accepted socket not unref'd); guards no-spin |
+| p03 graceful end, server.close from server side | 0 | PASS | graceful path works |
+| p04 destroy path | 0 | **FLAKY ~50%** (4/10 with fix, 2/10 without) | pre-existing race, NOT caused by the H1 fix. **Next target** |
+| p05 close idle server | 0 | PASS | |
+| p06 timer unref | 0 | PASS | timers fine — don't touch |
+| p07 open server keeps process alive | 124 | PASS (0.03s cpu) | idle loop correctly sleeps |
+| p08 http roundtrip + close exits | 0 | PASS | don't regress |
+| p09 data/end/close event sequence | 0 | PASS | FIN→'end' wiring works — don't touch stream.js first |
 
 ## 2. architecture map (verified file:line, 2026-07-16)
 
@@ -86,7 +110,7 @@ The loop is **JS-driven**. All lifecycle logic is in hot-loaded JS (`src/milo/li
 
 ## 3. ranked hypotheses + how to confirm each
 
-**H1 (primary): EOF'd fd left in kqueue → level-triggered EV_EOF storm.**
+**H1 — CONFIRMED AND FIXED 2026-07-16 (see §0). Kept below for the diagnosis method.**
 After FIN arrives, `push(null)` fires but the fd stays polled until `_destroy` runs. If
 the destroy chain stalls for ONE socket (see H2/H3), every `pollWait` returns that fd's
 EV_EOF instantly → busy-loop → OOM. Even when destroy DOES eventually run, the window
@@ -98,13 +122,24 @@ Fix shape: on EOF (both the recvBinary-undefined path `net.js:162` and EV_EOF br
 add a `sock._readPollRemoved` flag). The fd stays open for writing until destroy; only the
 READ registration must go. This alone may fix p01, p04 flake, and several TIMEOUT tests.
 
-**H2: something THROWS inside the client-'close'-handler → server.close() context.**
-In p01 the `server.close(cb)` cb never fires even though `net.js:399` does
-`process.nextTick(emit('close'))` unconditionally — strong smell that `server.close()`
-itself throws before reaching the nextTick (e.g. pollRemove/close on an fd in a weird
-state), and the exception is swallowed by the 'close'-event emit machinery.
-Confirm: wrap the p01 `server.close()` call in try/catch in the probe — if you catch
-something, you've found it. Also add try/catch logging inside `Server.prototype.close`.
+**H2 — WITHDRAWN.** The premise was false. `server.close()`'s callback "never firing" in
+p01 was not a swallowed throw: the client 'close' handler that calls it legitimately never
+runs, because the server never reads the buffered data so the socket never ends. Real node
+behaves identically. There is no bug here.
+
+**H5 (NEW — next target): the p04 destroy-path race (~50% hang).**
+`client.connect() → client.destroy()` immediately. Server-side socket should see EOF →
+push(null) → 'end' → (allowHalfOpen=false) auto end() → finish → autoDestroy → 'close' →
+`s.close()` → exit. It completes ~50% of runs, hangs the rest — same rate before and after
+the H1 fix, so it is an independent, pre-existing race.
+Suspicion: destroying the client *immediately after* connect races the server's accept /
+first poll registration — the server-side fd may be registered for READ after the peer is
+already gone, so the EOF event is delivered once and dropped (or never delivered), leaving
+the socket alive with nothing to wake it. Note `_onConnected` (`net.js:130-157`) and
+`_onAcceptable` (`:371-381`) both mutate poll registration.
+Confirm: run p04 in a 10x loop with MILO_LIFECYCLE_DEBUG=1, diff a hanging run's trace
+against a passing one — compare which fds get registered and which events arrive. The
+hanging run should show a server-side fd in `socks=[...]` that never receives EV_EOF.
 
 **H3: unbalanced `_pendingCloseRefs` or a map entry whose 'close' never emits.**
 `_destroy` increments `__pendingCloseRef` and only the 'close' emit decrements + deletes
@@ -165,6 +200,17 @@ Run: `MILO_LIFECYCLE_DEBUG=1 timeout 5 ./out/Release/milo-node src/milo/lifecycl
 7. If genuinely stuck after instrumenting (no repeating fd, no exception caught, counters
    balanced): write findings into this file under a `## findings` section and stop —
    don't thrash.
+
+## 5b. a real bug found outside node-milo (worth reporting upstream)
+
+`~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
+kill its child on expiry — it returns 124 and leaves the process running. Reproduce:
+```
+timeout 2 ./out/Release/milo-node -e "require('net').createServer().listen(0,()=>{})"
+pgrep -f milo-node    # still there
+```
+Real GNU timeout kills. This is a milo stdlib/tool bug, not a node-milo bug — but it
+silently corrupts any test methodology built on `timeout`.
 
 ## 6. after the core fixes land (in order of expected yield)
 

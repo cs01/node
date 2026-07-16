@@ -156,11 +156,22 @@ class Socket extends Duplex {
     this.emit('connect');
   }
 
+  // Once the peer's FIN is seen, no further read event can be meaningful. The kqueue is
+  // level-triggered, so leaving the fd registered makes every pollWait return EV_EOF
+  // immediately -> the loop busy-spins and OOMs. Deregister reads exactly once; the fd
+  // stays open for writing until _destroy.
+  _stopReading() {
+    if (this._readPollRemoved) return;
+    this._readPollRemoved = true;
+    if (this._fd >= 0) { try { tcp.pollRemove(this._fd, EVFILT_READ); } catch {} }
+  }
+
   _onReadable() {
     if (this.destroyed) return;
     const data = tcp.recvBinary(this._fd);
     if (data === undefined) {
       this.push(null);
+      this._stopReading();
     } else if (data.length > 0) {
       this.push(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
     }
@@ -415,6 +426,16 @@ function _emitSocketError(sock, e) {
   console.error(e); if (typeof sock.destroy === 'function') sock.destroy();
 }
 
+// MILO_LIFECYCLE_DEBUG=1 traces every kqueue event. A stale fd left registered in the
+// level-triggered kqueue re-fires forever (busy-loop -> OOM in pollWait); the repeated fd
+// in this trace names it. See lifecycle-probes/PLAYBOOK.md.
+// lazy: net.js loads before process.env is populated, so check per-call not at module scope
+function _lcOn() { return !!(process.env && process.env.MILO_LIFECYCLE_DEBUG); }
+let _lcPollEvents = 0;
+function _lcLog(msg) {
+  try { require('fs').writeSync(2, `[lc] ${msg}\n`); } catch {}
+}
+
 // --- I/O pump called from event loop ---
 function _pollOnce(timeout) {
   if (!pollInited) return 0;
@@ -426,6 +447,10 @@ function _pollOnce(timeout) {
     const fd = ev.fd;
     const filter = ev.filter;
     const flags = ev.flags;
+    if (_lcOn() && ++_lcPollEvents % 200 === 0) {
+      const sock = Socket._sockets.get(fd);
+      _lcLog(`poll#${_lcPollEvents} fd=${fd} filter=${filter} eof=${!!(flags & EV_EOF)} known=${!!sock || Server._servers.has(fd)} destroyed=${sock ? sock.destroyed : 'n/a'} rEnded=${sock && sock._readableState ? sock._readableState.ended : 'n/a'}`);
+    }
 
     // file watcher vnode events
     if (filter === EVFILT_VNODE) {
@@ -459,13 +484,17 @@ function _pollOnce(timeout) {
       try { sock._onReadable(); } catch (e) { _emitSocketError(sock, e); }
     }
 
-    if ((flags & EV_EOF) && !sock.destroyed && sock._readableState && !sock._readableState.ended) {
-      while (!sock.destroyed && !sock._readableState.ended) {
-        const data = tcp.recvBinary(sock._fd);
-        if (data === undefined || data.length === 0) break;
-        sock.push(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+    if (flags & EV_EOF) {
+      if (!sock.destroyed && sock._readableState && !sock._readableState.ended) {
+        while (!sock.destroyed && !sock._readableState.ended) {
+          const data = tcp.recvBinary(sock._fd);
+          if (data === undefined || data.length === 0) break;
+          sock.push(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+        }
+        if (!sock.destroyed && !sock._readableState.ended) sock.push(null);
       }
-      if (!sock.destroyed && !sock._readableState.ended) sock.push(null);
+      // Unconditional: an already-ended socket still re-fires EV_EOF forever otherwise.
+      if (!sock.destroyed) sock._stopReading();
     }
   }
   return events.length;

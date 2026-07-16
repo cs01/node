@@ -197,12 +197,22 @@ let _pendingCloseRefs = 0;
 Object.defineProperty(globalThis, '__pendingCloseRef', { value: function() { _pendingCloseRefs++; }, enumerable: false });
 Object.defineProperty(globalThis, '__pendingCloseUnref', { value: function() { _pendingCloseRefs--; }, enumerable: false });
 
+// MILO_LIFECYCLE_DEBUG=1 dumps loop-liveness state every N iterations. A healthy loop
+// blocks in poll() and never reaches the sample threshold; a busy-loop hits it in <1s and
+// the dump names the fd/counter that is wedging the exit check. See lifecycle-probes/PLAYBOOK.md.
+const _LC_DEBUG = !!(process.env && process.env.MILO_LIFECYCLE_DEBUG);
+const _LC_EVERY = 1000;
+function _lcLog(msg) {
+  try { require('fs').writeSync(2, `[lc] ${msg}\n`); } catch {}
+}
+
 Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEventLoop() {
   let net = null;
   try { net = require('net'); } catch {}
   const poll = net && net._pollOnce;
   const tick = () => { if (process.processTicksAndRejections) process.processTicksAndRejections(); };
   const drainAll = () => { tick(); _tb.drainMicrotasks(); tick(); };
+  let _lcIter = 0;
 
   for (;;) {
     const tickStart = _now();
@@ -226,6 +236,11 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     const hasTicks = process._nextTickQueue && process._nextTickQueue.length > 0;
     const hasImmediates = _hasRefImmediate();
     const hasPendingClose = _pendingCloseRefs > 0;
+    if (_LC_DEBUG && ++_lcIter % _LC_EVERY === 0) {
+      const socks = net && net.Socket._sockets ? [...net.Socket._sockets.keys()] : [];
+      const srvs = net && net.Server._servers ? [...net.Server._servers.keys()] : [];
+      _lcLog(`iter=${_lcIter} timers=${hasTimers} io=${hasIO} ticks=${hasTicks} imm=${hasImmediates} pclose=${_pendingCloseRefs} workers=${hasWorkers} socks=[${socks}] srvs=[${srvs}]`);
+    }
     if (!hasTimers && !hasIO && !hasTicks && !hasImmediates && !hasPendingClose && !hasWorkers) {
       if (process._emitBeforeExit) process._emitBeforeExit();
       drainAll();
@@ -253,10 +268,14 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     if (waitMs < 1 && !hasImmediates && !hasPendingClose) waitMs = 1;
 
     const pollStart = _now();
+    let _lcN = 0;
     if (poll) {
-      poll(waitMs);
+      _lcN = poll(waitMs);
     } else {
       _tb.sleepMs(waitMs);
+    }
+    if (_LC_DEBUG && _lcIter % _LC_EVERY === 0) {
+      _lcLog(`  poll(waitMs=${waitMs}) -> ${_lcN} events in ${_now() - pollStart}ms; immQ=${_immediateQueue.length}`);
     }
     _eluIdleMs += _now() - pollStart;
     drainAll();
