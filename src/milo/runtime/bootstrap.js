@@ -207,7 +207,11 @@
   } catch {}
   globalThis.internalBinding = function(name) {
     if (_jsBindings[name]) return _jsBindings[name];
-    try { return _nativeBinding(name); } catch { return Object.create(null); }
+    let b; try { b = _nativeBinding(name); } catch { b = Object.create(null); }
+    // getLibuvNow() = the loop's cached monotonic "now" in ms since process start
+    // (small enough to stay an SMI, unlike Date.now()'s epoch ms). perf.now() matches.
+    if (name === 'timers' && b && typeof b.getLibuvNow !== 'function') b.getLibuvNow = () => Math.floor(performance.now());
+    return b;
   };
   globalThis.getInternalBinding = globalThis.internalBinding;
 
