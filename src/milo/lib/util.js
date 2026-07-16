@@ -337,16 +337,35 @@ function inherits(ctor, superCtor) {
   Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
 }
 
-function deprecate(fn, msg, code) {
+// codes already warned about — a code dedups across ALL functions sharing it, so
+// two different deprecated fns with the same code warn only once total (node semantics).
+const _warnedDeprecationCodes = new Set();
+function deprecate(fn, msg, code, options) {
   if (code !== undefined && typeof code !== 'string') {
     throw _ERR_INVALID_ARG_TYPE('code', 'string', code);
   }
+  const modifyPrototype = !(options && options.modifyPrototype === false);
   let warned = false;
-  const wrapped = function(...args) {
-    if (!warned) { warned = true; process.emitWarning(msg, 'DeprecationWarning', code); }
+  function deprecated(...args) {
+    if (!warned) {
+      warned = true;
+      if (code === undefined || !_warnedDeprecationCodes.has(code)) {
+        if (code !== undefined) _warnedDeprecationCodes.add(code);
+        process.emitWarning(msg, 'DeprecationWarning', code);
+      }
+    }
+    if (new.target) return Reflect.construct(fn, args, new.target);
     return fn.apply(this, args);
-  };
-  return wrapped;
+  }
+  // preserve the original arity (tests assert deprecate(fn).length === fn.length)
+  Object.defineProperty(deprecated, 'length', { value: fn.length, configurable: true });
+  // share the wrapped fn's prototype AND inherit its statics unless the caller opts out,
+  // so the deprecated wrapper is a drop-in for the original (prototype methods + statics).
+  if (modifyPrototype) {
+    if (fn.prototype) deprecated.prototype = fn.prototype;
+    Object.setPrototypeOf(deprecated, fn);
+  }
+  return deprecated;
 }
 
 // Functions can opt into resolving with a named-object instead of a single value
