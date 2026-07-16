@@ -36,8 +36,8 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | timers     | 45/55     | 82%  | low      | **MEASURED 2026-07-16.** the old "51" was stale drift, not a regression (verified identical with and without the lifecycle fixes) |
 | whatwg     | 19/41     | 46%  | med      | URL↔searchParams live-sync, TextDecoder, webstreams |
 | stream     | 75/156    | 48%  | high     | re-tallied 2026-07-15; async-fn map/flatMap, web streams, pipe edge cases |
-| http       | 83/210    | 40%  | high     | **MEASURED 2026-07-16, HONEST COUNT.** pre-session 79 (oom 11); lifecycle+timeout fixes took it to 87 (oom 0), then unmasking swallowed handler exceptions revealed ~5 of those were FALSE passes -> 83 real. timeout 40->26: the rest are now readable assertion failures, not opaque hangs. next levers: playbook 5e (#1 variadic-fcntl blocking fds, #3 write-after-end codes) |
-| net        | 48/106    | 45%  | high     | **MEASURED 2026-07-16** (old "49" was wrong; real pre-fix 44). lifecycle+timeout fixes: 44->48, oom 3->0. Socket DOES extend Duplex already — that blocker is stale. 13 timeout left; ~5 are the variadic-fcntl blocking-fd bug (playbook 5e#1) |
+| http       | 85/210    | 40%  | high     | **MEASURED 2026-07-16, HONEST COUNT.** pre-session 79 (oom 11, timeout 40). now **85, oom 0, timeout 24** — and this 85 is real, unlike the mid-session 87 which included ~5 false passes from swallowed handler exceptions. next levers: playbook 5e #2 (OutgoingMessage write/end error codes, ~6-8 tests, JS-only), createServer({IncomingMessage,ServerResponse}) ignored, 100-continue |
+| net        | 49/106    | 46%  | high     | **MEASURED 2026-07-16.** pre-session 44 (oom 3, timeout 12). lifecycle + idle-timeout + nonblock/backpressure fixes: **44->49, oom 3->0, timeout 12->9**. Socket DOES extend Duplex already — that blocker is stale |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |
@@ -89,10 +89,14 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 ## high
 
 ### event loop drain / timeout fixes (~414 tests)
-2026-07-16: four real lifecycle bugs found+fixed (see lifecycle-probes/PLAYBOOK.md). ALL OOMs
-in net+http are gone (net 3->0, http 11->0) — every one was a busy-spin to v8 fatal-OOM from a
-stale/orphaned kqueue registration. net 44->46, http 79->85. Remaining timeouts are NOT spins
-(they sleep at ~0.05s cpu); they are missing-feature/logic bugs, chiefly http keep-alive reuse.
+2026-07-16 session: EIGHT real bugs found+fixed (see lifecycle-probes/PLAYBOOK.md).
+**net 44->49 (oom 3->0, timeout 12->9); http 79->85 (oom 11->0, timeout 40->24).**
+Biggest: (1) fcntl declared as fixed-arity for a VARIADIC libc fn -> O_NONBLOCK never landed ->
+every socket blocking -> large writes deadlocked the loop; fixed via C wrapper + EAGAIN
+backpressure. (2) fd-reuse race: deferred _sockets.delete(fd) evicted the NEW owner of a
+recycled fd, orphaning live sockets (one root cause behind spin-OOMs, the p04 flake, AND
+"keep-alive is broken"). (3) __hasIO counted map membership as liveness where libuv counts only
+ACTIVE handles. (4) http answered 500 on a throwing handler, hiding every failed assert.
 - [x] ~~net: socket 'end' event not firing~~ — STALE: verified firing (probe p09). Real bugs were
       the liveness model (map membership vs libuv active-handle) + fd-reuse orphaning.
 - [ ] **http keep-alive socket reuse: request 2 is never sent** (playbook 5a) — likely gates a
