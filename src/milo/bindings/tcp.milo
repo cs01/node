@@ -367,15 +367,24 @@ fn tcpConnect(info: *u8, _ud: *u8): void {
         let host_arg = ci.arg(1)
         host_arg.writeUtf8(iso, host_buf as *u8, 256)
 
-        var addr: [u8; 16] = [0; 16]
-        addr[0] = 16
-        addr[1] = 2
-        let port_n = htons(port)
-        addr[2] = (port_n & 0xff) as u8
-        addr[3] = ((port_n >> 8) & 0xff) as u8
-        inet_pton(2, host_buf as *u8, (addr as *u8 as i64 + 4) as *u8)
-
-        let r = connect(fd, addr as *u8, 16)
+        // Family comes from the host, exactly as tcpBind does. This fn only gets
+        // (fd, host, port), and the alternative — asking the fd via getsockopt(SO_DOMAIN)
+        // — is Linux-only, so there is nothing to read it off on macOS. net.js computes
+        // the same thing for tcp.socket(), so the two agree by construction.
+        var addr: [u8; 28] = [0; 28]
+        var family = AF_INET
+        if hostIsV6(host_buf as *u8) {
+            family = AF_INET6
+        }
+        let alen = buildSockAddr(host_buf as *u8, port, addr as *u8, family)
+        if alen < 0 {
+            // Same silent failure as bind had: inet_pton's result was discarded, so
+            // connect('::1') went to 0.0.0.0 — which reaches localhost, so it appeared to
+            // work. That accident is exactly why the v4-only stack went unnoticed.
+            ci.retI32(-1)
+            return
+        }
+        let r = connect(fd, addr as *u8, alen as i32)
         ci.retI32(r)
     }
 }
@@ -948,10 +957,14 @@ fn sslCtxFree(info: *u8, _ud: *u8): void {
 // --- UDP bindings ---
 
 // udpSocket() → fd  (AF_INET=2, SOCK_DGRAM=2)
+// udpSocket(family?) -> fd. Defaults to AF_INET; pass AF_INET6 (30) for udp6.
+// dgram.createSocket('udp6') used to get an AF_INET socket, which is the same root cause
+// as tcp's: the family is fixed here, and nothing downstream can change it.
 fn udpSocket(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     
-        let fd = socket(2, 2, 0)
+        let family = ci.i32Arg(0, AF_INET)
+        let fd = socket(family, 2, 0)
         if fd >= 0 {
             nm_set_nonblock(fd)
         }
@@ -971,22 +984,21 @@ fn udpBind(info: *u8, _ud: *u8): void {
             ci.arg(2).writeUtf8(iso, host_buf as *u8, 256)
         }
 
-        var addr: [u8; 16] = [0; 16]
-        addr[0] = 16
-        addr[1] = 2
-        let port_n = htons(port)
-        addr[2] = (port_n & 0xff) as u8
-        addr[3] = ((port_n >> 8) & 0xff) as u8
-
-        if host_buf[0] != 0 {
-            inet_pton(2, host_buf as *u8, (addr as *u8 as i64 + 4) as *u8)
+        var addr: [u8; 28] = [0; 28]
+        var family = AF_INET
+        if hostIsV6(host_buf as *u8) {
+            family = AF_INET6
         }
-
+        let alen = buildSockAddr(host_buf as *u8, port, addr as *u8, family)
+        if alen < 0 {
+            ci.retI32(-1)
+            return
+        }
         // SO_REUSEADDR
         var on: [i32; 1] = [1]
         setsockopt(fd, 0xffff, 4, on as *u8, 4)
 
-        let r = bind(fd, addr as *u8, 16)
+        let r = bind(fd, addr as *u8, alen as i32)
         ci.retI32(r)
     }
 }

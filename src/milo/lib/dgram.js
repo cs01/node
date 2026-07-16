@@ -3,6 +3,9 @@
 
 const EventEmitter = require('events');
 const tcp = internalBinding('tcp');
+// macOS values; the tcp binding is macOS-only (kqueue). Linux would be 10.
+const AF_INET = 2;
+const AF_INET6 = 30;
 const net = require('net');
 const { getSystemErrorName } = require('util');
 
@@ -10,7 +13,10 @@ class Socket extends EventEmitter {
   constructor(type, listener) {
     super();
     this.type = type || 'udp4';
-    this._fd = tcp.udpSocket();
+    // createSocket('udp6') used to get an AF_INET socket: the family is fixed at socket()
+    // time, so binding '::1' to it was rejected — or, before tcp.milo checked inet_pton,
+    // silently became 0.0.0.0 and reported IPv4.
+    this._fd = tcp.udpSocket(this.type === 'udp6' ? AF_INET6 : AF_INET);
     this._closed = false;
     this._bound = false;
     this._receiving = false;
@@ -27,7 +33,7 @@ class Socket extends EventEmitter {
     if (typeof address === 'function') { cb = address; address = undefined; }
 
     if (this._fd < 0) {
-      this._fd = tcp.udpSocket();
+      this._fd = tcp.udpSocket(this.type === 'udp6' ? AF_INET6 : AF_INET);
       if (this._fd < 0) {
         process.nextTick(() => this.emit('error', new Error('socket() failed')));
         return this;
@@ -142,7 +148,7 @@ class Socket extends EventEmitter {
     address = address || '127.0.0.1';
 
     if (!this._bound) {
-      this._fd = tcp.udpSocket();
+      this._fd = tcp.udpSocket(this.type === 'udp6' ? AF_INET6 : AF_INET);
       if (this._fd < 0) {
         if (cb) cb(new Error('socket() failed'));
         return;
@@ -180,7 +186,7 @@ class Socket extends EventEmitter {
     }
     this._connectPending = true;
     if (!this._bound) {
-      this._fd = tcp.udpSocket();
+      this._fd = tcp.udpSocket(this.type === 'udp6' ? AF_INET6 : AF_INET);
       if (this._fd < 0) {
         this._connectPending = false;
         const err = new Error('socket() failed');
@@ -216,7 +222,7 @@ class Socket extends EventEmitter {
       const e = new Error('Not connected');
       e.code = 'ERR_SOCKET_DGRAM_NOT_CONNECTED'; throw e;
     }
-    return { address: this._remoteAddress, family: 'IPv4', port: this._remotePort };
+    return { address: this._remoteAddress, family: this.type === 'udp6' ? 'IPv6' : 'IPv4', port: this._remotePort };
   }
 
   close(cb) {
@@ -238,7 +244,9 @@ class Socket extends EventEmitter {
   address() {
     if (this._fd < 0 || !this._bound) throw new Error('getsockname EBADF');
     const info = tcp.getSockName(this._fd);
-    return { address: info.address, port: info.port, family: 'IPv4' };
+    // getSockName reports the socket's real family; this used to overwrite it with
+    // 'IPv4', so a udp6 socket bound to ::1 still answered IPv4.
+    return { address: info.address, port: info.port, family: info.family };
   }
 
   sendto(buffer, offset, length, port, address, cb) {
