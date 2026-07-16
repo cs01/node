@@ -458,7 +458,19 @@ class Http2ServerRequest extends Readable {
   _read() {}
   get trailers() { return {}; }
   get rawTrailers() { return []; }
-  setTimeout(ms, cb) { this.stream.setTimeout(ms, cb); return this; }
+  // node: a no-op once the request/response is closed (compat.js:434, :871) — the test
+  // asserts a post-'finish' setTimeout is mustNotCall. The stream's 'timeout' is also
+  // forwarded onto this object (compat.js:303 onStreamTimeout), because listeners are
+  // registered on req/res, not on the stream.
+  setTimeout(ms, cb) {
+    if (!this.stream || this.stream.destroyed) return this; // node no-ops once closed (compat.js:434,:871)
+    if (!this._timeoutFwd && this.stream) {
+      this._timeoutFwd = true;
+      this.stream.on('timeout', () => this.emit('timeout'));
+    }
+    if (this.stream) this.stream.setTimeout(ms, cb);
+    return this;
+  }
 }
 
 class Http2ServerResponse extends EventEmitter {
@@ -537,7 +549,19 @@ class Http2ServerResponse extends EventEmitter {
     process.nextTick(() => this.emit('finish'));
     return this;
   }
-  setTimeout(ms, cb) { this.stream.setTimeout(ms, cb); return this; }
+  // node: a no-op once the request/response is closed (compat.js:434, :871) — the test
+  // asserts a post-'finish' setTimeout is mustNotCall. The stream's 'timeout' is also
+  // forwarded onto this object (compat.js:303 onStreamTimeout), because listeners are
+  // registered on req/res, not on the stream.
+  setTimeout(ms, cb) {
+    if (!this.stream || this.stream.destroyed) return this; // node no-ops once closed (compat.js:434,:871)
+    if (!this._timeoutFwd && this.stream) {
+      this._timeoutFwd = true;
+      this.stream.on('timeout', () => this.emit('timeout'));
+    }
+    if (this.stream) this.stream.setTimeout(ms, cb);
+    return this;
+  }
   // Node detaches the socket from the response once it has finished.
   get socket() { return this.finished ? undefined : this._proxy; }
   get connection() { return this.socket; }
