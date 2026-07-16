@@ -24,7 +24,6 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | module     | pass/total | rate | priority | top blockers |
 |------------|-----------|------|----------|--------------|
 | event      | 27/28     | 96%  | low      | capture-rejections avoidLoop: when ee[captureRejectionSymbol] async handler itself throws, _err2 must surface as unhandledRejection; works in isolation, fails only in the 8-fn nextTick chain (rejection-tracking during nested tick drain). bootstrap event-loop issue, not events.js |
-| timers     | 49/55     | 89%  | low      | refresh ordering, getLibuvNow (native syntax), ALS, domain |
 | require    | 17/19     | 89%  | low      | preserve-symlinks flag, delete-array-iterator |
 | module     | 21/26     | 80%  | high     | .node dlopen, circular-dep warning, main-fail stderr |
 | worker     | 40/53     | 75%  | low      | heap-snapshot, wasm transfer, type-check/workerdata validation, message-port receive/transfer |
@@ -34,10 +33,11 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | diagnostics| 10/17     | 58%  | low      | tracingChannel+ALS async propagation, udp |
 | util       | 10/19     | 53%  | med      | inspect getters/showHidden, callbackify, deprecate |
 | fs         | 174/201   | 86%  | high     | re-tallied 2026-07-15 (was 99 in May snapshot); 25 fail + 2 timeout left: errno fidelity (access EACCES→ENOENT mislabel, readfile-error EIO), readdir withFileTypes .map, watchfile/patch-open timeouts |
+| timers     | 45/55     | 82%  | low      | **MEASURED 2026-07-16.** the old "51" was stale drift, not a regression (verified identical with and without the lifecycle fixes) |
 | whatwg     | 19/41     | 46%  | med      | URL↔searchParams live-sync, TextDecoder, webstreams |
 | stream     | 75/156    | 48%  | high     | re-tallied 2026-07-15; async-fn map/flatMap, web streams, pipe edge cases |
-| http       | 91/210    | 43%  | high     | timeout/abort, keep-alive, error codes |
-| net        | 44/106    | 41%  | high     | Socket not extending Duplex |
+| http       | 82/210    | 39%  | high     | **MEASURED 2026-07-16** (old "91" was stale; real pre-fix was 79). 40 timeout + 8 oom — biggest remaining lifecycle pool |
+| net        | 46/106    | 43%  | high     | **MEASURED 2026-07-16** (old "49" was wrong; real pre-fix was 44). Socket DOES extend Duplex already — that roadmap claim is stale. 12 timeout + 1 oom left; see src/milo/lifecycle-probes/PLAYBOOK.md |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |
