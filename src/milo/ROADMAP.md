@@ -140,6 +140,43 @@ ACTIVE handles. (4) http answered 500 on a throwing handler, hiding every failed
 - [ ] `--expose-internals` flag (319 tests need it)
 - [ ] `--permission` security model (39 tests need it)
 
+## THE POINT (strategy, decided 2026-07-16)
+
+**Spend milo's budget where milo is differentiated: memory-safe Buffer ops and parsers with
+proved contracts.** Not on reimplementing OS plumbing.
+
+Evidence for this framing, from the 2026-07-16 lifecycle session (10 bugs found+fixed):
+- **9 of 10 were plain JS logic bugs in `lib/*.js`** — a layer that is identical in node and
+  node-milo. Milo's type system, memory safety and `unsafe` discipline were irrelevant to
+  every one of them. Compat % is won almost entirely in this layer, so **compat % does not
+  measure milo's thesis at all**.
+- **The 10th was CAUSED by the milo seam**: `fcntl` is variadic, milo let it be declared as a
+  fixed-arity extern with no diagnostic, so O_NONBLOCK never landed and every socket in the
+  runtime was blocking. C++ gets this right for free via `#include <fcntl.h>`. That is a bug
+  class milo *introduced*, not one it prevented.
+- **ZERO memory-safety bugs were found.** The hand-written event loop, meanwhile, produced 4
+  races that libuv/usockets simply do not have (map-membership liveness, fd-reuse eviction,
+  EOF storms, orphaned registrations). Reimplementing battle-tested plumbing subtracts
+  correctness; it does not add it.
+
+Where milo can actually win: node's real CVE history is **Buffer arithmetic, HTTP request
+smuggling, zlib/protocol framing** — exactly the code where memory safety plus statically
+verified contracts (requires/ensures/invariant discharged to Z3, zero runtime cost — the SPARK
+model with Dafny syntax) beat C++. That claim is defensible to a safety-critical audience.
+"we rewrote the event loop" is not.
+
+Cheapest experiment that tests the thesis (~1 day, far more informative than any compat point):
+prove the four buffer contracts listed below, then fuzz the http parser. See `## formal
+verification`.
+
+Event-loop plumbing: adopt libuv's **active-handle model** (handle owns its fd; liveness =
+has-pending-operation + refcount) instead of the fd-keyed maps — kills the whole 2026-07-16
+bug class and is a prerequisite for any libuv migration. NOT usockets: bun uses it (POSIX;
+libuv on Windows only) but bun reimplements node's API surface itself, whereas node-milo runs
+node's real `lib/*.js`, which is written against libuv's model (`internalBinding('uv')`,
+`_handle`, ref/unref — the uv errmap is already ported here). usockets also omits the fs/dns
+threadpools, child_process, signals and TTY that node-milo needs.
+
 ## formal verification
 
 Milo has built-in `requires`/`ensures`/`invariant` contracts → SMT-LIB2 → Z3. Zero runtime cost.

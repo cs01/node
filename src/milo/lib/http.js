@@ -106,9 +106,20 @@ class OutgoingMessage extends EventEmitter {
     if (this.socket) this.socket.destroy(err);
     return this;
   }
+  // node answers a write/end after end() with ERR_STREAM_WRITE_AFTER_END: it invokes the
+  // callback with the error AND emits 'error'. Milo silently dropped both, so tests that
+  // assert on the callback error just hung waiting for a call that never came.
+  _writeAfterEnd(cb) {
+    const err = new Error('write after end');
+    err.code = 'ERR_STREAM_WRITE_AFTER_END';
+    process.nextTick(() => { if (typeof cb === 'function') cb(err); this.emit('error', err); });
+    return false;
+  }
+
   write(chunk, encoding, cb) {
     if (typeof encoding === 'function') { cb = encoding; encoding = null; }
     if (chunk === null) { const e = new TypeError('May not write null values to stream'); e.code = 'ERR_STREAM_NULL_VALUES'; throw e; }
+    if (this.finished) return this._writeAfterEnd(cb);
     if (typeof chunk !== 'string' && !Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) {
       const e = new TypeError('The "chunk" argument must be of type string or an instance of Buffer or Uint8Array. Received ' + (chunk === undefined ? 'undefined' : 'type ' + typeof chunk + ' (' + chunk + ')'));
       e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
@@ -139,6 +150,8 @@ class OutgoingMessage extends EventEmitter {
   end(chunk, encoding, cb) {
     if (typeof chunk === 'function') { cb = chunk; chunk = undefined; encoding = undefined; }
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
+    // guard BEFORE write(): a second end() is a write-after-end, not a no-op
+    if (this.finished) { this._writeAfterEnd(cb); return this; }
     if (chunk) this.write(chunk, encoding);
     if (!this._headersSent && this._implicitHeader) this._implicitHeader();
     this.finished = true;
@@ -299,7 +312,10 @@ class ServerResponse extends OutgoingMessage {
     this._socket.write(head);
   }
   write(chunk, encoding, cb) {
-    if (this.finished) { if (typeof cb === 'function') cb(); return true; }
+    // `encoding` is optional: res.write(chunk, cb) is the common form, and dropping it
+    // here meant the callback was silently never invoked.
+    if (typeof encoding === 'function') { cb = encoding; encoding = null; }
+    if (this.finished) return this._writeAfterEnd(cb);
     if (!this._headersSent) this._implicitHeader();
     if (this._chunked) {
       let data;
@@ -315,8 +331,10 @@ class ServerResponse extends OutgoingMessage {
     return true;
   }
   end(chunk, encoding, cb) {
-    if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
-    if (this.finished) { if (cb) cb(); return this; }
+    if (typeof chunk === 'function') { cb = chunk; chunk = undefined; encoding = undefined; }
+    if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
+    // a second end() is a write-after-end in node, not a silent no-op
+    if (this.finished) { this._writeAfterEnd(cb); return this; }
     if (!this._headersSent) this._implicitHeader();
     if (chunk) this.write(chunk, encoding);
     if (this._chunked) this._socket.write('0\r\n\r\n');
