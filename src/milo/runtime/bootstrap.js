@@ -514,6 +514,9 @@
         for (const k of ['protocol','username','password','hostname','port','pathname','search','hash','host','origin','href','searchParams']) {
           Object.defineProperty(this, k, { value: this[k], enumerable: false, writable: true, configurable: true });
         }
+        // normalize href from the parsed parts (adds the trailing "/" node gives an
+        // empty path, canonicalizes) instead of echoing the raw input string.
+        this._rebuildHref();
         // live-sync: mutating searchParams updates the parent URL's search + href
         // (wired AFTER construction so the initial parse doesn't fire it).
         this.searchParams._onChange = () => {
