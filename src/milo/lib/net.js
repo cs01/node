@@ -62,8 +62,8 @@ class Socket extends Duplex {
     this._connecting = false;
     this.remoteAddress = undefined;
     this.remotePort = undefined;
-    this.localAddress = undefined;
-    this.localPort = undefined;
+    // localAddress/localPort/localFamily are getters below — do NOT assign own properties
+    // here or they shadow the getters (and throw in strict mode).
     if (options && options.signal) this._addAbortSignal(options.signal);
     if (this._fd >= 0) this._startReading();
   }
@@ -139,6 +139,23 @@ class Socket extends Duplex {
     const _validatePort = require('internal/validators').validatePort;
     port = _validatePort(port, 'options.port');
     if (cb) this.once('connect', cb);
+    // node lets a destroyed Socket be reconnected — `new net.Socket()` reused across two
+    // connect() calls is a real idiom (test-net-socket-local-address). It calls
+    // self._undestroy() and clears the handle (lib/net.js:323, :1317). milo never reset
+    // anything, so the second connect() hung. NB milo's _undestroy() resets only the
+    // WRITABLE state, so the readable side is reset here too.
+    if (this.destroyed) {
+      this._undestroy();
+      const rs = this._readableState;
+      if (rs) { rs.ended = false; rs.endEmitted = false; rs.destroyed = false; rs.flowing = null; rs.buffer = []; rs.length = 0; rs.readable = true; }
+      this._handle = null;
+      this._fd = -1;
+      this._readPollRemoved = false;
+      this._pendingWrite = null;
+      this._preConnectWrites = null;
+      this._peerDisconnected = false;
+      this._connecting = false;
+    }
     // NOTE: `port` is reassigned to opts.port above, so the signal must be captured from
     // the options object while it is still in scope (_signalOpt), not re-read from `port`.
     this._addAbortSignal(_signalOpt);
@@ -351,6 +368,13 @@ class Socket extends Duplex {
     if (this._fd < 0) return {};
     return tcp.getSockName(this._fd) || {};
   }
+
+  // node exposes the local end of the connection as getters (lib/net.js). They were plain
+  // `undefined` assignments in the constructor that nothing ever populated, even though
+  // getSockName() has been available all along (it already backs address()).
+  get localAddress() { const a = this._fd >= 0 ? tcp.getSockName(this._fd) : null; return a ? a.address : undefined; }
+  get localPort() { const a = this._fd >= 0 ? tcp.getSockName(this._fd) : null; return a ? a.port : undefined; }
+  get localFamily() { const a = this._fd >= 0 ? tcp.getSockName(this._fd) : null; return a ? a.family : undefined; }
 
   setNoDelay(noDelay) {
     if (this._fd >= 0) tcp.setNoDelay(this._fd, noDelay !== false ? 1 : 0);
