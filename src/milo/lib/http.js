@@ -44,6 +44,18 @@ class IncomingMessage extends Readable {
     this.complete = false;
   }
   _read() {}
+  // IncomingMessage had NO destroy override, so it inherited Readable.destroy(): the stream
+  // died but the underlying socket stayed open and held the loop forever. Node tears the
+  // socket down (lib/_http_incoming.js _destroy) and marks the message aborted when it was
+  // destroyed before completing.
+  _destroy(err, cb) {
+    if (!this.readableEnded || !this.complete) {
+      this.aborted = true;
+      this.emit('aborted');
+    }
+    if (this.socket && !this.socket.destroyed && this.aborted) this.socket.destroy(err);
+    if (typeof cb === 'function') process.nextTick(cb, err);
+  }
   setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
   _addHeaderLines(headers, n) {
     if (headers && headers.length) {
@@ -276,6 +288,10 @@ class ServerResponse extends OutgoingMessage {
     socket.on('close', () => { this.emit('close'); });
   }
   _implicitHeader() { this.writeHead(this.statusCode); }
+  // ServerResponse only defined _flushHeaders, so the public flushHeaders() resolved to
+  // OutgoingMessage's EMPTY stub and sent nothing. _flushHeaders already no-ops when the
+  // headers are out, which gives node's required idempotency for free.
+  flushHeaders() { this._flushHeaders(); return this; }
   // 100-continue: node emits 'checkContinue' instead of 'request' when the client sends
   // Expect: 100-continue and a listener exists; the handler answers with writeContinue().
   // Ported from lib/_http_server.js (writeContinue -> writeInformation(100)).
