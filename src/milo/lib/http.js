@@ -439,6 +439,15 @@ class Server extends EventEmitter {
         for (;;) {
           // Phase 1: parse request line + headers (no request in flight).
           if (!currentReq) {
+            // RFC 7230 3.5: a server MUST ignore at least one empty line (CRLF) before the
+            // request line — old clients emit a stray CRLF after a body, and on a keep-alive
+            // connection it lands here as the start of the "next" request. Without this we
+            // parsed "\r\n\r\n" as a request with an empty method and undefined url and
+            // emitted a bogus 'request' event, so the client got two responses for one
+            // request and the connection desynchronised.
+            let skip = 0;
+            while (skip + 1 < buffer.length && buffer[skip] === 0x0d && buffer[skip+1] === 0x0a) skip += 2;
+            if (skip > 0) buffer = buffer.slice(skip);
             let headerEnd = -1;
             for (let i = 0; i <= buffer.length - 4; i++) {
               if (buffer[i] === 0x0d && buffer[i+1] === 0x0a && buffer[i+2] === 0x0d && buffer[i+3] === 0x0a) {

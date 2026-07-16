@@ -380,6 +380,38 @@ with unflushed data becomes real and the process will exit mid-flush. Tighten to
 ONE uses `IncomingMessage.setTimeout` and ZERO use `Server.setTimeout` (measured: the
 Server.setTimeout fix flipped exactly 0 tests). Fix them for correctness, not for score.
 
+## 5f. NEXT TARGET: the http keep-alive cluster (5 tests, partially done 2026-07-16)
+
+Tests: test-http-server-keep-alive-defaults, -keep-alive-pipeline-max-requests,
+-server-keep-alive-max-requests-null, -keep-alive-drop-requests, -server-keepalive-req-gc.
+**All five still HANG.** Three groundwork bugs are already fixed (each verified byte-identical
+to `./out/Release/node`), but they were necessary-not-sufficient — the cluster needs the
+remaining items below:
+
+DONE:
+- node 27's `keepAliveTimeout` default is **65_000**, not node's old 5000 (lib/_http_server.js:544).
+- `Connection: keep-alive` + `Keep-Alive: timeout=N[, max=M]` are now emitted
+  (ported from lib/_http_outgoing.js:470-495). Neither header was EVER sent before:
+  `keepAliveTimeout`/`maxRequestsPerSocket` existed only as constructor assignments that
+  nothing read — the same "declared once, never read" shape as `maxConnections`.
+  **Grep for more of these: `grep -n 'this\.[a-zA-Z]* =' http.js` then check each has a reader.**
+- **RFC 7230 3.5 leading-CRLF skip**: the tests write a stray `\r\n\r\n` after the body, which
+  on a keep-alive connection lands as the next "request". Milo parsed it as a request with an
+  empty method and undefined url and emitted a BOGUS 'request' event — the client got two
+  responses for one request and the connection desynchronised. Now skipped like node.
+
+STILL MISSING (the actual blockers — verify each against ./out/Release/node):
+- `keepAliveTimeout` is emitted in the header but never ENFORCED: nothing arms a timer to
+  close an idle keep-alive socket after N ms.
+- `maxRequestsPerSocket` is advertised as `max=N` but never enforced: node answers the
+  (N+1)th request on a connection with `Connection: close` and sets
+  `maxRequestsOnConnectionReached` (see lib/_http_outgoing.js:478).
+- HTTP pipelining (several requests in flight on one socket) — needed by
+  -keep-alive-pipeline-max-requests.
+Method: `MILO_LIFECYCLE_DEBUG=1` + compare a raw-socket transcript against
+`./out/Release/node` side by side; the tests drive raw sockets, so a byte-diff of the two
+transcripts localises it fast.
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
