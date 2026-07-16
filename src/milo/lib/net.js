@@ -61,6 +61,7 @@ class Socket extends Duplex {
 
   _startReading() {
     ensurePoll();
+    this._readPollRemoved = false; // re-registering: a stale flag would suppress the dereg
     tcp.pollAdd(this._fd, EVFILT_READ);
     Socket._sockets.set(this._fd, this);
   }
@@ -535,7 +536,10 @@ function _pollOnce(timeout) {
         if (!sock.destroyed && !sock._readableState.ended) sock.push(null);
       }
       // Unconditional: an already-ended socket still re-fires EV_EOF forever otherwise.
-      if (!sock.destroyed) sock._stopReading();
+      // Socket._sockets also holds plain pipe objects (child_process stdio, stdin, IPC)
+      // that have no _stopReading — they are only saved today by their _onReadable setting
+      // destroyed=true on this same event, which does not hold if readPipe drains empty.
+      if (!sock.destroyed && typeof sock._stopReading === 'function') sock._stopReading();
     }
   }
   return events.length;
