@@ -64,7 +64,27 @@ class Socket extends Duplex {
     this.remotePort = undefined;
     this.localAddress = undefined;
     this.localPort = undefined;
+    if (options && options.signal) this._addAbortSignal(options.signal);
     if (this._fd >= 0) this._startReading();
+  }
+
+  // node honors options.signal on BOTH `new net.Socket({signal})` and `connect({signal})`
+  // (it inherits the constructor case from Duplex). Aborting destroys the socket with an
+  // AbortError. Note the listener is only registered when the signal is NOT already
+  // aborted — tests assert listenerCount(signal,'abort') is 0 in the pre-aborted case.
+  _addAbortSignal(signal) {
+    if (!signal) return;
+    if (typeof signal !== 'object' || typeof signal.addEventListener !== 'function') {
+      const e = new TypeError(`The "options.signal" property must be an instance of AbortSignal. Received ${typeof signal}`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    const onAbort = () => {
+      const err = new Error('The operation was aborted');
+      err.name = 'AbortError'; err.code = 'ABORT_ERR';
+      this.destroy(err);
+    };
+    if (signal.aborted) process.nextTick(onAbort);
+    else signal.addEventListener('abort', onAbort, { once: true });
   }
 
   _startReading() {
@@ -120,20 +140,7 @@ class Socket extends Duplex {
     if (cb) this.once('connect', cb);
     // NOTE: `port` is reassigned to opts.port above, so the signal must be captured from
     // the options object while it is still in scope (_signalOpt), not re-read from `port`.
-    const _signal = _signalOpt;
-    if (_signal) {
-      if (typeof _signal !== 'object' || typeof _signal.addEventListener !== 'function') {
-        const e = new TypeError(`The "options.signal" property must be an instance of AbortSignal. Received ${typeof _signal}`);
-        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
-      }
-      const onAbort = () => {
-        const err = new Error('The operation was aborted');
-        err.name = 'AbortError'; err.code = 'ABORT_ERR';
-        this.destroy(err);
-      };
-      if (_signal.aborted) process.nextTick(onAbort);
-      else _signal.addEventListener('abort', onAbort, { once: true });
-    }
+    this._addAbortSignal(_signalOpt);
     this._connecting = true;
 
     ensurePoll();
