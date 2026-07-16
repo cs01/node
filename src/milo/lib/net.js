@@ -80,6 +80,7 @@ class Socket extends Duplex {
       e.code = 'ERR_MISSING_ARGS'; throw e;
     }
     let isPipe = false;
+    let _signalOpt;
     if (typeof port === 'object') {
       const opts = port;
       if (opts !== null && opts.port === undefined && opts.path === undefined) {
@@ -102,6 +103,7 @@ class Socket extends Duplex {
         e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
       }
       if (opts.path) isPipe = true;
+      _signalOpt = opts.signal; // capture before `port` is overwritten below
       port = opts.port; host = opts.host || opts.hostname;
     } else if (typeof port === 'string' && !Number.isFinite(+port)) {
       isPipe = true;
@@ -116,6 +118,22 @@ class Socket extends Duplex {
     const _validatePort = require('internal/validators').validatePort;
     port = _validatePort(port, 'options.port');
     if (cb) this.once('connect', cb);
+    // NOTE: `port` is reassigned to opts.port above, so the signal must be captured from
+    // the options object while it is still in scope (_signalOpt), not re-read from `port`.
+    const _signal = _signalOpt;
+    if (_signal) {
+      if (typeof _signal !== 'object' || typeof _signal.addEventListener !== 'function') {
+        const e = new TypeError(`The "options.signal" property must be an instance of AbortSignal. Received ${typeof _signal}`);
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
+      const onAbort = () => {
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError'; err.code = 'ABORT_ERR';
+        this.destroy(err);
+      };
+      if (_signal.aborted) process.nextTick(onAbort);
+      else _signal.addEventListener('abort', onAbort, { once: true });
+    }
     this._connecting = true;
 
     ensurePoll();
