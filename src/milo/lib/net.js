@@ -100,7 +100,7 @@ class Socket extends Duplex {
       e.code = 'ERR_MISSING_ARGS'; throw e;
     }
     let isPipe = false;
-    let _signalOpt;
+    let _signalOpt, _lookupOpt, _familyOpt, _hintsOpt;
     if (typeof port === 'object') {
       const opts = port;
       if (opts !== null && opts.port === undefined && opts.path === undefined) {
@@ -124,6 +124,7 @@ class Socket extends Duplex {
       }
       if (opts.path) isPipe = true;
       _signalOpt = opts.signal; // capture before `port` is overwritten below
+      _lookupOpt = opts.lookup; _familyOpt = opts.family; _hintsOpt = opts.hints;
       port = opts.port; host = opts.host || opts.hostname;
     } else if (typeof port === 'string' && !Number.isFinite(+port)) {
       isPipe = true;
@@ -143,22 +144,54 @@ class Socket extends Duplex {
     this._addAbortSignal(_signalOpt);
     this._connecting = true;
 
+    // node resolves the host in JS and emits 'lookup' (lib/net.js:1468) — milo handed the
+    // hostname straight to C, so 'lookup' never fired, options.lookup was ignored and a DNS
+    // failure surfaced with the wrong error. An IP LITERAL still takes the fully synchronous
+    // path: node skips resolution for literals (verified: no 'lookup' emitted), and keeping
+    // it sync means the overwhelmingly common case is untouched by this change.
+    if (isIP(host)) {
+      this._doConnect(host, port);
+    } else {
+      const lookupFn = _lookupOpt || require('dns').lookup;
+      if (typeof lookupFn !== 'function') {
+        const e = new TypeError(`The "options.lookup" property must be of type function. Received type ${typeof lookupFn}`);
+        e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+      }
+      lookupFn(host, { family: _familyOpt || 0, hints: _hintsOpt }, (err, ip, family) => {
+        this.emit('lookup', err, ip, family, host); // node emits this even on error
+        if (this.destroyed || !this._connecting) return; // destroyed while resolving
+        if (err) {
+          if (!err.host) err.host = host;
+          this.destroy(err);
+          return;
+        }
+        // a custom options.lookup can hand back anything; node rejects a family that is
+        // neither 4 nor 6 rather than trying to connect with it
+        if (family !== 4 && family !== 6) {
+          const e = new Error(`Invalid address family: ${family} ${host}:${port}`);
+          e.code = 'ERR_INVALID_ADDRESS_FAMILY'; e.host = host; e.port = port;
+          this.destroy(e);
+          return;
+        }
+        this._doConnect(ip, port);
+      });
+    }
+    return this;
+  }
+
+  _doConnect(ip, port) {
     ensurePoll();
     this._fd = tcp.socket();
     if (this._fd < 0) {
       process.nextTick(() => this.emit('error', new Error('socket() failed')));
-      return this;
+      return;
     }
     this._handle = { fd: this._fd };
-
-    const r = tcp.connect(this._fd, host, port);
-    // connect returns 0 or EINPROGRESS (-36 on macOS)
-    // watch for write-ready to know when connected
+    tcp.connect(this._fd, ip, port); // 0 or EINPROGRESS; readiness comes via EVFILT_WRITE
     tcp.pollAdd(this._fd, EVFILT_WRITE);
     Socket._sockets.set(this._fd, this);
-    this.remoteAddress = host;
+    this.remoteAddress = ip;
     this.remotePort = port;
-    return this;
   }
 
   _onConnected(ev) {
@@ -187,6 +220,11 @@ class Socket extends Duplex {
       return;
     }
     this._startReading();
+    // drain anything written before the async hostname lookup produced an fd
+    if (this._preConnectWrites && this._preConnectWrites.length) {
+      const queued = this._preConnectWrites; this._preConnectWrites = null;
+      for (const q of queued) this._sendFrom(q.buf, 0, q.cb);
+    }
     this.emit('connect');
     // node emits 'ready' immediately after 'connect' (lib/net.js:1690-1691). It was missing
     // entirely, so anything gated on socket.on('ready') — a common test idiom — never ran.
@@ -218,6 +256,19 @@ class Socket extends Duplex {
   _write(data, encoding, cb) {
     if (this._timeoutMs > 0) this._armTimeout(); // activity resets the idle timer
     if (this._peerDisconnected) { const e = new Error('write ECONNRESET'); e.code = 'ECONNRESET'; cb(e); return; }
+    // A hostname connect resolves asynchronously, so the fd does not exist yet when user
+    // code writes right after connect(). Node buffers those writes; rejecting them with
+    // 'Socket is closed' broke every write-before-connect caller. Park in the same slot the
+    // EAGAIN path uses and flush from _onConnected.
+    if (this._fd < 0 && this._connecting) {
+      let b;
+      if (Buffer.isBuffer(data)) b = data;
+      else if (data instanceof Uint8Array) b = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+      else b = Buffer.from(typeof data === 'string' ? data : String(data), encoding);
+      this._preConnectWrites = this._preConnectWrites || [];
+      this._preConnectWrites.push({ buf: b, cb });
+      return;
+    }
     if (this._fd < 0) { cb(new Error('Socket is closed')); return; }
     let buf;
     if (Buffer.isBuffer(data)) buf = data;
