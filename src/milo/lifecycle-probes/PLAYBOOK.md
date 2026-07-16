@@ -445,6 +445,21 @@ http (92) pass runs through it, plus `_onConnected`'s EVFILT_WRITE dance. Do it 
 session, never last, and run the full ladder (probes + net + http) before believing it.
 Validate `opts.lookup` arity/behavior against node: it is called with (host, opts, cb).
 
+## 5h. options.signal: half done (2026-07-16)
+
+`net.connect({signal})` now destroys with AbortError/ABORT_ERR, byte-identical to
+`./out/Release/node` for live and already-aborted signals (net.js connect()). **Gotcha that
+cost a cycle:** `connect()` reassigns `port` from the options object to `opts.port` early, so
+the signal must be captured while the object is still in scope (`_signalOpt`) — reading
+`port.signal` after that point silently yields undefined and the fix does nothing.
+
+test-net-connect-abort-controller still HANGS. It additionally asserts
+`listenerCount(signal, 'abort')` — i.e. the abort listener must be REMOVED when the socket
+closes without aborting. Node uses `addAbortListener`'s disposable (lib/net.js:1720
+`addClientAbortSignalOption`) and disposes it. Our `{once:true}` listener leaks on the
+signal for every socket that closes normally. Fix: keep a reference and remove it on
+'close'/'connect'. Also uses `host:'localhost'` so it may additionally need §5g (dns lookup).
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
