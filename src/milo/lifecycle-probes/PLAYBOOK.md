@@ -498,6 +498,30 @@ Everything else in the http pool looks individually shaped (response-close, outg
 header-overflow, agent-remove, server-delete-parser). Triage each against
 `./out/Release/node` before assuming it is milo's bug.
 
+## 5j. THE http.js STUB/SHADOWING TRAP — hit FOUR times, check it FIRST
+
+http.js is riddled with methods that exist but do nothing, and with classes whose
+inheritance is not what you'd assume. Every time, the symptom was identical: **a correct-
+looking fix that changed nothing**, and hours lost looking elsewhere.
+
+Hit so far:
+1. `ClientRequest.setTimeout` — a stub; and ClientRequest extends **EventEmitter**, NOT
+   OutgoingMessage, so the OutgoingMessage.setTimeout I "fixed" was never reached.
+2. `Server.setTimeout` — stored `_timeout`, nothing read it.
+3. `ServerResponse.write/end` — override OutgoingMessage's, so guards added to the parent
+   never ran; and they dropped the callback when passed in the 2nd position.
+4. `OutgoingMessage.flushHeaders()` — an EMPTY `{}` stub; ServerResponse defined only
+   `_flushHeaders`, so `res.flushHeaders()` resolved to the stub and sent nothing.
+
+**Before editing ANY http.js method, run this and patch the class that is actually used:**
+```
+awk 'NR<=900 && /^class /{cls=$2} /methodName/{print NR": ["cls"] "$0}' src/milo/lib/http.js
+grep -n 'class .* extends' src/milo/lib/http.js     # the inheritance is NOT what you assume
+```
+Related sweep, still worth doing: `grep -n 'this\.[a-zA-Z]* =' http.js` and check each
+property has a READER — that pattern already found maxConnections, keepAliveTimeout and
+maxRequestsPerSocket sitting there as pure decoration.
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
