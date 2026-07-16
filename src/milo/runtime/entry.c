@@ -42,6 +42,20 @@ _Static_assert(offsetof(struct timespec, tv_nsec) == 8, "Timespec.tv_nsec drifte
 // fs.milo stats into a fixed [u8; 256] scratch buffer — it must hold a whole struct stat.
 _Static_assert(sizeof(struct stat) <= 256, "struct stat outgrew fs.milo's 256-byte statBuf");
 
+// Same guards for process.milo's `extern struct Timeval` / `extern struct Rusage`.
+// Rusage is the riskiest claim in the tree: milo spells it as ru_utime/ru_stime followed
+// by 14 hand-counted i64 padding fields to reach 144 bytes. Note tv_usec is 4 bytes but
+// Timeval is 16 — the trailing 4 are alignment padding the compiler inserts, which is the
+// rule fs.milo's Stat relies on for its st_rdev->st_atimespec gap. Assert it, don't assume.
+#include <sys/resource.h>
+#include <sys/time.h>
+_Static_assert(offsetof(struct timeval, tv_sec)  == 0, "Timeval.tv_sec drifted vs process.milo");
+_Static_assert(offsetof(struct timeval, tv_usec) == 8, "Timeval.tv_usec drifted vs process.milo");
+_Static_assert(sizeof(struct timeval) == 16, "Timeval is not 16B — process.milo's Rusage padding is wrong");
+_Static_assert(offsetof(struct rusage, ru_utime) ==  0, "Rusage.ru_utime drifted vs process.milo");
+_Static_assert(offsetof(struct rusage, ru_stime) == 16, "Rusage.ru_stime drifted vs process.milo");
+_Static_assert(sizeof(struct rusage) == 144, "struct rusage is not 144B — process.milo's _p0.._pD padding is wrong");
+
 extern int milo_node_main(int argc, char** argv);
 extern char **environ;
 
