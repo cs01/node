@@ -26,6 +26,11 @@ const _SINGLE_HEADERS = new Set([
   'retry-after', 'etag', 'last-modified', 'server', 'age', 'expires',
 ]);
 
+// node exposes these as symbols on the Server so ServerResponse/IncomingMessage can be
+// swapped per-server (http.createServer({IncomingMessage, ServerResponse}, handler)).
+const kIncomingMessage = Symbol('IncomingMessage');
+const kServerResponse = Symbol('ServerResponse');
+
 class IncomingMessage extends Readable {
   constructor() {
     super();
@@ -353,6 +358,11 @@ class Server extends EventEmitter {
     super();
     if (typeof opts === 'function') { handler = opts; opts = {}; }
     if (handler) this.on('request', handler);
+    // node lets a server supply its own request/response classes; they were ignored, so
+    // subclass methods (req.getUserAgent() etc) simply did not exist on the objects handed
+    // to the handler.
+    this[kIncomingMessage] = (opts && opts.IncomingMessage) || IncomingMessage;
+    this[kServerResponse] = (opts && opts.ServerResponse) || ServerResponse;
     this._server = null;
     this._listening = false;
     this.timeout = 0;
@@ -425,7 +435,7 @@ class Server extends EventEmitter {
             buffer = buffer.slice(headerEnd + 4);
             const lines = headerPart.split('\r\n');
             const [method, url, version] = lines[0].split(' ');
-            const req = new IncomingMessage();
+            const req = new (this[kIncomingMessage])();
             req.method = method;
             req.url = url;
             req.httpVersion = (version || '').replace('HTTP/', '');
@@ -459,7 +469,7 @@ class Server extends EventEmitter {
             }
 
             socket._httpActive = true;
-            const res = new ServerResponse(socket);
+            const res = new (this[kServerResponse])(socket);
             res.on('finish', () => {
               socket._httpActive = false;
               if (this._closing || req.headers['connection'] === 'close') socket.destroy();
