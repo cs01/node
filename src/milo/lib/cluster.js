@@ -108,12 +108,30 @@ cluster.disconnect = function(cb) {
   }
 };
 
-// When loaded in a worker process (NODE_UNIQUE_ID is set)
+// When loaded in a worker process (NODE_UNIQUE_ID is set).
+// cluster.worker used to be a bare `{ id }` — no send, no 'message', no disconnect — so a
+// worker could not talk back through the cluster API at all (only the raw process.send).
+// Node hands the worker a real Worker (lib/internal/cluster/child.js:43).
 if (process.env.NODE_UNIQUE_ID) {
   cluster.isPrimary = false;
   cluster.isMaster = false;
   cluster.isWorker = true;
-  cluster.worker = { id: parseInt(process.env.NODE_UNIQUE_ID) };
+  const w = new Worker(parseInt(process.env.NODE_UNIQUE_ID), process);
+  // Worker.send() forwards to this.process.send, which in a worker is the IPC channel to
+  // the primary — correct as-is. But destroy/kill must NOT reach process.kill(pid, sig):
+  // in a worker node exits instead (child.js Worker.prototype.destroy).
+  w.destroy = w.kill = function(_signal) {
+    if (this.state === 'destroying') return;
+    this.exitedAfterDisconnect = true;
+    if (!this.isConnected()) { process.exit(0); return; }
+    this.state = 'destroying';
+    try { process.disconnect && process.disconnect(); } catch {}
+    process.exit(0);
+  };
+  // surface the IPC channel on the worker object, as node does
+  process.on('message', (msg, handle) => w.emit('message', msg, handle));
+  process.on('disconnect', () => { w.state = 'disconnected'; w.emit('disconnect'); });
+  cluster.worker = w;
 }
 
 module.exports = cluster;
