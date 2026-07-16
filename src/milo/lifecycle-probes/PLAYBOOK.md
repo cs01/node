@@ -541,6 +541,35 @@ Always confirm against `./out/Release/node` before "fixing". Still unswept: the 
 (`maxSockets`, `keepAlive`, `freeSockets`, `maxFreeSockets`, `scheduling`, `maxTotalSockets`,
 `totalSocketCount` all assigned, none read) — likely a stub Agent; and `maxHeadersCount`.
 
+## 5k. SOCKET RECONNECT — unfinished, 3 attempts, handing off (2026-07-16)
+
+`new net.Socket()` reused across two `connect()` calls is a real node idiom
+(test-net-socket-local-address does exactly this). Node reconnects a destroyed socket:
+`self._undestroy()` (lib/net.js:323) + clear `_handle`/`_peername`/`_sockname` (:1317).
+Milo reset NOTHING, so the 2nd connect() hung.
+
+Done (committed, harmless, insufficient): in `connect()`, if `this.destroyed` -> `_undestroy()`,
+reset the readable state by hand, clear `_handle`/`_fd`/`_readPollRemoved`/`_pendingWrite`/
+`_preConnectWrites`/`_peerDisconnected`/`_connecting`.
+
+**Still broken.** Trace of the 2nd attempt:
+```
+--- connect attempt 1 | destroyed= false fd= -1
+  connect fired for attempt 1
+  close fired for attempt 1
+--- connect attempt 2 | destroyed= true fd= -1     <- reset runs here
+--- hung at attempt 2                              <- 'connect' NEVER fires
+```
+So `_doConnect` runs but `_onConnected` never does. Next: instrument `_pollOnce` — is the new
+fd in `Socket._sockets`, does EVFILT_WRITE arrive, does the `sock._connecting && filter ===
+EVFILT_WRITE` branch match? Suspect some flag survives the reset (the Duplex may track
+destroyed/closed state beyond `_writableState._destroyed`).
+
+**RELATED LATENT BUG:** milo's `stream.js:1068 _undestroy()` resets only the WRITABLE state;
+node's resets both sides. That is why the readable reset above had to be done by hand in
+net.js. Fixing `_undestroy` properly is probably the right move — but it is stream.js, so
+ladder net+http+timers after.
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
