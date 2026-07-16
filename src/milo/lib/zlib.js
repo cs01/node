@@ -18,11 +18,11 @@ function _syncOp(mode, buf, opts) {
   }
   const input = new Uint8Array(buf.buffer || buf, buf.byteOffset || 0, buf.length);
   const level = (opts && opts.level != null) ? opts.level : -1;
-  const result = b.zlibOp(input, mode, level);
+  const result = b.zlibOp(input, mode === 6 ? 1 : mode, level);
   if (!result) throw new Error('zlib operation failed');
   const out = Buffer.from(result.buffer, result.byteOffset, result.byteLength);
   out._truncated = result.truncated === -1;
-  return out;
+  return (opts && opts.info) ? { buffer: out, engine: _engineFor(mode, opts) } : out;
 }
 
 function gzipSync(buf, opts) { return _syncOp(0, buf, opts); }
@@ -31,13 +31,21 @@ function deflateSync(buf, opts) { return _syncOp(2, buf, opts); }
 function inflateSync(buf, opts) { return _syncOp(3, buf, opts); }
 function deflateRawSync(buf, opts) { return _syncOp(4, buf, opts); }
 function inflateRawSync(buf, opts) { return _syncOp(5, buf, opts); }
-function unzipSync(buf, opts) { return _syncOp(1, buf, opts); }
+function unzipSync(buf, opts) { return _syncOp(6, buf, opts); }
 function brotliCompressSync() { throw new Error('brotli not supported'); }
 function brotliDecompressSync() { throw new Error('brotli not supported'); }
 
 // Async versions
+// info:true makes the callback receive { buffer, engine } — engine is an instance of
+// the stream class matching the operation (mode 6 = unzip -> Unzip, unlike gunzip's Gunzip).
+function _engineFor(mode, opts) {
+  const M = module.exports;
+  const Cls = [M.Gzip, M.Gunzip, M.Deflate, M.Inflate, M.DeflateRaw, M.InflateRaw][mode] || M.Unzip;
+  return new Cls(opts);
+}
 function _asyncOp(mode, buf, opts, cb) {
   if (typeof opts === 'function') { cb = opts; opts = {}; }
+  opts = opts || {};
   process.nextTick(() => {
     try { cb(null, _syncOp(mode, buf, opts)); }
     catch (e) { cb(e); }
@@ -49,7 +57,7 @@ function deflate(buf, opts, cb) { _asyncOp(2, buf, opts, cb); }
 function inflate(buf, opts, cb) { _asyncOp(3, buf, opts, cb); }
 function deflateRaw(buf, opts, cb) { _asyncOp(4, buf, opts, cb); }
 function inflateRaw(buf, opts, cb) { _asyncOp(5, buf, opts, cb); }
-function unzip(buf, opts, cb) { _asyncOp(1, buf, opts, cb); }
+function unzip(buf, opts, cb) { _asyncOp(6, buf, opts, cb); }
 
 // Streaming transforms
 function _validateFlushFlag(val, name) {
