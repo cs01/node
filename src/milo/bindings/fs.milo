@@ -2,6 +2,32 @@
 
 from "../v8/v8" import { CallbackInfo, Isolate, Context, Value }
 
+extern struct Timespec {
+    tv_sec: i64,
+    tv_nsec: i64,
+}
+
+// macOS/arm64 struct stat. Field offsets are computed by the compiler (C alignment),
+// replacing hand-transcribed byte offsets. The st_rdev->st_atimespec gap is auto-padded
+// (Timespec is 8-byte aligned), same rule that pads Timeval 12->16 in process.milo's Rusage.
+// Trailing C fields (st_flags/st_gen/spares) omitted — never read.
+extern struct Stat {
+    st_dev: i32,
+    st_mode: u16,
+    st_nlink: u16,
+    st_ino: u64,
+    st_uid: u32,
+    st_gid: u32,
+    st_rdev: i32,
+    st_atimespec: Timespec,
+    st_mtimespec: Timespec,
+    st_ctimespec: Timespec,
+    st_birthtimespec: Timespec,
+    st_size: i64,
+    st_blocks: i64,
+    st_blksize: i32,
+}
+
 // nm_fs_open wraps variadic open() — ARM64 variadic ABI differs from regular args
 extern fn nm_fs_open(path: *u8, flags: i32, mode: i32): i32
 extern fn close(fd: i32): i32
@@ -134,48 +160,26 @@ fn fsWriteFile(info: *u8, _ud: *u8): void {
     }
 }
 
-// macOS arm64 struct stat offsets:
-// st_dev:0 st_mode:4(u16) st_nlink:6(u16) st_ino:8 st_uid:16 st_gid:20
-// st_atimespec:32 st_mtimespec:48 st_ctimespec:64 st_birthtimespec:80
-// st_size:96 st_blocks:104 st_blksize:112
 fn buildStatObj(s: *u8, iso: Isolate, ctx: Context): Value {
     unsafe {
+        let st = *(s as *Stat)
         let obj = iso.object()
-        let dev = (s as *i32)[0]
-        let mode = (s as *i32)[1] & 65535
-        let nlink = ((s as *i32)[1] >> 16) & 65535
-        let ino = (s as *i64)[1]
-        let uid = *((s as i64 + 16) as *u32)
-        let gid = *((s as i64 + 20) as *u32)
-        let size = *((s as i64 + 96) as *i64)
-        let blocks = *((s as i64 + 104) as *i64)
-        let blksize = *((s as i64 + 112) as *i32)
+        let mode = st.st_mode as i32
 
-        let atimeSec = *((s as i64 + 32) as *i64)
-        let atimeNs = *((s as i64 + 40) as *i64)
-        let atimeMs = atimeSec as f64 * 1000.0 + atimeNs as f64 / 1000000.0
+        let atimeMs = st.st_atimespec.tv_sec as f64 * 1000.0 + st.st_atimespec.tv_nsec as f64 / 1000000.0
+        let mtimeMs = st.st_mtimespec.tv_sec as f64 * 1000.0 + st.st_mtimespec.tv_nsec as f64 / 1000000.0
+        let ctimeMs = st.st_ctimespec.tv_sec as f64 * 1000.0 + st.st_ctimespec.tv_nsec as f64 / 1000000.0
+        let birthtimeMs = st.st_birthtimespec.tv_sec as f64 * 1000.0 + st.st_birthtimespec.tv_nsec as f64 / 1000000.0
 
-        let mtimeSec = *((s as i64 + 48) as *i64)
-        let mtimeNs = *((s as i64 + 56) as *i64)
-        let mtimeMs = mtimeSec as f64 * 1000.0 + mtimeNs as f64 / 1000000.0
-
-        let ctimeSec = *((s as i64 + 64) as *i64)
-        let ctimeNs = *((s as i64 + 72) as *i64)
-        let ctimeMs = ctimeSec as f64 * 1000.0 + ctimeNs as f64 / 1000000.0
-
-        let birthtimeSec = *((s as i64 + 80) as *i64)
-        let birthtimeNs = *((s as i64 + 88) as *i64)
-        let birthtimeMs = birthtimeSec as f64 * 1000.0 + birthtimeNs as f64 / 1000000.0
-
-        ctx.objectSet(obj, "dev" as *u8, iso.number(dev as f64))
+        ctx.objectSet(obj, "dev" as *u8, iso.number(st.st_dev as f64))
         ctx.objectSet(obj, "mode" as *u8, iso.number(mode as f64))
-        ctx.objectSet(obj, "nlink" as *u8, iso.number(nlink as f64))
-        ctx.objectSet(obj, "ino" as *u8, iso.number(ino as f64))
-        ctx.objectSet(obj, "uid" as *u8, iso.number(uid as f64))
-        ctx.objectSet(obj, "gid" as *u8, iso.number(gid as f64))
-        ctx.objectSet(obj, "size" as *u8, iso.number(size as f64))
-        ctx.objectSet(obj, "blocks" as *u8, iso.number(blocks as f64))
-        ctx.objectSet(obj, "blksize" as *u8, iso.number(blksize as f64))
+        ctx.objectSet(obj, "nlink" as *u8, iso.number(st.st_nlink as f64))
+        ctx.objectSet(obj, "ino" as *u8, iso.number(st.st_ino as f64))
+        ctx.objectSet(obj, "uid" as *u8, iso.number(st.st_uid as f64))
+        ctx.objectSet(obj, "gid" as *u8, iso.number(st.st_gid as f64))
+        ctx.objectSet(obj, "size" as *u8, iso.number(st.st_size as f64))
+        ctx.objectSet(obj, "blocks" as *u8, iso.number(st.st_blocks as f64))
+        ctx.objectSet(obj, "blksize" as *u8, iso.number(st.st_blksize as f64))
         ctx.objectSet(obj, "atimeMs" as *u8, iso.number(atimeMs))
         ctx.objectSet(obj, "mtimeMs" as *u8, iso.number(mtimeMs))
         ctx.objectSet(obj, "ctimeMs" as *u8, iso.number(ctimeMs))
@@ -625,7 +629,7 @@ fn fsFtruncate(info: *u8, _ud: *u8): void {
         ci.retI32(-1)
         return
     }
-    unsafe { ci.retI32(ftruncate(fd, len)) }
+    ci.retI32(ftruncate(fd, len))
 }
 
 fn fsFchmod(info: *u8, _ud: *u8): void {
@@ -636,7 +640,7 @@ fn fsFchmod(info: *u8, _ud: *u8): void {
         ci.retI32(-1)
         return
     }
-    unsafe { ci.retI32(fchmod(fd, mode as u32)) }
+    ci.retI32(fchmod(fd, mode as u32))
 }
 
 fn fsFchown(info: *u8, _ud: *u8): void {
@@ -648,7 +652,7 @@ fn fsFchown(info: *u8, _ud: *u8): void {
         ci.retI32(-1)
         return
     }
-    unsafe { ci.retI32(fchown(fd, uid as u32, gid as u32)) }
+    ci.retI32(fchown(fd, uid as u32, gid as u32))
 }
 
 // statvfs — returns [bsize, frsize, blocks, bfree, bavail, files, ffree]
