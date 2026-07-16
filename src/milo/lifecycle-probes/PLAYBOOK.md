@@ -518,9 +518,22 @@ Hit so far:
 awk 'NR<=900 && /^class /{cls=$2} /methodName/{print NR": ["cls"] "$0}' src/milo/lib/http.js
 grep -n 'class .* extends' src/milo/lib/http.js     # the inheritance is NOT what you assume
 ```
-Related sweep, still worth doing: `grep -n 'this\.[a-zA-Z]* =' http.js` and check each
-property has a READER — that pattern already found maxConnections, keepAliveTimeout and
-maxRequestsPerSocket sitting there as pure decoration.
+**THE ASSIGNED-BUT-NEVER-READ SWEEP — 4 for 4, do this early in any session.** Properties
+that look implemented, read fine in the constructor, and do nothing:
+```
+for prop in $(grep -oE 'this\.[a-zA-Z_][a-zA-Z0-9_]* =' src/milo/lib/http.js | sed 's/this\.//; s/ =//' | sort -u); do
+  a=$(grep -cE "this\.$prop =" src/milo/lib/http.js); u=$(grep -cE "\.$prop\b" src/milo/lib/http.js)
+  [ "$u" -le "$a" ] && echo "$prop (assigns=$a, other-uses=$((u-a)))"
+done
+```
+Found so far: `maxConnections` (servers accepted unboundedly), `keepAliveTimeout` +
+`maxRequestsPerSocket` (no Connection/Keep-Alive header ever sent), `sendDate` (**no Date
+header on ANY response** — RFC 7231 7.1.1.2 requires it).
+Caveats: plenty of false positives — public API props that only USERS read (`writableEnded`,
+`headersSent`), and cross-file readers (`_unref` is read in `_timers_init.js`, not net.js).
+Always confirm against `./out/Release/node` before "fixing". Still unswept: the Agent
+(`maxSockets`, `keepAlive`, `freeSockets`, `maxFreeSockets`, `scheduling`, `maxTotalSockets`,
+`totalSocketCount` all assigned, none read) — likely a stub Agent; and `maxHeadersCount`.
 
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
