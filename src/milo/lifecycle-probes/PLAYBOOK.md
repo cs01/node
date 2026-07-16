@@ -616,6 +616,38 @@ Note `_wantWrite` bookkeeping gotcha if you rebuild it: the flag starts `undefin
 naive `if (on === !!this._writeRegistered) return;` early-returns on the first
 deregister-while-actually-registered and the fd spins anyway. Set the flag at EVERY pollAdd site.
 
+## 5m. NEXT UP — scoped, not started (2026-07-16 end of session)
+
+Ranked by expected value. All verified against `./out/Release/node` unless noted.
+
+**1. http2 setTimeout: 5 stubs, 3 real roots.** `Http2Stream:113`, `Http2Session:326`,
+`Http2Server:523` are the playbook-5j shape (register the cb, arm nothing);
+`Http2ServerRequest:413` and `Http2ServerResponse:492` correctly delegate to the stream, so
+fixing the stream fixes them. **Do NOT just arm a timer** — copy net.js's `_armTimeout`
+model: **unref'd** (or it pins the loop for the full duration), **rearmed on activity** (or
+the ubiquitous `setTimeout(60000, mustNotCall)` guard fires spuriously), **cleared on
+destroy**. Getting this wrong in net.js cost a passing test until it was made idle-based.
+Auditor estimated ~10 of 35 http2 timeouts; net.js experience says expect fewer.
+
+**2. dgram udp6 — 10 tests.** `createSocket('udp6')` silently returns an IPv4 socket (binds
+0.0.0.0; sends fail). Node binds ::1. Real binding work: `udpSocket` hardcodes AF_INET
+(tcp.milo ~:829) and bind/send/recv each build a 16-byte `sockaddr_in`; IPv6 needs
+`sockaddr_in6` (28B) threaded through all four. Rebuild required.
+
+**3. tls.js handshake redesign — the last 3 spins in 681 tests.** See §5l. My patch traded
+3 OOMs for 1 pass and was reverted; the auditor's "~10-line JS fix" estimate is wrong.
+`entry.c` now returns 2=WANT_READ / 3=WANT_WRITE (landed, unused) — the prerequisite.
+
+**4. http client header flushing — blocks 100-continue.** See §5i-B. milo buffers the whole
+request until end(); node flushes headers on socket assignment. Server half already done.
+
+**5. Socket reconnect — 'close' never fires on the 2nd connection.** See §5k; groundwork
+landed, trace recorded.
+
+**6. active-handle model** (ROADMAP). Not required by any current failure — the auditor
+measured ~0-5 loop-flippable tests across 681 — but it structurally kills the bug class that
+produced 4 races today (incl. the fd-reuse race, which wore three different masks).
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
