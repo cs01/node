@@ -1023,21 +1023,25 @@ fn udpSendBinaryOp(info: *u8, _ud: *u8): void {
             ci.arg(3).writeUtf8(iso, host_buf as *u8, 256)
         }
 
-        var addr: [u8; 16] = [0; 16]
-        addr[0] = 16
-        addr[1] = 2
-        let port_n = htons(port)
-        addr[2] = (port_n & 0xff) as u8
-        addr[3] = ((port_n >> 8) & 0xff) as u8
-
-        if host_buf[0] != 0 {
-            inet_pton(2, host_buf as *u8, (addr as *u8 as i64 + 4) as *u8)
-        } else {
-            addr[4] = 127
-            addr[7] = 1
+        // No host keeps the old default of 127.0.0.1 — an empty host means loopback here,
+        // not INADDR_ANY, so buildSockAddr's "any" rule is not what this wants.
+        var addr: [u8; 28] = [0; 28]
+        var host_p = host_buf as *u8
+        if host_buf[0] == 0 {
+            host_p = "127.0.0.1" as *u8
         }
-
-        let n = sendto(fd, dataPtr, dataLen, 0, addr as *u8, 16)
+        var family = AF_INET
+        if hostIsV6(host_p) {
+            family = AF_INET6
+        }
+        let alen = buildSockAddr(host_p, port, addr as *u8, family)
+        if alen < 0 {
+            ci.retI32(-1)
+            return
+        }
+        // The length must match the family: sending a 16-byte sockaddr for a v6
+        // destination is how a udp6 datagram ends up addressed to 0.0.0.0.
+        let n = sendto(fd, dataPtr, dataLen, 0, addr as *u8, alen as i32)
         ci.retI32(n as i32)
     }
 }
@@ -1084,8 +1088,10 @@ fn udpRecvOp(info: *u8, _ud: *u8): void {
     let fd = ci.i32Arg(0, -1)
     unsafe {
         let buf = calloc(1, 65536)
-        var srcAddr: [u8; 16] = [0; 16]
-        var addrLen: [i32; 1] = [16]
+        // 28B: recvfrom writes a sockaddr_in6 for a v6 sender, and 16 bytes truncates it
+        // — the address would be garbage, not merely mislabelled.
+        var srcAddr: [u8; 28] = [0; 28]
+        var addrLen: [i32; 1] = [28]
         let n = recvfrom(fd, buf, 65535, 0, srcAddr as *u8, addrLen as *i32)
         if n <= 0 {
             ci.retUndefined()
@@ -1095,8 +1101,9 @@ fn udpRecvOp(info: *u8, _ud: *u8): void {
 
         // Extract source address and port
         var addrStr: [u8; 64] = [0; 64]
-        inet_ntop(2, (srcAddr as *u8 as i64 + 4) as *u8, addrStr as *u8, 64)
-        let srcPort = ((srcAddr[2] as i32) << 8) | (srcAddr[3] as i32)
+        // The kernel filled in the family; read it rather than assume it.
+        sockAddrText(srcAddr as *u8, addrStr as *u8, 64)
+        let srcPort = sockAddrPort(srcAddr as *u8)
 
         // `data` used to be iso.stringLen(...) — a V8 STRING, i.e. the payload was utf8
         // decoded on arrival and every invalid byte became U+FFFD. Together with the old
@@ -1111,7 +1118,13 @@ fn udpRecvOp(info: *u8, _ud: *u8): void {
         let rinfo = iso.object()
         ctx.objectSet(rinfo, "address" as *u8, iso.string(addrStr as *u8))
         ctx.objectSet(rinfo, "port" as *u8, iso.int32(srcPort))
-        ctx.objectSet(rinfo, "family" as *u8, iso.string("IPv4" as *u8))
+        // Third instance of the same bug: the kernel knows who sent the datagram, and
+        // this overwrote it with 'IPv4'. rinfo is { address, family, port, size }.
+        if sockAddrFamily(srcAddr as *u8) == AF_INET6 {
+            ctx.objectSet(rinfo, "family" as *u8, iso.string("IPv6" as *u8))
+        } else {
+            ctx.objectSet(rinfo, "family" as *u8, iso.string("IPv4" as *u8))
+        }
         ctx.objectSet(rinfo, "size" as *u8, iso.int32(n as i32))
         ctx.objectSet(result, "rinfo" as *u8, rinfo)
 
