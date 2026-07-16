@@ -58,6 +58,10 @@ const DEFAULT_SETTINGS = { headerTableSize: 4096, enablePush: true, initialWindo
 function headersToObject(list) {
   const o = {};
   for (const [k, v] of list) {
+    // node coerces :status to a NUMBER (lib/internal/http2/util.js:903 `obj[name] = +value`).
+    // milo left it a string, so every `assert.strictEqual(headers[':status'], 200)` in the
+    // suite compared '200' !== 200.
+    if (k === ':status') { o[k] = +v; continue; }
     if (o[k] === undefined) o[k] = v;
     else if (Array.isArray(o[k])) o[k].push(v);
     else o[k] = [o[k], v];
@@ -296,7 +300,14 @@ class Http2Session extends EventEmitter {
       catch (e) { try { this._sendRst(streamId, 2); } catch {} process.nextTick(() => { throw e; }); }
     } else {
       const s = this.streams.get(streamId);
-      if (s) { s.pending = false; s.emit('response', obj, 0); if (endStream) s._end(); }
+      if (s) {
+        // An informational (1xx) response is NOT the final response: node emits 'headers'
+        // for it and keeps the stream waiting for the real one. Emitting 'response' here
+        // would resolve the request with a 103 and drop the actual reply.
+        const st = Number(obj[':status']);
+        if (st >= 100 && st < 200) { s.emit('headers', obj, 0); return; }
+        s.pending = false; s.emit('response', obj, 0); if (endStream) s._end();
+      }
     }
   }
 
@@ -497,6 +508,35 @@ class Http2ServerResponse extends EventEmitter {
     // valid HTTP token (RFC 7230) — checked before the value
     if (!/^[\^_`a-zA-Z\-0-9!#$%&'*+.|~]+$/.test(k)) { const e = new TypeError(`Header name must be a valid HTTP token ["${rawName}"]`); e.code = 'ERR_INVALID_HTTP_TOKEN'; throw e; }
     if (value === undefined || value === null) { const e = new TypeError(`Invalid value "${value}" for header "${k}"`); e.code = 'ERR_HTTP2_INVALID_HEADER_VALUE'; throw e; }
+  }
+  // node: lib/internal/http2/compat.js writeEarlyHints — validate, build the Link header,
+  // then send a 103 informational HEADERS frame. Absent entirely in milo.
+  writeEarlyHints(hints) {
+    if (typeof hints !== 'object' || hints === null || Array.isArray(hints)) {
+      const e = new TypeError(`The "hints" argument must be of type object. Received ${hints === null ? 'null' : typeof hints}`);
+      e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
+    }
+    const out = {};
+    let link = hints.link;
+    if (Array.isArray(link)) link = link.join(', ');
+    if (link !== undefined && typeof link !== 'string') {
+      const e = new TypeError(`The "hints.link" property must be of type string or an array of strings. Received ${typeof link}`);
+      e.code = 'ERR_INVALID_ARG_VALUE'; throw e;
+    }
+    for (const key of Object.keys(hints)) {
+      if (key === 'link') continue;
+      const name = key.trim().toLowerCase();
+      if (!/^[\^_`a-zA-Z\-0-9!#$%&'*+.|~]+$/.test(name)) {
+        const e = new TypeError(`Header name must be a valid HTTP token ["${key}"]`);
+        e.code = 'ERR_INVALID_HTTP_TOKEN'; throw e;
+      }
+      out[name] = hints[key];
+    }
+    if (!link || link.length === 0) return false;
+    out.link = link;
+    const list = objectToHeaders({ ':status': '103', ...out }, []);
+    this.stream.session._sendHeaders(this.stream.id, list, false);
+    return true;
   }
   setHeader(name, value) { const k = this._normHeader(name); this._checkSettable(k, value, name); this._headers[k] = value; return this; }
   getHeader(name) { return this._headers[this._normHeader(name)]; }
