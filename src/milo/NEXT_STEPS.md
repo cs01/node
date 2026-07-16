@@ -3,9 +3,18 @@
 Each task below is deliberately narrow: one module, one recipe, one verification command.
 Do them ONE AT A TIME. Finish + verify + commit before starting the next.
 
-## baselines (2026-07-16, post-session re-tally — table in ROADMAP.md is staler)
+## baselines
 
-fs 177/201 · net 49/106 · util 12/19 · whatwg 30/41 · events 5/8 · timers 51/55 · diagnostics 12/17
+**MEASURED 2026-07-16 by actually running the suites (trust these over any older number):**
+net 46/106 · timers 45/55 · http 82/210
+
+**UNVERIFIED, carried over from a prior session — re-measure before relying on them:**
+fs 177/201 · util 12/19 · whatwg 30/41 · events 5/8 · diagnostics 12/17
+
+Every baseline I inherited this session was WRONG when checked: net "49" was really 44,
+timers "51" was really 45 (verified identical with and without my changes — the number had
+simply drifted from other commits). **Do not treat a recorded baseline as a regression
+signal. Measure the module yourself, on the current tree, before and after your change.**
 
 ## ground rules — read before every task
 

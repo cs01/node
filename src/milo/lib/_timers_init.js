@@ -201,7 +201,10 @@ Object.defineProperty(globalThis, '__pendingCloseUnref', { value: function() { _
 // blocks in poll() and never reaches the sample threshold; a busy-loop hits it in <1s and
 // the dump names the fd/counter that is wedging the exit check. See lifecycle-probes/PLAYBOOK.md.
 const _LC_DEBUG = !!(process.env && process.env.MILO_LIFECYCLE_DEBUG);
-const _LC_EVERY = 1000;
+// Time-based, not iteration-based: a hung-but-idle loop does very few iterations, so
+// sampling every N iterations prints nothing for exactly the case you're debugging.
+const _LC_MS = 500;
+let _lcLastDump = 0;
 function _lcLog(msg) {
   try { require('fs').writeSync(2, `[lc] ${msg}\n`); } catch {}
 }
@@ -236,7 +239,9 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     const hasTicks = process._nextTickQueue && process._nextTickQueue.length > 0;
     const hasImmediates = _hasRefImmediate();
     const hasPendingClose = _pendingCloseRefs > 0;
-    if (_LC_DEBUG && ++_lcIter % _LC_EVERY === 0) {
+    _lcIter++;
+    if (_LC_DEBUG && _now() - _lcLastDump >= _LC_MS) {
+      _lcLastDump = _now();
       const socks = net && net.Socket._sockets ? [...net.Socket._sockets.keys()] : [];
       const srvs = net && net.Server._servers ? [...net.Server._servers.keys()] : [];
       _lcLog(`iter=${_lcIter} timers=${hasTimers} io=${hasIO} ticks=${hasTicks} imm=${hasImmediates} pclose=${_pendingCloseRefs} workers=${hasWorkers} socks=[${socks}] srvs=[${srvs}]`);
@@ -274,7 +279,7 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     } else {
       _tb.sleepMs(waitMs);
     }
-    if (_LC_DEBUG && _lcIter % _LC_EVERY === 0) {
+    if (_LC_DEBUG && _now() === _lcLastDump) {
       _lcLog(`  poll(waitMs=${waitMs}) -> ${_lcN} events in ${_now() - pollStart}ms; immQ=${_immediateQueue.length}`);
     }
     _eluIdleMs += _now() - pollStart;
@@ -311,7 +316,17 @@ Object.defineProperty(globalThis, '__hasIO', { value: function() {
     }
     if (net.Socket._sockets && net.Socket._sockets.size > 0) {
       for (const sock of net.Socket._sockets.values()) {
-        if (!sock._unref) return true;
+        if (sock._unref) continue;
+        // Mirror libuv: an open fd does not by itself hold the loop open — only an ACTIVE
+        // handle does. A socket that has consumed the peer's FIN (readable ended) and has
+        // finished its own writable side can never produce another event, so it must not
+        // count as pending work even though it is still in the map awaiting destroy.
+        // Node exits on exactly this state (verified: a client with unread buffered data +
+        // FIN and no data listener never emits 'close' and node still exits 0). Treating
+        // mere map membership as liveness is what hung those tests forever.
+        const rs = sock._readableState, ws = sock._writableState;
+        if (rs && ws && rs.ended && (ws.finished || ws.ended)) continue;
+        return true;
       }
     }
     return false;

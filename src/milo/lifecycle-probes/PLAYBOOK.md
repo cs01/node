@@ -18,6 +18,11 @@
    (`ps -o time= -p PID`). Sleeping ≈0.03s over 6s; spinning ≈6s then fatal-OOM.
 4. **Never conclude from one run of a flaky probe.** p04 is ~50/50 both with and without
    any fix; a single A/B sample "proved" a regression that did not exist. Run 10x.
+5. **Recorded baselines are not evidence.** Every inherited number was wrong: net "49" was
+   44, timers "51" was 45. Both looked like regressions from my change; both were drift from
+   unrelated commits (timers measured 45 with AND without my diff). Before believing you
+   regressed something, re-run that module with your change reverted — `git show <commit>:path
+   > path` is enough, no stash dance. Baselines rot; only an A/B on the current tree counts.
 
 Mission: fix TCP handle lifecycle so processes exit when work is done, don't busy-spin,
 and honor ref/unref. Prize: 12 TIMEOUT + 3 OOM tests in net alone, plus http/tls/cluster
@@ -46,6 +51,30 @@ when the peer's FIN is seen (called from `_onReadable` on EOF, and unconditional
 the EV_EOF branch). p01 went from 7.32s CPU + fatal-OOM to 0.03s CPU.
 **Note the loop itself was never the problem** — it correctly sleeps when nothing is
 pending (idle server = 0 iterations). The bug was purely a stale kqueue registration.
+
+## 0b. THE ARCHITECTURAL BUG (H6) — found + fixed 2026-07-16
+
+**Milo counted "socket exists in `Socket._sockets`" as "keeps the loop alive". Node/libuv
+counts only an *ACTIVE* handle** — one with a read started or a write pending. An open TCP
+fd with nothing pending does NOT hold libuv's loop open.
+
+Proof (`/tmp/unread.js` pattern — client never reads; server sends data + FIN):
+real node **exits 0 without ever emitting the client's 'close'**; milo hung forever.
+The client socket had consumed EOF and finished writing, but sat in the map → `io=true`
+→ `__hasIO()` true → loop never exits. This is why tests hung with only *0.05s of CPU* —
+nothing was spinning, the exit check simply never went false.
+
+Fix (`_timers_init.js` `__hasIO`, adapter-style — no read-path refactor): skip sockets where
+`_readableState.ended && (_writableState.finished || _writableState.ended)`. Such a socket
+can never produce another event, so it is libuv-inactive by definition. Servers, connecting
+sockets, and sockets still reading are unaffected — p01/p02/p07 still correctly hang.
+
+This flipped `test-net-socket-close-after-end.js` to PASS.
+
+**The general lesson for the rest of this work:** when a test hangs at ~0s CPU, do NOT hunt
+for a spin. Dump `__hasIO`'s view (§4) and ask *which handle is claiming to be pending, and
+would real node consider it active?* Milo's liveness model is coarser than libuv's, and that
+gap is the remaining lever. The next refinement is pending-write / read-started tracking.
 
 ## 1. probe harness (acceptance tests — run first, run after every change)
 
@@ -127,7 +156,14 @@ p01 was not a swallowed throw: the client 'close' handler that calls it legitima
 runs, because the server never reads the buffered data so the socket never ends. Real node
 behaves identically. There is no bug here.
 
-**H5 (NEW — next target): the p04 destroy-path race (~50% hang).**
+**H6 — CONFIRMED AND FIXED 2026-07-16. See §0b. The biggest one: liveness model mismatch
+(map-membership vs libuv active-handle). Remaining refinement: milo still counts a socket as
+pending whenever its readable side hasn't ended, even if nothing ever started reading it —
+node would call that handle inactive. That gap is the next lever.**
+
+**H5 (was "the p04 destroy-path race", ~50% hang): status uncertain — p04 passed after the
+H6 fix, but it is a flaky probe, so ONE green run proves nothing. Re-measure 10x before
+declaring it fixed. It may have been a symptom of H6 all along.**
 `client.connect() → client.destroy()` immediately. Server-side socket should see EOF →
 push(null) → 'end' → (allowHalfOpen=false) auto end() → finish → autoDestroy → 'close' →
 `s.close()` → exit. It completes ~50% of runs, hangs the rest — same rate before and after
