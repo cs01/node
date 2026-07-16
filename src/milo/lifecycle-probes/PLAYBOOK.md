@@ -668,7 +668,7 @@ blocks in the file. So it is NOT the early-hints logic. Next suspects, in order:
 Method: `MILO_LIFECYCLE_DEBUG=1` on the test and diff the loop dump against a hand-written
 equivalent that works.
 
-## 5o. ENOTCONN ON WRITE-BEFORE-CONNECT — a REAL bug I introduced, fix attempt REVERTED
+## 5o. ENOTCONN ON WRITE-BEFORE-CONNECT — FIXED (2026-07-16). Kept as a worked example.
 
 **Repro (30s):** 3 concurrent http2 servers on 127.0.0.1 →
 `ERR code=UNKNOWN errno=-57 syscall=write`. -57 is **ENOTCONN**. One server usually works;
@@ -693,8 +693,16 @@ twice and asserts *while corked*: expects 7, milo reports 3. I tried counting at
 entry and adding `_writableState.length` in the getter; neither matched — **do this properly
 by porting node's dispatched+pending model, THEN re-apply the parking fix.**
 
-Priority: high. This is live breakage (any write-before-connect), not a test artifact, and
-the tests that would catch it are already timing out for other reasons.
+**RESOLVED next iteration by following the note above.** Port node's model FIRST
+(`_bytesDispatched` + sum of the chunks still in `_writableState.buffered` — NB
+`_writableState.length` is NOT a byte count in milo, which is what both earlier guesses got
+wrong), THEN the parking fix drops in: byteswritten 3/3 green AND 3 concurrent http2 servers
+go from ERR UNKNOWN(-57) to "all 3 OK", with net 56 / http 96 / http2 36 all held.
+
+**Why this section is worth keeping:** the fix WORKED the first time ("all 3 OK") and still
+measured -2. Only the full ladder caught it. Reverting + writing down the exact cause cost one
+iteration and produced a clean landing; shipping it would have cost 2 tests and hidden the
+accounting bug. A reverted fix plus an accurate note beats a shipped regression.
 
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
