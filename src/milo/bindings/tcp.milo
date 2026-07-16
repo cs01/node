@@ -170,7 +170,7 @@ fn tcpSocket(info: *u8, _ud: *u8): void {
         }
         // SO_REUSEADDR
         var one: i32 = 1
-        let one_ptr = &one
+        let one_ptr = one.addrOf()
         setsockopt(fd, 0xffff, 4, one_ptr as *u8, 4)
         // non-blocking
         let flags = fcntl(fd, 3, 0)
@@ -229,7 +229,7 @@ fn tcpAccept(info: *u8, _ud: *u8): void {
     unsafe {
         var addr: [u8; 16] = [0; 16]
         var addrlen: i32 = 16
-        let new_fd = accept(fd, addr as *u8, &addrlen)
+        let new_fd = accept(fd, addr as *u8, addrlen.addrOf())
         if new_fd >= 0 {
             // make non-blocking
             let flags = fcntl(new_fd, 3, 0)
@@ -377,7 +377,7 @@ fn tcpGetSockName(info: *u8, _ud: *u8): void {
     unsafe {
         var addr: [u8; 16] = [0; 16]
         var addrlen: i32 = 16
-        let r = getsockname(fd, addr as *u8, &addrlen)
+        let r = getsockname(fd, addr as *u8, addrlen.addrOf())
         if r != 0 {
             ci.retUndefined()
             return
@@ -403,7 +403,7 @@ fn tcpGetPeerName(info: *u8, _ud: *u8): void {
     unsafe {
         var addr: [u8; 16] = [0; 16]
         var addrlen: i32 = 16
-        let r = getpeername(fd, addr as *u8, &addrlen)
+        let r = getpeername(fd, addr as *u8, addrlen.addrOf())
         if r != 0 {
             ci.retUndefined()
             return

@@ -151,7 +151,7 @@ impl CallbackInfo {
             let arg = v8c_fci_arg(self.ptr, idx)
             let iso = v8c_fci_isolate(self.ptr)
             var out: i32 = defaultVal
-            v8c_to_int32(iso, arg, &out)
+            v8c_to_int32(iso, arg, out.addrOf())
             return out
         }
     }
@@ -162,7 +162,7 @@ impl CallbackInfo {
             let arg = v8c_fci_arg(self.ptr, idx)
             let iso = v8c_fci_isolate(self.ptr)
             var out: f64 = defaultVal as f64
-            v8c_to_double(iso, arg, &out)
+            v8c_to_double(iso, arg, out.addrOf())
             return out as i64
         }
     }

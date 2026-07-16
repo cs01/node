@@ -62,7 +62,7 @@ fn timerSchedule(info: *u8, _ud: *u8): void {
 
         var dsec: i64 = 0
         var dnsec: i64 = 0
-        deadline_from_delay(delay, &dsec, &dnsec)
+        deadline_from_delay(delay, dsec.addrOf(), dnsec.addrOf())
 
         t_id[slot as i64] = id
         t_dsec[slot as i64] = dsec
@@ -145,7 +145,7 @@ fn timerFireDue(info: *u8, _ud: *u8): void {
                     if t_interval[i as i64] > 0 {
                         var dsec: i64 = 0
                         var dnsec: i64 = 0
-                        deadline_from_delay(t_interval[i as i64], &dsec, &dnsec)
+                        deadline_from_delay(t_interval[i as i64], dsec.addrOf(), dnsec.addrOf())
                         t_dsec[i as i64] = dsec
                         t_dnsec[i as i64] = dnsec
                     } else {

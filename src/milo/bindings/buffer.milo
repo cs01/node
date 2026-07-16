@@ -15,7 +15,7 @@ fn bufCreateUnsafeArrayBuffer(info: *u8, _ud: *u8): void {
     if ci.length() < 1 { return }
     let iso = ci.isolate()
     var size: i32 = 0
-    unsafe { ci.arg(0).toI32(iso, &size) }
+    unsafe { ci.arg(0).toI32(iso, size.addrOf()) }
     if size < 0 { size = 0 }
     ci.ret(iso.arraybufferNew(size as i64))
 }

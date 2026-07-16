@@ -147,7 +147,7 @@ fn printVal(iso: Isolate, val: Value): void {
 
         if val.isNumber(iso) != 0 {
             var d: f64 = 0.0
-            val.toF64(iso, &d)
+            val.toF64(iso, d.addrOf())
             let i = d as i64
             if i as f64 == d {
                 var nbuf: [u8; 32] = [0; 32]

@@ -50,7 +50,7 @@ fn processHrtime(info: *u8, _ud: *u8): void {
     var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
     let arr = iso.array(2)
     unsafe {
-        if clock_gettime(6, &ts) != 0 {
+        if clock_gettime(6, ts.addrOf()) != 0 {
             ctx.objectSetIndex(arr, 0, iso.number(0.0))
             ctx.objectSetIndex(arr, 1, iso.number(0.0))
         } else {
@@ -66,7 +66,7 @@ fn processHrtimeBigint(info: *u8, _ud: *u8): void {
     let iso = ci.isolate()
     var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
     unsafe {
-        if clock_gettime(6, &ts) != 0 {
+        if clock_gettime(6, ts.addrOf()) != 0 {
             ci.ret(iso.bigintI64(0))
             return
         }
@@ -95,7 +95,7 @@ fn processCpuUsage(info: *u8, _ud: *u8): void {
     }
     let arr = iso.array(2)
     unsafe {
-        if getrusage(0, &ru) != 0 {
+        if getrusage(0, ru.addrOf()) != 0 {
             ctx.objectSetIndex(arr, 0, iso.number(0.0))
             ctx.objectSetIndex(arr, 1, iso.number(0.0))
         } else {
