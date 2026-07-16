@@ -66,6 +66,115 @@ fn htons(val: i32): i32 {
     return ((val & 0xff) << 8) | ((val >> 8) & 0xff)
 }
 
+// ── address families ───────────────────────────────────────────────────────────
+// AF_INET6 is 30 on macOS and 10 on Linux — one of the few socket constants that
+// actually differs. This whole binding is macOS-only already (kqueue/EVFILT above),
+// so 30 is correct here; a Linux port changes this line, not the call sites.
+// Verified against <sys/socket.h> on both: sockaddr_in6 is 28 bytes on each, with the
+// address at offset 8 and scope_id at 24, so only the family number moves.
+let AF_INET: i32 = 2
+let AF_INET6: i32 = 30
+let IPPROTO_IPV6: i32 = 41
+let IPV6_V6ONLY: i32 = 27   // macOS; Linux uses 26
+let SOCKADDR_IN_LEN: i64 = 16
+let SOCKADDR_IN6_LEN: i64 = 28
+
+// A ':' anywhere means an IPv6 literal — no v4 address or hostname contains one, and
+// the port is a separate argument here, so there is no "host:port" ambiguity.
+fn hostIsV6(host: *u8): bool {
+    unsafe {
+        var i: i64 = 0
+        while i < 256 {
+            let c = (host as i64 + i) as *u8
+            let b = *c
+            if b == 0 {
+                return false
+            }
+            if b == 58 {   // ':'
+                return true
+            }
+            i = i + 1
+        }
+    }
+    return false
+}
+
+fn hostIsEmpty(host: *u8): bool {
+    unsafe {
+        return *host == 0
+    }
+}
+
+// Fill `addr` with a sockaddr_in (16B) or sockaddr_in6 (28B) for host:port and return its
+// length, or -1 if the literal does not parse for that family.
+//
+// Returning -1 is the point. inet_pton's result used to be discarded, so
+// inet_pton(AF_INET, "::1") failed, left the address zeroed, and the caller bound
+// 0.0.0.0 — which still reaches localhost, so a v6 request quietly became a v4 one and
+// address() then reported IPv4. A wrong address that works by accident is why this hid
+// for so long; now it fails where the mistake is.
+//
+// An empty host means "any": 0.0.0.0 for v4, :: for v6 — both already all-zero.
+fn buildSockAddr(host: *u8, port: i32, addr: *u8, family: i32): i64 {
+    let port_n = htons(port)
+    unsafe {
+        if family == AF_INET6 {
+            *((addr as i64 + 0) as *u8) = 28 as u8       // sin6_len
+            *((addr as i64 + 1) as *u8) = AF_INET6 as u8 // sin6_family
+            *((addr as i64 + 2) as *u8) = (port_n & 0xff) as u8
+            *((addr as i64 + 3) as *u8) = ((port_n >> 8) & 0xff) as u8
+            // flowinfo (4..8) stays 0; addr at 8; scope_id (24..28) stays 0
+            if hostIsEmpty(host) {
+                return SOCKADDR_IN6_LEN   // :: — in6addr_any, already zeroed
+            }
+            if inet_pton(AF_INET6, host, (addr as i64 + 8) as *u8) != 1 {
+                return -1
+            }
+            return SOCKADDR_IN6_LEN
+        }
+        *((addr as i64 + 0) as *u8) = 16 as u8
+        *((addr as i64 + 1) as *u8) = AF_INET as u8
+        *((addr as i64 + 2) as *u8) = (port_n & 0xff) as u8
+        *((addr as i64 + 3) as *u8) = ((port_n >> 8) & 0xff) as u8
+        if hostIsEmpty(host) {
+            return SOCKADDR_IN_LEN       // 0.0.0.0 — INADDR_ANY, already zeroed
+        }
+        if inet_pton(AF_INET, host, (addr as i64 + 4) as *u8) != 1 {
+            return -1
+        }
+        return SOCKADDR_IN_LEN
+    }
+}
+
+// Read the family byte a kernel wrote into a sockaddr. accept/getsockname/getpeername all
+// fill this in, so the reply can report what the socket actually is instead of asserting
+// IPv4 and being wrong half the time.
+fn sockAddrFamily(addr: *u8): i32 {
+    unsafe {
+        return (*((addr as i64 + 1) as *u8)) as i32
+    }
+}
+
+// Port is at offset 2 in both layouts, network byte order.
+fn sockAddrPort(addr: *u8): i32 {
+    unsafe {
+        let hi = (*((addr as i64 + 2) as *u8)) as i32
+        let lo = (*((addr as i64 + 3) as *u8)) as i32
+        return (hi << 8) | lo
+    }
+}
+
+// Format the address text out of a kernel-filled sockaddr, v4 at +4 and v6 at +8.
+fn sockAddrText(addr: *u8, out: *u8, outLen: i32): bool {
+    let fam = sockAddrFamily(addr)
+    unsafe {
+        if fam == AF_INET6 {
+            return (inet_ntop(AF_INET6, (addr as i64 + 8) as *u8, out, outLen) as i64) != 0
+        }
+        return (inet_ntop(AF_INET, (addr as i64 + 4) as *u8, out, outLen) as i64) != 0
+    }
+}
+
 // thread_local: each isolate/thread polls its own kqueue (worker threads must not
 // share the main thread's event-loop fd).
 thread_local var kq_fd: i32 = -1
@@ -163,11 +272,13 @@ fn kevent_get_flags(buf: *u8): i32 {
     }
 }
 
-// tcpSocket() -> fd
+// tcpSocket(family?) -> fd. family defaults to AF_INET so existing v4 callers are
+// unchanged; pass AF_INET6 (30) for a v6 or dual-stack socket.
 fn tcpSocket(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     unsafe {
-        let fd = socket(2, 1, 0)
+        let family = ci.i32Arg(0, AF_INET)
+        let fd = socket(family, 1, 0)
         if fd < 0 {
             ci.retI32(-1)
             return
@@ -198,21 +309,21 @@ fn tcpBind(info: *u8, _ud: *u8): void {
         let host_arg = ci.arg(1)
         host_arg.writeUtf8(iso, host_buf as *u8, 256)
 
-        // sockaddr_in: sin_len(1) sin_family(1) sin_port(2) sin_addr(4) sin_zero(8) = 16
-        var addr: [u8; 16] = [0; 16]
-        addr[0] = 16  // sin_len
-        addr[1] = 2   // AF_INET
-        let port_n = htons(port)
-        addr[2] = (port_n & 0xff) as u8
-        addr[3] = ((port_n >> 8) & 0xff) as u8
-
-        if host_buf[0] == 48 && host_buf[1] == 46 && host_buf[2] == 48 && host_buf[3] == 46 && host_buf[4] == 48 && host_buf[5] == 46 && host_buf[6] == 48 {
-            // 0.0.0.0 — INADDR_ANY, already zeroed
-        } else {
-            inet_pton(2, host_buf as *u8, (addr as *u8 as i64 + 4) as *u8)
+        // 28 bytes: big enough for either sockaddr_in (16) or sockaddr_in6 (28).
+        var addr: [u8; 28] = [0; 28]
+        var family = AF_INET
+        if hostIsV6(host_buf as *u8) {
+            family = AF_INET6
         }
-
-        let r = bind(fd, addr as *u8, 16)
+        let alen = buildSockAddr(host_buf as *u8, port, addr as *u8, family)
+        if alen < 0 {
+            // The literal did not parse for its family. This used to be silent: the
+            // failed inet_pton left the address zeroed, so a v6 bind became 0.0.0.0 and
+            // reached localhost anyway. -1 instead of a wrong address that works.
+            ci.retI32(-1)
+            return
+        }
+        let r = bind(fd, addr as *u8, alen as i32)
         ci.retI32(r)
     }
 }
@@ -230,8 +341,9 @@ fn tcpAccept(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let fd = ci.i32Arg(0, -1)
     unsafe {
-        var addr: [u8; 16] = [0; 16]
-        var addrlen: i32 = 16
+        // 28B: a v6 peer's sockaddr does not fit in 16 and would be truncated.
+        var addr: [u8; 28] = [0; 28]
+        var addrlen: i32 = 28
         let new_fd = accept(fd, addr as *u8, addrlen.addrOf())
         if new_fd >= 0 {
             // make non-blocking; accepted fds do NOT inherit O_NONBLOCK from the listener
@@ -381,21 +493,27 @@ fn tcpGetSockName(info: *u8, _ud: *u8): void {
     let ctx = ci.context()
 
     unsafe {
-        var addr: [u8; 16] = [0; 16]
-        var addrlen: i32 = 16
+        // 28B so a v6 socket's address is not truncated into a v4-shaped answer.
+        var addr: [u8; 28] = [0; 28]
+        var addrlen: i32 = 28
         let r = getsockname(fd, addr as *u8, addrlen.addrOf())
         if r != 0 {
             ci.retUndefined()
             return
         }
-        let port_raw = (addr[2] as i32) << 8 | (addr[3] as i32)
         let obj = iso.object()
-        ctx.objectSet(obj, "port" as *u8, iso.int32(port_raw))
+        ctx.objectSet(obj, "port" as *u8, iso.int32(sockAddrPort(addr as *u8)))
 
         var ip_buf: [u8; 64] = [0; 64]
-        inet_ntop(2, (addr as *u8 as i64 + 4) as *u8, ip_buf as *u8, 64)
+        sockAddrText(addr as *u8, ip_buf as *u8, 64)
         ctx.objectSet(obj, "address" as *u8, iso.string(ip_buf as *u8))
-        ctx.objectSet(obj, "family" as *u8, iso.string("IPv4" as *u8))
+        // Report what the socket actually is. This said "IPv4" unconditionally, so a v6
+        // socket reported IPv4 — and address().family is asserted all over the suite.
+        if sockAddrFamily(addr as *u8) == AF_INET6 {
+            ctx.objectSet(obj, "family" as *u8, iso.string("IPv6" as *u8))
+        } else {
+            ctx.objectSet(obj, "family" as *u8, iso.string("IPv4" as *u8))
+        }
         ci.ret(obj)
     }
 }
@@ -407,21 +525,24 @@ fn tcpGetPeerName(info: *u8, _ud: *u8): void {
     let ctx = ci.context()
 
     unsafe {
-        var addr: [u8; 16] = [0; 16]
-        var addrlen: i32 = 16
+        var addr: [u8; 28] = [0; 28]
+        var addrlen: i32 = 28
         let r = getpeername(fd, addr as *u8, addrlen.addrOf())
         if r != 0 {
             ci.retUndefined()
             return
         }
-        let port_raw = (addr[2] as i32) << 8 | (addr[3] as i32)
         let obj = iso.object()
-        ctx.objectSet(obj, "port" as *u8, iso.int32(port_raw))
+        ctx.objectSet(obj, "port" as *u8, iso.int32(sockAddrPort(addr as *u8)))
 
         var ip_buf: [u8; 64] = [0; 64]
-        inet_ntop(2, (addr as *u8 as i64 + 4) as *u8, ip_buf as *u8, 64)
+        sockAddrText(addr as *u8, ip_buf as *u8, 64)
         ctx.objectSet(obj, "address" as *u8, iso.string(ip_buf as *u8))
-        ctx.objectSet(obj, "family" as *u8, iso.string("IPv4" as *u8))
+        if sockAddrFamily(addr as *u8) == AF_INET6 {
+            ctx.objectSet(obj, "family" as *u8, iso.string("IPv6" as *u8))
+        } else {
+            ctx.objectSet(obj, "family" as *u8, iso.string("IPv4" as *u8))
+        }
         ci.ret(obj)
     }
 }

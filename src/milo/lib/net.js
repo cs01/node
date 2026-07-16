@@ -4,6 +4,9 @@
 const EventEmitter = require('events');
 const { Duplex } = require('stream');
 const tcp = internalBinding('tcp');
+// macOS values; the tcp binding is macOS-only (kqueue). Linux would be 10.
+const AF_INET = 2;
+const AF_INET6 = 30;
 
 const EVFILT_READ = tcp.EVFILT_READ;   // -1
 const EVFILT_WRITE = tcp.EVFILT_WRITE; // -2
@@ -544,7 +547,12 @@ class Server extends EventEmitter {
     if (cb) this.once('listening', cb);
 
     ensurePoll();
-    this._fd = tcp.socket();
+    // A ':' means an IPv6 literal, and the socket's family is fixed at socket() time —
+    // long before bind() sees the host. Creating an AF_INET socket and then binding a v6
+    // sockaddr to it is rejected by the kernel, which is how '::1' used to end up as
+    // 0.0.0.0: the old code discarded inet_pton's failure and bound the zeroed address.
+    const family = (host && host.includes(':')) ? AF_INET6 : AF_INET;
+    this._fd = tcp.socket(family);
     if (this._fd < 0) {
       process.nextTick(() => this.emit('error', new Error('socket() failed')));
       return this;
@@ -553,7 +561,7 @@ class Server extends EventEmitter {
     if (tcp.bind(this._fd, host, port) !== 0) {
       tcp.close(this._fd);
       this._fd = -1;
-      const err = new Error('bind EADDRINUSE 0.0.0.0:' + port);
+      const err = new Error('bind EADDRINUSE ' + (host || '0.0.0.0') + ':' + port);
       err.code = 'EADDRINUSE'; err.errno = -48; err.syscall = 'bind'; err.address = '0.0.0.0'; err.port = port;
       process.nextTick(() => this.emit('error', err));
       return this;
