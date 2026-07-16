@@ -61,9 +61,13 @@ const char* nm_get_lib_dir(void) {
     return lib_dir;
 }
 
-// Wrapper for variadic open() — ARM64 variadic ABI differs from regular fn ABI
+// Wrapper for variadic open() — ARM64 variadic ABI differs from regular fn ABI.
+// Capture errno HERE (same fn as the syscall) and return -errno on failure — reading
+// errno back in milo after the FFI return races against clobbering, which surfaced
+// every open failure as EPERM(-1) instead of the real ENOENT/EACCES/EISDIR.
 int nm_fs_open(const char* path, int flags, int mode) {
-    return open(path, flags, mode);
+    int fd = open(path, flags, mode);
+    return fd >= 0 ? fd : -errno;
 }
 
 // Wrapper for variadic fcntl() — same ARM64 ABI reason. Sets FD_CLOEXEC so the

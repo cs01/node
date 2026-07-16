@@ -453,6 +453,8 @@ fn fsOpen(info: *u8, _ud: *u8): void {
         }
         let flags = ci.i32Arg(1, 0)
         let mode = ci.i32Arg(2, 438)
+        // nm_fs_open already returns fd>=0 or -errno (errno captured in C to avoid
+        // the FFI-boundary clobber); pass it straight through for JS to map.
         ci.retI32(nm_fs_open(pathBuf as *u8, flags, mode))
     }
 }

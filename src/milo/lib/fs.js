@@ -183,6 +183,16 @@ function _fsError(code, syscall, path, msg, dest) {
   if (dest != null) e.dest = String(dest);
   return e;
 }
+let _uvErrmap;
+// b.open now returns a negative libuv errno on failure (was bare -1 → hardcoded
+// ENOENT). Map it through the uv errmap so EACCES/EISDIR/ENOTDIR surface correctly.
+function _openErr(fd, syscall, path, dest) {
+  if (_uvBinding === undefined) _uvBinding = internalBinding('uv');
+  if (_uvErrmap === undefined) _uvErrmap = _uvBinding.getErrorMap();
+  const ent = _uvErrmap.get(fd);
+  return ent ? _fsError(ent[0], syscall, path, ent[1], dest)
+             : _fsError('ENOENT', syscall, path, 'no such file or directory', dest);
+}
 
 function _validateWriteData(data) {
   if (typeof data !== 'string' && !Buffer.isBuffer(data) && !ArrayBuffer.isView(data) && !(data instanceof DataView)) {
@@ -211,7 +221,7 @@ function writeFileSync(path, data, options) {
   const flag = opts.flag || 'w';
   const mode = opts.mode != null ? (typeof opts.mode === 'string' ? parseInt(opts.mode, 8) : opts.mode) : 0o666;
   const fd = b.open(p, stringToFlags(flag), mode);
-  if (fd < 0) throw _fsError('ENOENT', 'open', p);
+  if (fd < 0) throw _openErr(fd, 'open', p);
   try {
     const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     if (buf.length > 0) _fdWriteChecked(fd, buf, buf.length, 'write');
@@ -240,7 +250,7 @@ function appendFileSync(path, data, options) {
   const p = _toPath(path);
   const mode = opts.mode != null ? (typeof opts.mode === 'string' ? parseInt(opts.mode, 8) : opts.mode) : 0o666;
   const fd = b.open(p, stringToFlags('a'), mode);
-  if (fd < 0) throw _fsError('ENOENT', 'open', p);
+  if (fd < 0) throw _openErr(fd, 'open', p);
   try {
     const buf = typeof data === 'string' ? Buffer.from(data, opts.encoding || 'utf8') : Buffer.from(data);
     if (buf.length > 0) _fdWriteChecked(fd, buf, buf.length, 'write');
@@ -517,7 +527,7 @@ function openSync(path, flags, mode) {
   const fd = b.open(sp, f, mode);
   if (fd < 0) {
     if ((f & O_EXCL) && b.exists(sp)) throw _fsError('EEXIST', 'open', sp, 'file already exists');
-    throw _fsError('ENOENT', 'open', sp, 'no such file or directory');
+    throw _openErr(fd, 'open', sp);
   }
   return fd;
 }
@@ -1226,7 +1236,7 @@ function _flushPath(path, cb) {
   try {
     const p = _toPath(path);
     fd = b.open(p, 0, 0);
-    if (fd < 0) { cb(_fsError('ENOENT', 'open', p)); return; }
+    if (fd < 0) { cb(_openErr(fd, 'open', p)); return; }
   } catch (e) { cb(e); return; }
   module.exports.fsync(fd, (er) => { try { b.close(fd); } catch {} cb(er || null); });
 }
