@@ -30,6 +30,17 @@
    (`ps -o time= -p PID`). Sleeping ≈0.03s over 6s; spinning ≈6s then fatal-OOM.
 4. **Never conclude from one run of a flaky probe.** p04 is ~50/50 both with and without
    any fix; a single A/B sample "proved" a regression that did not exist. Run 10x.
+5b. **YOUR OWN MEASUREMENT CAN BE THE WRONG ONE — the runner cripples fork-dependent tests.**
+   `test_safe_runner.sh:101` does `ulimit -u $MAX_PROCS` (default 30), but **RLIMIT_NPROC is
+   PER-USER** and this box carries ~283 ambient procs — so every fork/spawn inside every test
+   fails EAGAIN. child is 85/85 fork-dependent, cluster 54/54, tls ~14/82. I "measured" child
+   at 2/85 and wrote it into ROADMAP as a triumphant correction of the recorded 17. Real
+   answer with `--compat --module child all 8 400`: **24/85** — the record was closer than my
+   measurement, and reality was BETTER than recorded. **Use `all 8 400` for child/cluster/tls.**
+   (Arg trap: in --module mode positional 1 is still eaten as sample_size, so
+   `--module cluster 8 100` sets TIMEOUT=100s and leaves procs at 30.)
+   Also: **serialize suite runs.** Two sessions running suites concurrently cross-kill via the
+   runner's global `pkill -9 -f milo-node` (line 181) and its >20-proc forkbomb check.
 5. **Recorded baselines are not evidence.** Every inherited number was wrong: net "49" was
    44, timers "51" was 45. Both looked like regressions from my change; both were drift from
    unrelated commits (timers measured 45 with AND without my diff). Before believing you

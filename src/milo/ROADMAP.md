@@ -42,7 +42,7 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |
 | tls        | 18/82     | 21%  | med      | connection lifecycle, error codes |
-| child      | 2/85      | 2%   | med      | **MEASURED 2026-07-16: really 2/85, not the 17 recorded** (verified identical with and without the session's changes — pre-existing, not a regression). child.send, spawn edge cases |
+| child      | 24/85     | 28%  | med      | **CORRECTED 2026-07-16: 24/85.** my earlier "really 2/85!" was MY OWN ARTIFACT: test_safe_runner.sh sets `ulimit -u 30` but RLIMIT_NPROC is PER-USER and this box has ~283 ambient procs, so every fork/spawn inside every test failed EAGAIN. child is 85/85 fork-dependent. **Measure fork-dependent modules with `--compat --module child all 8 400`.** The recorded 17 was closer to truth than my measurement, and reality is BETTER than recorded — the opposite of the "baselines rot optimistically" story. child.send, spawn edge cases |
 | crypto     | 19/94     | 20%  | med      | ECDH, sign/verify gaps |
 | dgram      | 11/64     | 17%  | low      | bind/send permissions, multicast |
 | http2      | 27/165    | 16%  | low      | frame codec + HPACK exist; stream/session edge cases |
