@@ -292,9 +292,10 @@ EventEmitter.EventEmitter = EventEmitter;
 EventEmitter.listenerCount = function(emitter, type) { return emitter.listenerCount(type); };
 EventEmitter.getEventListeners = function(emitterOrTarget, type) {
   // EventTarget keeps its own store; EventEmitter exposes .listeners().
-  if (typeof emitterOrTarget.listeners === 'function') return emitterOrTarget.listeners(type);
-  if (typeof emitterOrTarget._eventListeners === 'function') return emitterOrTarget._eventListeners(type);
-  return [];
+  if (emitterOrTarget != null && typeof emitterOrTarget.listeners === 'function') return emitterOrTarget.listeners(type);
+  if (emitterOrTarget != null && typeof emitterOrTarget._eventListeners === 'function') return emitterOrTarget._eventListeners(type);
+  const e = new TypeError('The "emitter" argument must be an instance of EventEmitter or EventTarget. Received ' + (emitterOrTarget === null ? 'null' : typeof emitterOrTarget));
+  e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
 };
 // Polyfill getMaxListeners/setMaxListeners on EventTarget so static API works
 if (typeof EventTarget !== 'undefined' && !EventTarget.prototype.getMaxListeners) {
