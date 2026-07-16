@@ -477,13 +477,22 @@ are wrong (test-net-better-error-messages-port-hostname, -connect-options-port,
 -dns-lookup, -dns-error, -dns-custom-lookup). **Do this FIRST in a session** — it makes
 `connect()` async and every net (53) and http (93) pass routes through it.
 
-**B. 100-continue — several http tests.** `checkContinue`/`writeContinue` are absent (zero
-hits in http.js). Server: on `Expect: 100-continue`, emit **'checkContinue'** INSTEAD of
-'request' (if there is a listener; else auto-send 100), and add `res.writeContinue(cb)`
-sending `HTTP/1.1 100 Continue\r\n\r\n`. Client: parse the interim 1xx response WITHOUT
-treating it as the real response, and emit **'continue'** on the request. Blocks at least
-test-http-expect-continue and test-http-write-callbacks (the latter's whole flow is inside
-`server.on('checkContinue')`). Port from lib/_http_server.js + lib/_http_client.js.
+**B. 100-continue — SERVER HALF DONE, client half blocked on an architectural gap.**
+Done + verified byte-identical to the oracle: `checkContinue` dispatch, `res.writeContinue()`,
+`res.writeInformation()` (http.js). Drive it with a RAW socket client and it works end to end.
+
+**The real blocker is bigger than 100-continue: milo's ClientRequest buffers everything and
+sends on `end()`, while node flushes the header block as soon as the socket is assigned.**
+Proved: with `r.end()` never called, node's raw server saw `PUT / HTTP/1.1`; milo sent ZERO
+bytes. 100-continue deadlocks by construction on that — the client waits for 'continue'
+before calling end(), so the server never sees the request. Also needed once headers flush:
+the client must parse an interim 1xx WITHOUT treating it as the real response and emit
+**'continue'** (lib/_http_client.js:736-748 `statusIsInformational` -> `req.emit('continue')`,
+`req.res = null`).
+Scope: restructure the client write path to flush headers on socket assignment and stream the
+body after. Same risk class as §5g (touches every http client path — 93 passes route through
+it). **Do it FIRST in a session, with the full ladder after.** Blocks test-http-expect-continue
+and test-http-write-callbacks.
 
 Everything else in the http pool looks individually shaped (response-close, outgoing-buffer,
 header-overflow, agent-remove, server-delete-parser). Triage each against
