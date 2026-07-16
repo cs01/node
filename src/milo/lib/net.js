@@ -48,6 +48,9 @@ class Socket extends Duplex {
       }
     }
     this._fd = (options && (options._fd !== undefined ? options._fd : options.fd)) || -1;
+    // _handle tracks the live fd: an object while open, null once closed. Node tests
+    // assert `socket._handle === null` after 'close' (undefined would fail strictEqual).
+    this._handle = this._fd >= 0 ? { fd: this._fd } : null;
     this._connecting = false;
     this.remoteAddress = undefined;
     this.remotePort = undefined;
@@ -112,6 +115,7 @@ class Socket extends Duplex {
       process.nextTick(() => this.emit('error', new Error('socket() failed')));
       return this;
     }
+    this._handle = { fd: this._fd };
 
     const r = tcp.connect(this._fd, host, port);
     // connect returns 0 or EINPROGRESS (-36 on macOS)
@@ -191,6 +195,7 @@ class Socket extends Duplex {
 
   _destroy(err, cb) {
     const fd = this._fd;
+    this._handle = null; // Node nulls the handle on destroy; tests assert === null after 'close'
     if (fd >= 0) {
       try { tcp.pollRemove(fd, EVFILT_READ); } catch {}
       try { tcp.pollRemove(fd, EVFILT_WRITE); } catch {}
