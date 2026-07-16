@@ -486,10 +486,12 @@ fn fsFdRead(info: *u8, _ud: *u8): void {
         }
         let n = read(fd, buf, size as i64)
         if n < 0 {
-            free(buf)
-            // surface errno as a negative value so JS can map EBADF/EIO/etc.
+            // read errno BEFORE free() — free() can clobber errno, which turned a
+            // directory read's EISDIR into EIO. Capture, then free, then return.
             let ep = __error()
-            ci.retI32(0 - ep[0])
+            let e = ep[0]
+            free(buf)
+            ci.retI32(0 - e)
             return
         }
         if n == 0 {

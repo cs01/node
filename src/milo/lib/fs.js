@@ -597,8 +597,7 @@ function readSync(fd, buffer, offset, length, position) {
   // fdRead returns a typed array, 0 on EOF, or a negative errno on failure.
   if (typeof result === 'number') {
     if (result < 0) {
-      const code = _ERRNO_CODES[-result] || 'EIO';
-      throw _fsError(code, 'read', null, _ERRNO_MSG[code] || 'i/o error');
+      throw _openErr(result, 'read', null); // result is negative errno
     }
     return 0;
   }
@@ -696,8 +695,7 @@ function readv(fd, buffers, position, cb) {
     for (const buf of buffers) {
       const result = b.fdRead(fd, buf.byteLength);
       if (typeof result === 'number' && result < 0) {
-        const code = _ERRNO_CODES[-result] || 'EIO';
-        throw _fsError(code, 'read', null, _ERRNO_MSG[code] || 'i/o error');
+        throw _openErr(result, 'read', null); // result is negative errno
       }
       if (typeof result === 'number' || !result) break;
       const bytes = new Uint8Array(result.buffer || result);
@@ -722,8 +720,7 @@ function readvSync(fd, buffers, position) {
   for (const buf of buffers) {
     const result = b.fdRead(fd, buf.byteLength);
     if (typeof result === 'number' && result < 0) {
-      const code = _ERRNO_CODES[-result] || 'EIO';
-      throw _fsError(code, 'read', null, _ERRNO_MSG[code] || 'i/o error');
+      throw _openErr(result, 'read', null); // result is negative errno
     }
     if (typeof result === 'number' || !result) break;
     const bytes = new Uint8Array(result.buffer || result);
@@ -823,9 +820,6 @@ function _validateAccessMode(mode) {
   if (typeof mode !== 'number') throw _ERR_INVALID_ARG_TYPE('mode', 'number', mode);
   if (!Number.isInteger(mode) || mode < 0 || mode > 7) throw _ERR_OUT_OF_RANGE('mode', '>= 0 && <= 7', mode);
 }
-// macOS errno → node error code (the subset access(2) can return)
-const _ERRNO_CODES = { 1: 'EPERM', 2: 'ENOENT', 9: 'EBADF', 13: 'EACCES', 20: 'ENOTDIR', 27: 'EFBIG', 28: 'ENOSPC', 30: 'EROFS', 32: 'EPIPE', 62: 'ELOOP', 63: 'ENAMETOOLONG', 69: 'EDQUOT' };
-const _ERRNO_MSG = { EPERM: 'operation not permitted', ENOENT: 'no such file or directory', EBADF: 'bad file descriptor', EACCES: 'permission denied', ENOTDIR: 'not a directory', EFBIG: 'file too large', ENOSPC: 'no space left on device', EROFS: 'read-only file system', EPIPE: 'broken pipe', ELOOP: 'too many symbolic links', ENAMETOOLONG: 'name too long', EDQUOT: 'disk quota exceeded' };
 // b.fdWrite returns bytes written, or a negative errno on failure. Loop over short
 // writes (the kernel may accept fewer bytes, e.g. under RLIMIT_FSIZE the next write
 // then fails EFBIG) and throw the mapped fs error. Returns total bytes written.
@@ -834,20 +828,15 @@ function _fdWriteChecked(fd, buf, len, syscall) {
   while (written < len) {
     const chunk = written === 0 ? buf : buf.subarray(written);
     const n = b.fdWrite(fd, chunk, len - written);
-    if (n < 0) {
-      const code = _ERRNO_CODES[-n] || 'EIO';
-      throw _fsError(code, syscall || 'write', null, _ERRNO_MSG[code] || 'i/o error');
-    }
+    if (n < 0) throw _openErr(n, syscall || 'write', null); // n is negative errno
     if (n === 0) break; // no progress and no error — avoid infinite loop
     written += n;
   }
   return written;
 }
-// errno (positive, from a native binding) -> fs Error, or null on success.
+// positive errno from a native binding (access/utimes) -> fs Error, or null on success.
 function _errnoErr(errno, syscall, path) {
-  if (!errno || errno === 0) return null;
-  const code = _ERRNO_CODES[errno] || 'EACCES';
-  return _fsError(code, syscall, path, _ERRNO_MSG[code] || 'permission denied');
+  return errno ? _openErr(-errno, syscall, path) : null;
 }
 function accessSync(path, mode) {
   _validatePath(path, 'path');
@@ -855,8 +844,7 @@ function accessSync(path, mode) {
   const sp = _toPath(path);
   const errno = b.access(sp, mode === undefined ? 0 : mode);
   if (errno !== 0) {
-    const code = _ERRNO_CODES[errno] || 'EACCES';
-    throw _fsError(code, 'access', sp, _ERRNO_MSG[code] || 'permission denied');
+    throw _openErr(-errno, 'access', sp);
   }
 }
 
