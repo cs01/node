@@ -269,7 +269,7 @@ class Socket extends Duplex {
   get connecting() { return this._connecting; }
 
   get bytesRead() { return this._bytesRead || 0; }
-  get bytesWritten() { return this._bytesWritten || 0; }
+  get bytesWritten() { if (this._fd === undefined) return undefined; return this._bytesWritten || 0; } // undefined on the prototype (no instance fd), like node
 }
 Socket._sockets = new Map();
 
@@ -642,7 +642,7 @@ module.exports = {
   BlockList,
   isLoopback: (addr) => addr === '127.0.0.1' || addr === '::1' || addr === 'localhost' || (addr && addr.startsWith('127.')),
   setDefaultAutoSelectFamilyAttemptTimeout: (v) => { module.exports._autoSelectTimeout = v; },
-  getDefaultAutoSelectFamilyAttemptTimeout: () => module.exports._autoSelectTimeout || 2500,
+  getDefaultAutoSelectFamilyAttemptTimeout: () => module.exports._autoSelectTimeout || 500, // node default is 500ms (test/common bumps it *5)
   setDefaultAutoSelectFamily: () => {},
   getDefaultAutoSelectFamily: () => false,
   _normalizeArgs: function(args) {
