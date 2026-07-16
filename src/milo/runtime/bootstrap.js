@@ -408,20 +408,22 @@
     const _toStr = (v) => { if (typeof v === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string'); return String(v); };
     // Branded iterator so .next.call(wrongThis) throws ERR_INVALID_THIS like Node.
     const _spIterBrand = new WeakSet();
+    // Shared iterator prototype so BOTH the iterator and its prototype carry the
+    // toStringTag (node exposes %URLSearchParamsIteratorPrototype%; a test asserts
+    // Object.getPrototypeOf(it)[Symbol.toStringTag] === 'URLSearchParams Iterator').
+    // NOTE: a computed `get [Symbol.toStringTag]` in an object literal is miscompiled
+    // here and leaks onto Object.prototype — so define it with defineProperty instead.
+    const _spIterProto = {};
+    _spIterProto[Symbol.iterator] = function() { return this; };
+    Object.defineProperty(_spIterProto, Symbol.toStringTag, { value: 'URLSearchParams Iterator', configurable: true });
     function _spIterator(arr) {
       let i = 0;
-      // NOTE: a computed `get [Symbol.toStringTag]` in an object literal is
-      // miscompiled here and leaks the accessor onto Object.prototype — so
-      // define toStringTag explicitly with defineProperty instead.
-      const it = {
-        next() {
-          if (!_spIterBrand.has(this)) throw _ERR_INVALID_THIS('URLSearchParamsIterator');
-          if (i >= arr.length) return { value: undefined, done: true };
-          return { value: arr[i++], done: false };
-        },
-        [Symbol.iterator]() { return this; },
+      const it = Object.create(_spIterProto);
+      it.next = function() {
+        if (!_spIterBrand.has(this)) throw _ERR_INVALID_THIS('URLSearchParamsIterator');
+        if (i >= arr.length) return { value: undefined, done: true };
+        return { value: arr[i++], done: false };
       };
-      Object.defineProperty(it, Symbol.toStringTag, { value: 'URLSearchParams Iterator', configurable: true });
       _spIterBrand.add(it);
       return it;
     }
@@ -441,6 +443,10 @@
       return _dec().decode(new Uint8Array(bytes));
     }
     function _formEncode(s) {
+      // WHATWG form serializer UTF-8-encodes, which maps LONE surrogates to U+FFFD
+      // (%EF%BF%BD). Paired surrogates (real astral chars) are left intact. milo's
+      // TextEncoder emits raw WTF-8 for lone surrogates, so sanitize them here first.
+      s = s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�');
       let out = '';
       for (const b of _enc().encode(s)) {
         if (b === 0x20) out += '+';
