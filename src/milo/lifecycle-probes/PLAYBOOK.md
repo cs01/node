@@ -417,6 +417,34 @@ Method: `MILO_LIFECYCLE_DEBUG=1` + compare a raw-socket transcript against
 `./out/Release/node` side by side; the tests drive raw sockets, so a byte-diff of the two
 transcripts localises it fast.
 
+## 5g. NEXT LEVER: net.connect resolves in C, so 'lookup' never fires (~3 tests)
+
+Failing and dependent on it: test-net-dns-lookup, test-net-dns-error, test-net-dns-custom-lookup.
+(test-net-dns-lookup-skip already passes.)
+
+Verified against `./out/Release/node`: node emits `'lookup'` ONLY for hostnames — an IP
+literal emits nothing (checked: `lookup emitted: false`). Milo passes `host` straight to
+`tcp.connect(fd, host, port)` (net.js ~:120), so getaddrinfo happens inside C and there is no
+JS-visible resolution step to hook. Canonical: `lib/net.js:1468-1469`
+`lookup(host, dnsopts, function emitLookup(err, ip, addressType) { self.emit('lookup', err, ip, addressType, host); ...`
+
+Design (port from lib/net.js `lookupAndConnect`, do not invent):
+```js
+if (net.isIP(host)) { /* connect straight to the literal, emit NO 'lookup' */ }
+else {
+  const lookupFn = opts.lookup || require('dns').lookup;      // custom-lookup test needs this
+  lookupFn(host, { family: opts.family || 0, hints: opts.hints }, (err, ip, family) => {
+    this.emit('lookup', err, ip, family, host);               // fires even on error
+    if (err) { /* destroy(err) — dns-error test */ } else { /* connect to ip */ }
+  });
+}
+```
+**RISK — why this was deferred:** it makes `connect()` asynchronous where it is currently
+synchronous, and `connect()` is the most load-bearing function in net.js — every net (52) and
+http (92) pass runs through it, plus `_onConnected`'s EVFILT_WRITE dance. Do it FIRST in a
+session, never last, and run the full ladder (probes + net + http) before believing it.
+Validate `opts.lookup` arity/behavior against node: it is called with (host, opts, cb).
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
