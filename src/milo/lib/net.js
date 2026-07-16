@@ -163,6 +163,9 @@ class Socket extends Duplex {
     }
     this._startReading();
     this.emit('connect');
+    // node emits 'ready' immediately after 'connect' (lib/net.js:1690-1691). It was missing
+    // entirely, so anything gated on socket.on('ready') — a common test idiom — never ran.
+    this.emit('ready');
   }
 
   // Once the peer's FIN is seen, no further read event can be meaningful. The kqueue is
