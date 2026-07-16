@@ -963,11 +963,17 @@ function request(url, options, cb) {
     if (!parsed.hostname) {
       const err = new TypeError(`Invalid URL: ${url}`); err.code = 'ERR_INVALID_URL'; err.input = url; throw err;
     }
-    const opts = typeof options === 'function' ? {} : (options || {});
-    opts.hostname = parsed.hostname;
-    opts.port = parsed.port || 80;
-    opts.path = parsed.pathname + parsed.search;
-    if (typeof options === 'function') cb = options;
+    // node: `options = ObjectAssign(urlDerivedOptions, options)` (lib/_http_client.js) — the
+    // caller's options OVERRIDE the url. This was backwards: it clobbered the caller's
+    // hostname/port/path with the url's, so `http.get('http://example.com/p', {hostname:
+    // 'localhost', port}, cb)` actually hit example.com over the real internet.
+    const urlOpts = {
+      hostname: parsed.hostname,
+      port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+    };
+    if (typeof options === 'function') { cb = options; options = undefined; }
+    const opts = Object.assign(urlOpts, options || {});
     return new ClientRequest(opts, cb);
   }
   if (typeof options === 'function') { cb = options; options = url; }
