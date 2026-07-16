@@ -384,7 +384,12 @@ Server.setTimeout fix flipped exactly 0 tests). Fix them for correctness, not fo
 
 Tests: test-http-server-keep-alive-defaults, -keep-alive-pipeline-max-requests,
 -server-keep-alive-max-requests-null, -keep-alive-drop-requests, -server-keepalive-req-gc.
-**All five still HANG.** Three groundwork bugs are already fixed (each verified byte-identical
+**THREE NOW PASS.** The blocker was a MISSING ONE-LINER: `Socket` never emitted **'ready'**
+after 'connect' (node: lib/net.js:1690-1691). The tests write their pipelined requests from
+inside `socket.on('ready')`, so they sat mute and timed out — while the real cause looked like
+"keep-alive is broken". Pipelining already worked. Two still fail (-drop-requests, -req-gc).
+Moral: when a test produces NO output at all, suspect a missing EVENT before suspecting the
+subsystem it appears to be testing. Three groundwork bugs are already fixed (each verified byte-identical
 to `./out/Release/node`), but they were necessary-not-sufficient — the cluster needs the
 remaining items below:
 
