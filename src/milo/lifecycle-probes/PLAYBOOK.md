@@ -237,6 +237,32 @@ Run: `MILO_LIFECYCLE_DEBUG=1 timeout 5 ./out/Release/milo-node src/milo/lifecycl
    balanced): write findings into this file under a `## findings` section and stop —
    don't thrash.
 
+## 5a. NEXT TARGET: http keep-alive socket reuse is broken (found 2026-07-16)
+
+This is the biggest remaining pool: **40 http timeouts + 8 http OOMs**, and at least the 8
+OOMs share one root cause. Minimal repro (`/tmp/seq.js` pattern — 3 sequential http.get to
+one server, each fired from the previous response's 'end'):
+
+```js
+const http = require('http');
+const s = http.createServer((req, res) => { console.log('server: req', ++n); res.end('hello\n'); });
+s.listen(0, () => go(1));
+function go(i) { http.get({port: s.address().port}, (res) => {
+  res.on('end', () => { if (i < 3) go(i+1); else s.close(); }); res.resume(); }); }
+```
+Real node: 3 requests, exits 0. Milo: **request 1 completes ('END 1' prints), request 2
+NEVER REACHES THE SERVER**, process hangs. The default Agent pools the keep-alive socket
+after response 1 and the reused socket never delivers request 2.
+
+This single bug likely gates most of the http suite — every test that issues more than one
+request through the default agent stalls after the first. `agent:false` (a fresh socket per
+request) is the control: if that works, the bug is squarely in Agent reuse, not the wire.
+
+Start: instrument `lib/http.js`'s Agent (socket pooling / reuse path) and check whether the
+2nd request is ever written to the socket (add a log in `Socket._write`), or whether it sits
+queued waiting for a 'free'/'drain' signal that never comes. NOT a net.js/loop bug — the
+loop now correctly sleeps; nothing is spinning.
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not

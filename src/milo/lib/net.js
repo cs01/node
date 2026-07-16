@@ -467,7 +467,15 @@ function _pollOnce(timeout) {
     }
 
     const sock = Socket._sockets.get(fd);
-    if (!sock) continue;
+    if (!sock) {
+      // No socket owns this fd, so nothing can ever consume the event. A writable fd is
+      // essentially always ready, so a stale EVFILT_WRITE re-fires on every pollWait
+      // (level-triggered) and busy-spins the loop until v8 OOMs. Deregister it.
+      // Only WRITE: stdin/IPC/child_process legitimately poll READ on fds that are not in
+      // Socket._sockets and drain them elsewhere, and an idle READ does not re-fire.
+      if (filter === EVFILT_WRITE) { try { tcp.pollRemove(fd, EVFILT_WRITE); } catch {} }
+      continue;
+    }
 
     if (sock._connecting && filter === EVFILT_WRITE) {
       sock._onConnected(ev);
