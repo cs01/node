@@ -326,7 +326,10 @@ Object.defineProperty(globalThis, '__hasIO', { value: function() {
         // FIN and no data listener never emits 'close' and node still exits 0). Treating
         // mere map membership as liveness is what hung those tests forever.
         const rs = sock._readableState, ws = sock._writableState;
-        if (rs && ws && rs.ended && (ws.finished || ws.ended)) continue;
+        // ws.finished ONLY — not ws.ended. Writes can now park on EAGAIN, so 'ended'
+        // (end() called) no longer implies 'flushed'; exiting on it would drop the tail of
+        // a large response. 'finished' means every _write cb has fired, so nothing is parked.
+        if (rs && ws && rs.ended && ws.finished) continue;
         return true;
       }
     }

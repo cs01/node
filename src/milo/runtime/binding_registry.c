@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <errno.h>
@@ -76,6 +77,26 @@ int nm_set_cloexec(int fd) {
     int flags = fcntl(fd, F_GETFD, 0);
     if (flags < 0) return -1;
     return fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+
+// Wrapper for variadic fcntl() — same ARM64 ABI reason as nm_set_cloexec. Without this,
+// tcp.milo's direct `extern fn fcntl(fd, cmd, arg)` put arg 3 in w2 while the variadic ABI
+// reads it off the stack, so F_SETFL wrote stack garbage and O_NONBLOCK never landed:
+// every socket in the process was BLOCKING (lsof showed no NBF, and differing junk flags
+// per call site). Reads/accepts never noticed — they only run after kqueue reports
+// readiness — but a large write past the kernel sndbuf blocked the whole event loop,
+// deadlocking the reader that was supposed to drain it.
+int nm_set_nonblock(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return -1;
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+// Capture errno in the same frame as the syscall (see nm_fs_open above) and return
+// -errno, so the JS layer can distinguish EAGAIN (-35, backpressure) from a real error.
+long nm_write(int fd, const void* buf, long len) {
+    long n = write(fd, buf, len);
+    return n >= 0 ? n : -errno;
 }
 
 // libc utimes() takes a struct timeval[2] by pointer — awkward for the milo FFI

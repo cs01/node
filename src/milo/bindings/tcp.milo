@@ -11,7 +11,11 @@ extern fn connect(fd: i32, addr: *u8, addrlen: i32): i32
 extern fn close(fd: i32): i32
 extern fn setsockopt(fd: i32, level: i32, optname: i32, optval: *u8, optlen: i32): i32
 extern fn getsockopt(fd: i32, level: i32, optname: i32, optval: *u8, optlen: *u8): i32
-extern fn fcntl(fd: i32, cmd: i32, arg: i32): i32
+// fcntl is VARIADIC — calling it with a fixed 3-arity extern puts arg 3 in a register
+// while the ARM64 variadic ABI reads it off the stack, so F_SETFL wrote garbage and
+// O_NONBLOCK never landed. Both of these go through C wrappers instead.
+extern fn nm_set_nonblock(fd: i32): i32
+extern fn nm_write(fd: i32, buf: *u8, len: i64): i64
 extern fn strlen(s: *u8): i64
 extern fn memset(s: *u8, c: i32, n: i64): *u8
 extern fn calloc(count: i64, size: i64): *u8
@@ -173,8 +177,7 @@ fn tcpSocket(info: *u8, _ud: *u8): void {
         let one_ptr = one.addrOf()
         setsockopt(fd, 0xffff, 4, one_ptr as *u8, 4)
         // non-blocking
-        let flags = fcntl(fd, 3, 0)
-        fcntl(fd, 4, flags | 4)
+        nm_set_nonblock(fd)
         // FD_CLOEXEC via a C wrapper (variadic fcntl can't be called directly on
         // ARM64): the socket must close on execve so a replaced process image can
         // rebind the port (Node default).
@@ -231,9 +234,10 @@ fn tcpAccept(info: *u8, _ud: *u8): void {
         var addrlen: i32 = 16
         let new_fd = accept(fd, addr as *u8, addrlen.addrOf())
         if new_fd >= 0 {
-            // make non-blocking
-            let flags = fcntl(new_fd, 3, 0)
-            fcntl(new_fd, 4, flags | 4)
+            // make non-blocking; accepted fds do NOT inherit O_NONBLOCK from the listener
+            nm_set_nonblock(new_fd)
+            // accepted fds were also missing FD_CLOEXEC (only the listener got it)
+            nm_set_cloexec(new_fd)
         }
         ci.retI32(new_fd)
     }
@@ -301,10 +305,12 @@ fn tcpSendBinary(info: *u8, _ud: *u8): void {
         ci.retI32(0)
         return
     }
-    
-        let n = write(fd, dataPtr, dataLen)
-        ci.retI32(n as i32)
-    
+    // nm_write captures errno in the syscall's own frame and returns -errno, so the JS
+    // layer can tell EAGAIN (-35 = kernel sndbuf full -> backpressure, retry on
+    // EVFILT_WRITE) apart from a genuine error. Reading errno back across the FFI seam
+    // instead would race (see nm_fs_open).
+    let n = nm_write(fd, dataPtr, dataLen)
+    ci.retI32(n as i32)
 }
 
 // tcpRecv(fd) -> string or empty string if EAGAIN, or undefined if closed
@@ -826,8 +832,7 @@ fn udpSocket(info: *u8, _ud: *u8): void {
     
         let fd = socket(2, 2, 0)
         if fd >= 0 {
-            let flags = fcntl(fd, 3, 0)
-            fcntl(fd, 4, flags | 4)
+            nm_set_nonblock(fd)
         }
         ci.retI32(fd)
     

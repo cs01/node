@@ -9,6 +9,14 @@ const EVFILT_READ = tcp.EVFILT_READ;   // -1
 const EVFILT_WRITE = tcp.EVFILT_WRITE; // -2
 const EV_EOF = tcp.EV_EOF;             // 0x8000
 const EVFILT_VNODE = -4;
+const EAGAIN = -35; // darwin EAGAIN, returned negated by nm_write
+
+function _writeError(n) {
+  const code = _CONNECT_ERRNO[-n] || (n === -32 ? 'EPIPE' : 'UNKNOWN');
+  const e = new Error(`write ${code}`);
+  e.code = code; e.errno = n; e.syscall = 'write';
+  return e;
+}
 
 // darwin errno → Node error code, for connect() failures surfaced via SO_ERROR
 const _CONNECT_ERRNO = {
@@ -187,15 +195,40 @@ class Socket extends Duplex {
     if (Buffer.isBuffer(data)) buf = data;
     else if (data instanceof Uint8Array) buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     else buf = Buffer.from(typeof data === 'string' ? data : String(data), encoding);
-    let offset = 0;
+    this._sendFrom(buf, 0, cb);
+  }
+
+  // Push bytes until the kernel sndbuf refuses them. Sockets are non-blocking, so a full
+  // buffer returns EAGAIN rather than sleeping; park the remainder and wait for the fd to
+  // become writable. Withholding cb() is what applies backpressure: Writable queues
+  // everything behind it and write() starts returning false at the highWaterMark.
+  // Only ONE pending write can exist — stream.js serializes _write via state.writing.
+  _sendFrom(buf, offset, cb) {
     while (offset < buf.length) {
       const chunk = new Uint8Array(buf.buffer, buf.byteOffset + offset, buf.length - offset);
       const n = tcp.sendBinary(this._fd, chunk);
-      if (n < 0) { cb(new Error('write failed')); return; }
-      if (n === 0) { cb(new Error('write failed')); return; }
+      if (n === EAGAIN || n === 0) {
+        this._pendingWrite = { buf, offset, cb };
+        try { tcp.pollAdd(this._fd, EVFILT_WRITE); } catch {}
+        return;
+      }
+      if (n < 0) { this._pendingWrite = null; cb(_writeError(n)); return; }
       offset += n;
+      this._bytesWritten = (this._bytesWritten || 0) + n;
     }
+    this._pendingWrite = null;
     cb();
+  }
+
+  _flushPendingWrite() {
+    const p = this._pendingWrite;
+    if (!p) return;
+    if (this._fd < 0) { this._pendingWrite = null; p.cb(new Error('Socket is closed')); return; }
+    this._pendingWrite = null;
+    this._sendFrom(p.buf, p.offset, p.cb);
+    // fully drained -> stop listening for writability (level-triggered: an always-writable
+    // fd would otherwise re-fire every poll and spin the loop)
+    if (!this._pendingWrite && this._fd >= 0) { try { tcp.pollRemove(this._fd, EVFILT_WRITE); } catch {} }
   }
 
   _read(size) {
@@ -209,6 +242,12 @@ class Socket extends Duplex {
 
   _destroy(err, cb) {
     this._clearTimeout();
+    // a parked write's cb would never fire otherwise, and Writable would wait forever
+    if (this._pendingWrite) {
+      const p = this._pendingWrite; this._pendingWrite = null;
+      const e = err || (() => { const x = new Error('Cannot call write after a stream was destroyed'); x.code = 'ERR_STREAM_DESTROYED'; return x; })();
+      try { p.cb(e); } catch {}
+    }
     const fd = this._fd;
     this._handle = null; // Node nulls the handle on destroy; tests assert === null after 'close'
     if (fd >= 0) {
@@ -513,6 +552,13 @@ function _pollOnce(timeout) {
 
     if (sock._connecting && filter === EVFILT_WRITE) {
       sock._onConnected(ev);
+      continue;
+    }
+
+    // fd drained enough to take more: resume the parked write. `continue` matters — a WRITE
+    // event carrying EV_EOF must not fall through into the read-drain branch below.
+    if (filter === EVFILT_WRITE && sock._pendingWrite) {
+      try { sock._flushPendingWrite(); } catch (e) { _emitSocketError(sock, e); }
       continue;
     }
 
