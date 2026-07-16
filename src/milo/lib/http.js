@@ -449,8 +449,13 @@ class Server extends EventEmitter {
             try {
               this.emit('request', req, res);
             } catch (e) {
-              if (!res.headersSent) { res.statusCode = 500; res.end(); }
-              this.emit('clientError', e, socket);
+              // Node treats an exception from a request handler as an uncaughtException: it
+              // does NOT answer 500 and does NOT report it as 'clientError' (that event is
+              // for connection-level errors). Answering 500 turned every failed assertion
+              // in the standard `common.mustCall((req,res) => { assert... })` pattern into
+              // an opaque TIMEOUT. Route it straight to the fatal path so it never reaches
+              // the socket's error machinery, which http itself forwards to clientError.
+              if (process._fatalException) process._fatalException(e); else throw e;
             }
           }
 
