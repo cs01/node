@@ -147,7 +147,7 @@ class Socket extends Duplex {
     if (this.destroyed) {
       this._undestroy();
       const rs = this._readableState;
-      if (rs) { rs.ended = false; rs.endEmitted = false; rs.destroyed = false; rs.flowing = null; rs.buffer = []; rs.length = 0; rs.readable = true; }
+      if (rs) { rs._destroyed = false; rs.ended = false; rs.endEmitted = false; rs.flowing = null; rs.buffer = []; rs.length = 0; rs.readable = true; rs.errored = null; rs.errorEmitted = false; }
       this._handle = null;
       this._fd = -1;
       this._readPollRemoved = false;
@@ -156,6 +156,12 @@ class Socket extends Duplex {
       this._peerDisconnected = false;
       this._connecting = false;
     }
+    // Each connect attempt gets a generation. The deferred map-eviction in _destroy is
+    // guarded by `get(fd) === this`, which catches a DIFFERENT socket recycling the fd —
+    // but not the SAME socket reconnecting: the user's 'close' handler runs before
+    // _destroy's, so connect() re-adds the entry and the stale handler then deletes the
+    // fresh one. Same bug class as the fd-reuse race, invisible to an identity check.
+    this._gen = (this._gen || 0) + 1;
     // NOTE: `port` is reassigned to opts.port above, so the signal must be captured from
     // the options object while it is still in scope (_signalOpt), not re-read from `port`.
     this._addAbortSignal(_signalOpt);
@@ -337,6 +343,7 @@ class Socket extends Duplex {
   }
 
   _destroy(err, cb) {
+    const gen = this._gen; // snapshot: a reconnect before 'close' bumps this
     this._clearTimeout();
     // a parked write's cb would never fire otherwise, and Writable would wait forever
     if (this._pendingWrite) {
@@ -357,7 +364,8 @@ class Socket extends Duplex {
         // can hand 5 to a NEW socket before this deferred cleanup runs. Deleting by fd alone
         // then evicts the new owner's entry, orphaning a live socket — its events stop being
         // dispatched, 'close' never fires, and the process hangs. Only delete our own entry.
-        if (Socket._sockets.get(fd) === this) Socket._sockets.delete(fd);
+        // ...and only if this socket has not begun a NEW connection since (gen check)
+        if (Socket._sockets.get(fd) === this && this._gen === gen) Socket._sockets.delete(fd);
         if (globalThis.__pendingCloseUnref) globalThis.__pendingCloseUnref();
       });
     }
