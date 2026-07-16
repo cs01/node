@@ -12,16 +12,22 @@ const EVFILT_VNODE = -4;
 const EAGAIN = -35; // darwin EAGAIN, returned negated by nm_write
 
 function _writeError(n) {
-  const code = _CONNECT_ERRNO[-n] || (n === -32 ? 'EPIPE' : 'UNKNOWN');
+  const code = _CONNECT_ERRNO[-n] || 'UNKNOWN';
   const e = new Error(`write ${code}`);
   e.code = code; e.errno = n; e.syscall = 'write';
   return e;
 }
 
 // darwin errno → Node error code, for connect() failures surfaced via SO_ERROR
+// darwin errno -> node error code. Used for connect() failures AND write() errors, so it
+// needs the write-path errnos too: an unmapped one surfaces as the useless `ERR UNKNOWN`,
+// which is exactly what hid the ENOTCONN write-before-connect bug (playbook 5o) — the code
+// said UNKNOWN and only `errno=-57` gave it away.
 const _CONNECT_ERRNO = {
-  13: 'EACCES', 47: 'EAFNOSUPPORT', 48: 'EADDRINUSE', 49: 'EADDRNOTAVAIL',
-  51: 'ENETUNREACH', 54: 'ECONNRESET', 60: 'ETIMEDOUT', 61: 'ECONNREFUSED',
+  9: 'EBADF', 13: 'EACCES', 22: 'EINVAL', 32: 'EPIPE', 35: 'EAGAIN',
+  47: 'EAFNOSUPPORT', 48: 'EADDRINUSE', 49: 'EADDRNOTAVAIL',
+  50: 'ENETDOWN', 51: 'ENETUNREACH', 53: 'ECONNABORTED', 54: 'ECONNRESET',
+  55: 'ENOBUFS', 56: 'EISCONN', 57: 'ENOTCONN', 60: 'ETIMEDOUT', 61: 'ECONNREFUSED',
   64: 'EHOSTDOWN', 65: 'EHOSTUNREACH',
 };
 
