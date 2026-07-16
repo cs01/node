@@ -668,6 +668,34 @@ blocks in the file. So it is NOT the early-hints logic. Next suspects, in order:
 Method: `MILO_LIFECYCLE_DEBUG=1` on the test and diff the loop dump against a hand-written
 equivalent that works.
 
+## 5o. ENOTCONN ON WRITE-BEFORE-CONNECT — a REAL bug I introduced, fix attempt REVERTED
+
+**Repro (30s):** 3 concurrent http2 servers on 127.0.0.1 →
+`ERR code=UNKNOWN errno=-57 syscall=write`. -57 is **ENOTCONN**. One server usually works;
+concurrency makes the window reliable.
+
+**Cause — mine.** Fixing the variadic `fcntl` bug (commit 37c76878a8a) made sockets genuinely
+non-blocking, which is correct. But **connect() is always async (EINPROGRESS)**, and http2
+writes its connection preface immediately, before 'connect' fires. Blocking sockets made that
+work BY ACCIDENT: `write()` on a connecting socket simply blocked until it connected. Now it
+returns ENOTCONN. (`_preConnectWrites` only covers `_fd < 0`, i.e. the async-DNS case — I
+reasoned about connect being async *because of DNS* and missed that it is always async.)
+It surfaces as `ERR UNKNOWN` only because `_CONNECT_ERRNO` does not map 57 — worth adding.
+
+**My fix, and why it was reverted.** Parking every write while `this._connecting` (not just
+when `_fd < 0`) fixes it — verified: "all 3 OK". But it MEASURED **net 56->55, http 96->94,
+http2 36->37 = net -2**, so it was reverted per the no-regression rule.
+The break is `bytesWritten` accounting: node counts every byte handed to `write()` INCLUDING
+data still buffered in the stream (its getter adds `_pendingData` to a dispatched counter),
+whereas milo increments `_bytesWritten` inside `_sendFrom`, i.e. only when bytes reach the
+kernel. Parking makes those bytes invisible. `test-net-socket-byteswritten` corks, writes
+twice and asserts *while corked*: expects 7, milo reports 3. I tried counting at `_write`
+entry and adding `_writableState.length` in the getter; neither matched — **do this properly
+by porting node's dispatched+pending model, THEN re-apply the parking fix.**
+
+Priority: high. This is live breakage (any write-before-connect), not a test artifact, and
+the tests that would catch it are already timing out for other reasons.
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
