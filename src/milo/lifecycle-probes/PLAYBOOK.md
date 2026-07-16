@@ -648,6 +648,26 @@ landed, trace recorded.
 measured ~0-5 loop-flippable tests across 681 — but it structurally kills the bug class that
 produced 4 races today (incl. the fd-reuse race, which wore three different masks).
 
+## 5n. write-early-hints: 3 tests HANG with ZERO output — unreproducible in isolation
+
+`test-http2-compat-write-early-hints{,-invalid-argument-type,-invalid-argument-value}`.
+Every ingredient verified working standalone against `./out/Release/node`:
+`res.writeEarlyHints({link})` returns true and sends a 103; the client emits 'headers' with
+`:status === 103` (number) then 'response' with 200; `client.request()` with no args works;
+`http2.connect('http://localhost:PORT')` connects.
+
+**But the tests emit ZERO bytes** — they hang before any output, across all 3 independent
+blocks in the file. So it is NOT the early-hints logic. Next suspects, in order:
+1. Each block does `server.listen(0)` with NO host. **milo binds 0.0.0.0 (IPv4); node binds
+   `::` (IPv6 dual-stack)** — verified. The tests then connect to `localhost`, which now
+   resolves to `::1` (correct, matches node, since the dns-in-connect work). A `::1` client
+   against an IPv4-only listener is the obvious mismatch — but a direct repro of exactly that
+   DID connect, so something is compensating. Chase this first; it is also a real gap on its
+   own (see dgram udp6 in 5m: milo is IPv4-only end to end).
+2. Three servers alive at once in one process (the 3 blocks) — a listener/port interaction.
+Method: `MILO_LIFECYCLE_DEBUG=1` on the test and diff the loop dump against a hand-written
+equivalent that works.
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
