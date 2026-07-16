@@ -89,6 +89,7 @@ class Http2Stream extends Duplex {
   }
   get pushAllowed() { return false; }
   _write(chunk, enc, cb) {
+    if (this._timeoutMs > 0) this._armTimeout(); // outbound traffic resets the idle timer
     if (typeof chunk === 'string') chunk = Buffer.from(chunk, enc || 'utf8');
     this.session._sendData(this.id, chunk, false);
     cb();
@@ -110,11 +111,34 @@ class Http2Stream extends Duplex {
     this.session._sendRst(this.id, code);
     process.nextTick(() => this.emit('close'));
   }
-  setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
+  // Was a stub. Same idle model as net.js/Http2Session — unref'd, rearmed on traffic,
+  // cleared on destroy. Fixing it here also fixes Http2ServerRequest/Response, which
+  // correctly delegate to the stream.
+  setTimeout(ms, cb) {
+    if (cb) this.once('timeout', cb);
+    this._timeoutMs = ms;
+    this._armTimeout();
+    return this;
+  }
+  _armTimeout() {
+    if (this._timeoutTimer) { clearTimeout(this._timeoutTimer); this._timeoutTimer = null; }
+    if (this._timeoutMs > 0 && !this.destroyed) {
+      const t = setTimeout(() => { this._timeoutTimer = null; this.emit('timeout'); }, this._timeoutMs);
+      if (t && typeof t.unref === 'function') t.unref();
+      this._timeoutTimer = t;
+    }
+  }
+  _clearTimeout() {
+    if (this._timeoutTimer) { clearTimeout(this._timeoutTimer); this._timeoutTimer = null; }
+    this._timeoutMs = 0;
+  }
+  // no destroy override existed, so a timer armed before destroy would still fire 'timeout'
+  // on a dead stream
+  _destroy(err, cb) { this._clearTimeout(); cb(err); }
   priority() {}
   // ignore data/eof once the readable side is done — a peer may keep sending
   // DATA after we've ended/closed/rejected the stream (push-after-EOF guard).
-  _push(chunk) { if (this._readableEnded || this.destroyed || this.closed) return; this.push(chunk); }
+  _push(chunk) { if (this._readableEnded || this.destroyed || this.closed) return; if (this._timeoutMs > 0) this._armTimeout(); this.push(chunk); }
   _end() { if (this._readableEnded) return; this._readableEnded = true; this.push(null); }
 }
 
