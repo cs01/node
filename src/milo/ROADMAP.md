@@ -36,7 +36,7 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | timers     | 45/55     | 82%  | low      | **MEASURED 2026-07-16.** the old "51" was stale drift, not a regression (verified identical with and without the lifecycle fixes) |
 | whatwg     | 19/41     | 46%  | med      | URL↔searchParams live-sync, TextDecoder, webstreams |
 | stream     | 75/156    | 48%  | high     | re-tallied 2026-07-15; async-fn map/flatMap, web streams, pipe edge cases |
-| http       | 85/210    | 40%  | high     | **MEASURED 2026-07-16** (old "91" was stale; real pre-fix 79). lifecycle fixes: 79->85, oom 11->0. 40 timeout left — top blocker is keep-alive socket reuse (req 2 never sent), see lifecycle-probes/PLAYBOOK.md 5a |
+| http       | 87/210    | 41%  | high     | **MEASURED 2026-07-16** (old "91" was stale; real pre-fix 79). lifecycle+timeout fixes: 79->87, oom 11->0. 38 timeout left. keep-alive reuse was a symptom of the fd-reuse race (fixed). next: IncomingMessage/Server setTimeout are still no-op stubs (http.js:42,526) |
 | net        | 46/106    | 43%  | high     | **MEASURED 2026-07-16** (old "49" was wrong; real pre-fix 44). lifecycle fixes: 44->46, oom 3->0. Socket DOES extend Duplex already — that blocker is stale. 13 timeout left; see lifecycle-probes/PLAYBOOK.md |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
