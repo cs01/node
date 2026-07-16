@@ -871,6 +871,44 @@ fn udpBind(info: *u8, _ud: *u8): void {
 }
 
 // udpSend(fd, data, port, host) → bytes sent
+// udpSendBinary(fd, uint8Array, port, address) -> bytes sent.
+// udpSend() takes a STRING and does writeUtf8, so dgram.js had to call buf.toString() and
+// every non-utf8 byte became U+FFFD — binary payloads were silently corrupted on the wire
+// (8 bytes of binary came back as 19). This is the raw path, mirroring tcpSendBinary.
+fn udpSendBinaryOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let fd = ci.i32Arg(0, -1)
+    let port = ci.i32Arg(2, 0)
+    unsafe {
+        let arr = ci.arg(1)
+        let dataPtr = arr.typedArrayData(iso)
+        let dataLen = arr.typedArrayByteLength(iso)
+
+        var host_buf: [u8; 256] = [0; 256]
+        if ci.length() > 3 {
+            ci.arg(3).writeUtf8(iso, host_buf as *u8, 256)
+        }
+
+        var addr: [u8; 16] = [0; 16]
+        addr[0] = 16
+        addr[1] = 2
+        let port_n = htons(port)
+        addr[2] = (port_n & 0xff) as u8
+        addr[3] = ((port_n >> 8) & 0xff) as u8
+
+        if host_buf[0] != 0 {
+            inet_pton(2, host_buf as *u8, (addr as *u8 as i64 + 4) as *u8)
+        } else {
+            addr[4] = 127
+            addr[7] = 1
+        }
+
+        let n = sendto(fd, dataPtr, dataLen, 0, addr as *u8, 16)
+        ci.retI32(n as i32)
+    }
+}
+
 fn udpSendOp(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let iso = ci.isolate()
@@ -927,8 +965,15 @@ fn udpRecvOp(info: *u8, _ud: *u8): void {
         inet_ntop(2, (srcAddr as *u8 as i64 + 4) as *u8, addrStr as *u8, 64)
         let srcPort = ((srcAddr[2] as i32) << 8) | (srcAddr[3] as i32)
 
+        // `data` used to be iso.stringLen(...) — a V8 STRING, i.e. the payload was utf8
+        // decoded on arrival and every invalid byte became U+FFFD. Together with the old
+        // utf8 send path this corrupted every binary datagram in both directions.
+        // Return raw bytes (dgram.js is the only consumer).
         let result = iso.object()
-        ctx.objectSet(result, "data" as *u8, iso.stringLen(buf, n as i32))
+        let ab = iso.arraybufferNew(n)
+        let dataArr = iso.uint8arrayNew(ab, 0, n)
+        memcpy(dataArr.typedArrayData(iso), buf, n)
+        ctx.objectSet(result, "data" as *u8, dataArr)
 
         let rinfo = iso.object()
         ctx.objectSet(rinfo, "address" as *u8, iso.string(addrStr as *u8))
@@ -1056,6 +1101,7 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "udpSocket" as *u8, udpSocket as *u8)
         c.setMethod(exp, "udpBind" as *u8, udpBind as *u8)
         c.setMethod(exp, "udpSend" as *u8, udpSendOp as *u8)
+        c.setMethod(exp, "udpSendBinary" as *u8, udpSendBinaryOp as *u8)
         c.setMethod(exp, "udpRecv" as *u8, udpRecvOp as *u8)
         c.setMethod(exp, "udpSetOpt" as *u8, udpSetOpt as *u8)
         c.setMethod(exp, "udpAddMembership" as *u8, udpAddMembership as *u8)

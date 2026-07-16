@@ -160,7 +160,11 @@ class Socket extends EventEmitter {
       msg = Buffer.concat(msg.map(b => Buffer.isBuffer(b) ? b : Buffer.from(b)));
     }
     const buf = typeof msg === 'string' ? Buffer.from(msg) : (Buffer.isBuffer(msg) ? msg : Buffer.from(msg));
-    const n = tcp.udpSend(this._fd, buf.toString(), port, address);
+    // buf.toString() ran binary through utf8: every invalid byte became U+FFFD and the
+    // payload was corrupted on the wire (verified: 8 binary bytes arrived as 19). Send the
+    // raw bytes.
+    const view = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    const n = tcp.udpSendBinary(this._fd, view, port, address);
     if (cb) process.nextTick(() => cb(n < 0 ? new Error('send failed') : null));
   }
 
