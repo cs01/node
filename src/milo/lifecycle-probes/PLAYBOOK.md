@@ -656,17 +656,26 @@ Every ingredient verified working standalone against `./out/Release/node`:
 `:status === 103` (number) then 'response' with 200; `client.request()` with no args works;
 `http2.connect('http://localhost:PORT')` connects.
 
-**But the tests emit ZERO bytes** — they hang before any output, across all 3 independent
-blocks in the file. So it is NOT the early-hints logic. Next suspects, in order:
-1. Each block does `server.listen(0)` with NO host. **milo binds 0.0.0.0 (IPv4); node binds
-   `::` (IPv6 dual-stack)** — verified. The tests then connect to `localhost`, which now
-   resolves to `::1` (correct, matches node, since the dns-in-connect work). A `::1` client
-   against an IPv4-only listener is the obvious mismatch — but a direct repro of exactly that
-   DID connect, so something is compensating. Chase this first; it is also a real gap on its
-   own (see dgram udp6 in 5m: milo is IPv4-only end to end).
-2. Three servers alive at once in one process (the 3 blocks) — a listener/port interaction.
-Method: `MILO_LIFECYCLE_DEBUG=1` on the test and diff the loop dump against a hand-written
-equivalent that works.
+**But the tests emit ZERO bytes** — they hang before any output, across all 3 blocks. NOT the
+early-hints logic. One suspect (ENOTCONN, §5o) is now FIXED and did not unblock them. The
+remaining one is confirmed and is the top open item:
+
+**MILO IS IPv4-ONLY AND SILENTLY LIES ABOUT IT.** Verified:
+`net.createServer().listen(0, '::1')` reports `{"address":"0.0.0.0","family":"IPv4"}` — it
+ACCEPTS the IPv6 address and binds IPv4 anyway. Node reports `{"address":"::1","family":"IPv6"}`.
+`net.connect(port, '::1')` then "succeeds" only BY ACCIDENT: `inet_pton(AF_INET, "::1")` fails,
+leaving the sockaddr at 0.0.0.0, which happens to reach localhost. Two consequences:
+- `listen(0)` (no host) binds 0.0.0.0 where node binds `::` (dual-stack). Tests that then
+  connect to `localhost` — which now correctly resolves to **::1** since the dns-in-connect
+  work — are an IPv6 client against an IPv4 listener held together by the inet_pton accident.
+- Same root as dgram udp6 (§5m #2): `createSocket('udp6')` also silently returns IPv4.
+
+**The fix is one project, not two:** real AF_INET6 support in tcp.milo — `sockaddr_in6` (28B)
+threaded through socket/bind/connect/accept/getsockname/getpeername and the udp equivalents,
+plus honest family reporting. Rebuild required. It unblocks the early-hints trio, ~10 dgram
+udp6 tests, and every `listen(0)`+`localhost` test in the suite. **Also add errno 57
+(ENOTCONN) to `_CONNECT_ERRNO` in net.js — it currently surfaces as `ERR UNKNOWN`, which is
+what made §5o hard to see.**
 
 ## 5o. ENOTCONN ON WRITE-BEFORE-CONNECT — FIXED (2026-07-16). Kept as a worked example.
 
