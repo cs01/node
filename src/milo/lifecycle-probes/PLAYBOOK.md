@@ -552,18 +552,24 @@ Done (committed, harmless, insufficient): in `connect()`, if `this.destroyed` ->
 reset the readable state by hand, clear `_handle`/`_fd`/`_readPollRemoved`/`_pendingWrite`/
 `_preConnectWrites`/`_peerDisconnected`/`_connecting`.
 
-**Still broken.** Trace of the 2nd attempt:
-```
---- connect attempt 1 | destroyed= false fd= -1
-  connect fired for attempt 1
-  close fired for attempt 1
---- connect attempt 2 | destroyed= true fd= -1     <- reset runs here
---- hung at attempt 2                              <- 'connect' NEVER fires
-```
-So `_doConnect` runs but `_onConnected` never does. Next: instrument `_pollOnce` — is the new
-fd in `Socket._sockets`, does EVFILT_WRITE arrive, does the `sock._connecting && filter ===
-EVFILT_WRITE` branch match? Suspect some flag survives the reset (the Duplex may track
-destroyed/closed state beyond `_writableState._destroyed`).
+**PROGRESS: 'connect' now fires on a reused socket.** Two bugs found and fixed:
+1. **The fd-reuse race, THIRD mask.** `_destroy`'s deferred eviction was guarded by
+   `Socket._sockets.get(fd) === this` — which catches a DIFFERENT socket recycling the fd but
+   is blind to the SAME socket reconnecting: the user's 'close' handler runs BEFORE
+   _destroy's, so connect() re-adds the entry and the stale handler deletes the fresh one.
+   An identity check cannot express "this fd, this connection attempt". Fixed with a
+   per-attempt `_gen` counter, snapshotted in _destroy and re-checked before evicting.
+2. **My own reset bug:** I wrote `rs.destroyed = false` where the field is `rs._destroyed`.
+   JS silently created a new property; the readable side stayed dead. (The Duplex `destroyed`
+   getter at stream.js:1121 ORs both states — check both.)
+
+**STILL BROKEN (handing off):** the 2nd connection never emits 'close', so the go->close->go
+chain stalls and test-net-socket-local-address still hangs. Verified state at +50ms after the
+2nd connect is CLEAN: `inMap=true fd=5 connecting=false`, both _destroyed flags false, and
+'connect' fired. So the connection is up; what fails is the teardown of the SECOND connection.
+Next: does the server's FIN reach it — trace 'end'/EOF on the reused socket. Suspect a
+readable-state field my hand-reset misses (see the _undestroy note below) or `_readPollRemoved`
+/EOF-dereg state surviving the reconnect.
 
 **RELATED LATENT BUG:** milo's `stream.js:1068 _undestroy()` resets only the WRITABLE state;
 node's resets both sides. That is why the readable reset above had to be done by hand in
