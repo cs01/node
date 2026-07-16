@@ -113,7 +113,7 @@ Status after the H1 fix (2026-07-16) — all EXPECT_EXIT values verified against
 | p01 graceful end, server.close from client side | 124 | PASS (0.03s cpu) | hangs in real node TOO; guards no-spin. Was 7.32s + OOM before H1 fix |
 | p02 socket/server unref | 124 | PASS (0.03s cpu) | hangs in real node TOO (accepted socket not unref'd); guards no-spin |
 | p03 graceful end, server.close from server side | 0 | PASS | graceful path works |
-| p04 destroy path | 0 | **FLAKY ~50%** (4/10 with fix, 2/10 without) | pre-existing race, NOT caused by the H1 fix. **Next target** |
+| p04 destroy path | 0 | PASS — **12/12** after the §0a fd-reuse fix (real node 10/10) | was the ~50% flake; root cause was fd recycling, see §0a |
 | p05 close idle server | 0 | PASS | |
 | p06 timer unref | 0 | PASS | timers fine — don't touch |
 | p07 open server keeps process alive | 124 | PASS (0.03s cpu) | idle loop correctly sleeps |
@@ -262,11 +262,20 @@ Run: `MILO_LIFECYCLE_DEBUG=1 timeout 5 ./out/Release/milo-node src/milo/lifecycl
    balanced): write findings into this file under a `## findings` section and stop —
    don't thrash.
 
-## 5a. NEXT TARGET: http keep-alive socket reuse is broken (found 2026-07-16)
+## 5a. ~~http keep-alive socket reuse~~ — RESOLVED 2026-07-16 by the fd-reuse fix (§0a)
 
-This is the biggest remaining pool: **40 http timeouts + 8 http OOMs**, and at least the 8
-OOMs share one root cause. Minimal repro (`/tmp/seq.js` pattern — 3 sequential http.get to
-one server, each fired from the previous response's 'end'):
+**This turned out to be a SYMPTOM, not a bug of its own.** The pooled keep-alive socket was
+exactly the socket being orphaned by the fd-reuse race: request 1's socket closed, its fd was
+recycled for request 2's socket, and the stale deferred delete evicted the new one — so
+request 2 was written to a socket the poll loop no longer dispatched. Fixing §0a fixed this;
+the repro below now passes with the default agent, and 4 of the 8 former http OOM tests pass
+outright (the other 4 now fail cleanly with assertions — real logic bugs, no longer masked).
+
+Worth internalizing: **one root cause wore three different masks** (busy-spin OOMs, the p04
+"flake", and "keep-alive is broken"). Before building a theory for each symptom, check whether
+one lifecycle invariant explains them all.
+
+Kept for reference — the repro (3 sequential http.get to one server, each from the prior 'end'):
 
 ```js
 const http = require('http');
@@ -275,18 +284,8 @@ s.listen(0, () => go(1));
 function go(i) { http.get({port: s.address().port}, (res) => {
   res.on('end', () => { if (i < 3) go(i+1); else s.close(); }); res.resume(); }); }
 ```
-Real node: 3 requests, exits 0. Milo: **request 1 completes ('END 1' prints), request 2
-NEVER REACHES THE SERVER**, process hangs. The default Agent pools the keep-alive socket
-after response 1 and the reused socket never delivers request 2.
-
-This single bug likely gates most of the http suite — every test that issues more than one
-request through the default agent stalls after the first. `agent:false` (a fresh socket per
-request) is the control: if that works, the bug is squarely in Agent reuse, not the wire.
-
-Start: instrument `lib/http.js`'s Agent (socket pooling / reuse path) and check whether the
-2nd request is ever written to the socket (add a log in `Socket._write`), or whether it sits
-queued waiting for a 'free'/'drain' signal that never comes. NOT a net.js/loop bug — the
-loop now correctly sleeps; nothing is spinning.
+Before §0a milo completed request 1 then request 2 NEVER REACHED THE SERVER. Now: 3 requests,
+exits 0, same as real node.
 
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
