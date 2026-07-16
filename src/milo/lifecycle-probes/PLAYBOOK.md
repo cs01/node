@@ -306,6 +306,68 @@ several classes, confirm which one the object really is:
 Note IncomingMessage:42 and Server:526 are still stubs — likely the same bug for
 `res.setTimeout()` / `server.setTimeout()`. Untested; a candidate next lever.
 
+## 5e. AUDIT FINDINGS (independent review, 2026-07-16) — verified, ranked, mostly OPEN
+
+An independent audit caught a real regression I had already committed, plus the biggest
+remaining lever. Both verified first-hand. Open items are the best next work:
+
+**#1 (OPEN, biggest test-flipper): `fcntl` is variadic → EVERY fd is BLOCKING.**
+`extern fn fcntl` is declared directly (tcp.milo:14) and called at tcp.milo:176-177, 235-236,
+829-830 and spawn.milo:371-380, 521-522 — the exact ARM64 variadic trap that
+binding_registry.c:73-78 already documents for FD_CLOEXEC. So `F_SETFL` writes a garbage
+value and O_NONBLOCK never lands. Evidence: `sample` of hung test-net-throttle shows **881/881
+samples inside `tcpSendBinary → write()`** (a blocked syscall — the [lc] dump froze at iter=1);
+`lsof +fg` shows no NBF flag and garbage flags (ASYN/DSYN/FSYN = stack trash).
+Explains ~5 of 13 net timeouts (throttle, write-slow, write-fully-async-*, bytes-written-large)
+plus write-heavy http. Fix: a `milo_set_nonblock(fd)` C wrapper next to the cloexec one
+(~20 lines + rebuild) — **must ship together with EAGAIN backpressure in `_write`** (queue the
+remainder, pollAdd EVFILT_WRITE, flush on writable, cb after flush), or previously-blocking
+writes turn into instant 'write failed'. Then tighten `__hasIO` to `ws.finished`-only (below).
+
+**#2 (OPEN, diagnostic multiplier — do FIRST, it's JS-only and tiny): user exceptions in
+request handlers are swallowed → TIMEOUT instead of a visible assert.**
+`emit('request')` runs inside `_pollOnce`'s try/catch (net.js:508) → `_emitSocketError`
+(net.js:434) → the socket always has an 'error' listener (http.js:377 forwards clientError) →
+a user's AssertionError silently becomes a `clientError`. Since node tests are
+`common.mustCall((req,res) => { assert... })`, **every behavioral diff inside a handler shows
+up as an opaque TIMEOUT.** Fix: in `_emitSocketError`, route only genuine I/O errors
+(has `.syscall`/known errno code) to the socket; send everything else to
+`process._fatalException`. Converts a large opaque slice of the 38 http timeouts into honest,
+diagnosable failures — the same OOM→assert unmasking that already paid off twice today.
+
+**#3 (OPEN, ~6 tests): missing `ERR_STREAM_ALREADY_FINISHED` / `ERR_STREAM_WRITE_AFTER_END`.**
+Zero hits for either code in http.js. `res.end()` twice must error-callback ALREADY_FINISHED;
+`res.end('x')` after end must WRITE_AFTER_END. Cluster: outgoing-end-multiple, outgoing-
+finished, server-write-after-end, write-callbacks, res-write-end-dont-take-array,
+outgoing-write-types.
+
+**LANDMINE in the §0b `__hasIO` fix (act on it when #1 lands):** the `(ws.finished ||
+ws.ended)` clause is only safe because `_write` (net.js:180) is currently SYNCHRONOUS, so
+`ended` implies flushed. The moment async/queued writes exist (which #1 requires), `ws.ended`
+with unflushed data becomes real and the process will exit mid-flush. Tighten to
+`ws.finished` only at that point.
+
+**HARDENING (small, open):**
+- `_startReading` (net.js:62) never resets `_readPollRemoved`, so a reconnected Socket would
+  EOF-storm. Latent only because reconnect is already broken upstream ('connect' never
+  re-emits). One-line insurance.
+- net.js:521 calls `sock._stopReading()` **outside any try/catch**, but the pipe objects in
+  `Socket._sockets` (child_process.js:344-365, _console_init.js, _process_init.js, dgram.js:63)
+  have no such method. Saved today only because their `_onReadable` sets `destroyed=true` on
+  the same EOF event. Guard with `typeof sock._stopReading === 'function'`.
+- **Mid-batch fd recycling** (same class as §0a, one level down): `_pollOnce`'s event array is
+  a snapshot. If event *i* destroys fd 5 and event *j>i* is an accept that recycles fd 5, a
+  stale event for fd 5 later in the batch dispatches to the NEW socket and `push(null)`s a
+  brand-new connection. Fix: track fds closed during the current batch, skip their remaining
+  events.
+- http.js:475 deletes a LIVE socket's `_sockets` entry (fd still open) then destroys on
+  setImmediate — an orphan window now papered over by the unowned-dereg. Redundant since the
+  §0a fix; remove it.
+
+**DISCONFIRMED:** the setTimeout-stub hypothesis is NOT a lever. Of the 40 http timeouts only
+ONE uses `IncomingMessage.setTimeout` and ZERO use `Server.setTimeout` (measured: the
+Server.setTimeout fix flipped exactly 0 tests). Fix them for correctness, not for score.
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not

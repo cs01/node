@@ -363,6 +363,17 @@ class Server extends EventEmitter {
     this._server = net.createServer({ allowHalfOpen: true }, (socket) => {
       this._sockets.add(socket);
       socket._httpActive = false;
+      // server.setTimeout(ms) stored _timeout but nothing ever applied it, so 'timeout'
+      // could never fire. Node reads server.timeout when the connection arrives, arms the
+      // socket, and — if nothing listens for 'timeout' — destroys the socket itself.
+      const srvTimeout = this.timeout;
+      if (srvTimeout > 0) {
+        socket.setTimeout(srvTimeout);
+        socket.on('timeout', () => {
+          if (this.listenerCount('timeout') > 0) this.emit('timeout', socket);
+          else socket.destroy();
+        });
+      }
       socket.on('error', (err) => this.emit('clientError', err, socket));
       socket.on('close', () => {
         this._sockets.delete(socket);
@@ -731,6 +742,11 @@ class ClientRequest extends EventEmitter {
 
           res = new IncomingMessage();
           res.socket = socket;
+          // node links the response back to its request; tests reach through it
+          // (e.g. `res.on('data', function(){ this.req.id })`), and a missing .req throws
+          // a TypeError inside the user handler that currently gets swallowed.
+          res.req = this;
+          res.connection = socket;
           res.connection = socket;
           if (match) {
             res.httpVersion = match[1];
@@ -842,10 +858,14 @@ class ClientRequest extends EventEmitter {
     // setTimeout() is called, hence the deferral to the 'socket' event.
     const arm = (s) => {
       if (!s) return;
+      // Bind to the socket's CURRENT request, not to `this`: a keep-alive socket outlives
+      // request 1, so a forwarder capturing `this` would keep firing on the completed
+      // request and never on request 2.
+      s._httpCurrentReq = this;
       s.setTimeout(ms);
       if (!s._reqTimeoutFwd) {
         s._reqTimeoutFwd = true;
-        s.on('timeout', () => this.emit('timeout'));
+        s.on('timeout', () => { const r = s._httpCurrentReq; if (r) r.emit('timeout'); });
       }
     };
     if (this.socket) arm(this.socket);

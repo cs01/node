@@ -168,6 +168,7 @@ class Socket extends Duplex {
 
   _onReadable() {
     if (this.destroyed) return;
+    if (this._timeoutMs > 0) this._armTimeout(); // activity resets the idle timer
     const data = tcp.recvBinary(this._fd);
     if (data === undefined) {
       this.push(null);
@@ -178,6 +179,7 @@ class Socket extends Duplex {
   }
 
   _write(data, encoding, cb) {
+    if (this._timeoutMs > 0) this._armTimeout(); // activity resets the idle timer
     if (this._peerDisconnected) { const e = new Error('write ECONNRESET'); e.code = 'ECONNRESET'; cb(e); return; }
     if (this._fd < 0) { cb(new Error('Socket is closed')); return; }
     let buf;
@@ -205,6 +207,7 @@ class Socket extends Duplex {
   }
 
   _destroy(err, cb) {
+    this._clearTimeout();
     const fd = this._fd;
     this._handle = null; // Node nulls the handle on destroy; tests assert === null after 'close'
     if (fd >= 0) {
@@ -254,13 +257,27 @@ class Socket extends Duplex {
       e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
     }
     if (cb) this.once('timeout', cb);
-    if (this._timeoutTimer) clearTimeout(this._timeoutTimer);
-    if (ms > 0) {
-      this._timeoutTimer = setTimeout(() => this.emit('timeout'), ms);
-    } else {
-      this._timeoutTimer = null;
-    }
+    this._timeoutMs = ms;
+    this._armTimeout();
     return this;
+  }
+
+  // Node's socket timeout is an IDLE timeout: it measures inactivity, does NOT hold the
+  // process open (node uses an unref'd timer), and dies with the socket. An absolute,
+  // ref'd, never-cleared timer instead makes the near-universal guard pattern
+  // `setTimeout(60000, mustNotCall)` both fire spuriously and pin the loop for 60s.
+  _armTimeout() {
+    if (this._timeoutTimer) { clearTimeout(this._timeoutTimer); this._timeoutTimer = null; }
+    if (this._timeoutMs > 0 && !this.destroyed) {
+      const t = setTimeout(() => { this._timeoutTimer = null; this.emit('timeout'); }, this._timeoutMs);
+      if (t && typeof t.unref === 'function') t.unref();
+      this._timeoutTimer = t;
+    }
+  }
+
+  _clearTimeout() {
+    if (this._timeoutTimer) { clearTimeout(this._timeoutTimer); this._timeoutTimer = null; }
+    this._timeoutMs = 0;
   }
 
 
