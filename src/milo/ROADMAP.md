@@ -37,7 +37,7 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 | whatwg     | 19/41     | 46%  | med      | URL↔searchParams live-sync, TextDecoder, webstreams |
 | stream     | 75/156    | 48%  | high     | re-tallied 2026-07-15; async-fn map/flatMap, web streams, pipe edge cases |
 | http       | 96/210    | 46%  | high     | **MEASURED 2026-07-16, HONEST COUNT.** pre-session 79 (oom 11, timeout 40). now **96, oom 0, timeout 15** — honest, unlike the mid-session 87 which included ~5 false passes from swallowed handler exceptions. next: 100-continue (checkContinue/writeContinue absent), keepAliveTimeout/maxRequestsPerSocket advertised but not ENFORCED (playbook 5f), header-parse clientError |
-| net        | 53/106    | 50%  | high     | **MEASURED 2026-07-16.** pre-session 44 (oom 3, timeout 12). session: **44->53, oom 3->0, timeout 12->5**. Socket DOES extend Duplex already — that blocker is stale. remaining timeouts: dns-lookup lever (playbook 5g), write-slow, listen-fd0, local-address |
+| net        | 56/106    | 53%  | high     | **MEASURED 2026-07-16.** pre-session 44 (oom 3, timeout 12). session: **44->56, oom 3->0, timeout 12->4**. Socket DOES extend Duplex already — that blocker is stale. dns-lookup lever DONE. remaining 4 timeouts: write-slow, listen-fd0, local-address, connect-options-port |
 | zlib       | 18/56     | 32%  | high     | ZstdDecompress, flush/params |
 | vm         | 18/71     | 25%  | low      | real contexts landed; marshaling fidelity (descriptors/globals) next |
 | cluster    | 14/54     | 25%  | low      | worker lifecycle |

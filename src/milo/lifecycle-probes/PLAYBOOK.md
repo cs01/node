@@ -471,7 +471,13 @@ is what caught it; acting on the note would have produced a fix that matched nod
 net 53/106 (5 timeout, 0 oom) · http 93/210 (18 timeout, 0 oom) · probes 9/9.
 The one-line gaps are exhausted. Both remaining pools are concentrated in TWO real features:
 
-**A. DNS lookup in connect — owns ~all 5 remaining net timeouts.** See §5g for the design.
+**A. DNS lookup in connect — DONE 2026-07-16 (net 53->56, timeout 5->4).** Kept for the
+lesson: the de-risk was keeping IP literals on the fully SYNCHRONOUS path (node skips
+resolution for literals too), so only hostname connects went async. Even so it regressed
+test-net-autoselectfamily-ipv4first — async connect means no fd exists when user code writes
+right after connect(), and milo rejected those writes ('Socket is closed') where node buffers
+them; pre-connect writes now park and flush from _onConnected. **The ladder caught that; two
+individually-green tests had made it look safe.** Original design notes below.
 `connect()` hands the hostname to C, so `'lookup'` never fires and hostname-error messages
 are wrong (test-net-better-error-messages-port-hostname, -connect-options-port,
 -dns-lookup, -dns-error, -dns-custom-lookup). **Do this FIRST in a session** — it makes
