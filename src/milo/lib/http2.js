@@ -336,6 +336,12 @@ class ClientHttp2Session extends Http2Session {
     // normalize :method/:path/:scheme/:authority pseudo-headers (Node accepts `method` etc too)
     if (rest.method && !rest[':method']) { rest[':method'] = rest.method; delete rest.method; }
     if (rest.path && !rest[':path']) { rest[':path'] = rest.path; delete rest.path; }
+    // node defaults the required pseudo-headers when omitted (lib/internal/http2/core.js
+    // ~:2916). milo sent :method undefined, so the server saw no method at all.
+    if (rest[':method'] === undefined) rest[':method'] = 'GET';
+    if (rest[':path'] === undefined) rest[':path'] = '/';
+    if (rest[':scheme'] === undefined) rest[':scheme'] = 'https';
+    if (rest[':authority'] === undefined && this._authority) rest[':authority'] = this._authority;
     const list = objectToHeaders(rest, []);
     const hasBody = options.endStream === false;
     // send HEADERS immediately so they precede any body DATA the caller writes
