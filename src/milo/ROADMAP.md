@@ -71,6 +71,10 @@ NEXT: instrument the chainControl + roadConditions resolvers (app: dist/chainCon
 the v3 router) to find which operation hangs after the awaits resolve; then reduce to a
 minimal milo-vs-oracle repro of that JS op. chainControl ALONE works (served from cache);
 the stall needs the cold roadConditions computation.
+RULED OUT (tested milo vs oracle, identical): Intl.DateTimeFormat/toLocaleString+timeZone;
+decodePolyline (nevadaData.js:66, the encoded-polyline while-loop — same output, no hang).
+Resolver chain to walk: dist/nevadaData.js processRoadConditions + dist/routes/v3/trpc/
+trpcApi.js roadConditions/chainControl resolvers. Find the op after the awaits that loops/blocks.
 
 ### large gzipped trpc/express responses truncate at ~57KB gzip (~899KB decoded) — NOT YET FIXED
 A real app (express + compression + trpc): a single large procedure's gzipped response is cut
