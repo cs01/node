@@ -1036,6 +1036,13 @@
   }
 
   function _esmToCjs(src, filePath) {
+    // import.meta.* has no CJS equivalent, so substitute the wrapper-provided values:
+    // import.meta.url is the module's file:// URL, .dirname/.filename map to __dirname/
+    // __filename. Without this an ESM module using import.meta (marked's bin: createRequire
+    // (import.meta.url)) was a SyntaxError after transform.
+    src = src.replace(/\bimport\.meta\.url\b/g, "(require('url').pathToFileURL(__filename).href)")
+             .replace(/\bimport\.meta\.dirname\b/g, '__dirname')
+             .replace(/\bimport\.meta\.filename\b/g, '__filename');
     const lines = src.split('\n');
     const imports = [];
     const exports = [];
@@ -1203,7 +1210,14 @@
         if (m) { transformed.push(line.replace(/^\s*export\s+/, '')); exports.push(`exports.${m[2]} = ${m[2]};`); handled = true; }
       }
 
-      if (!handled) transformed.push(line);
+      // The CJS wrapper provides require/__dirname/__filename/module/exports as params; an
+      // ESM module that declares its own (e.g. `const require = createRequire(import.meta.url)`)
+      // collides at parse time ("Identifier 'require' has already been declared"). var CAN
+      // redeclare a param, const/let cannot — so downgrade only those exact redeclarations.
+      if (!handled) {
+        line = line.replace(/^(\s*)(?:const|let)(\s+(?:require|__dirname|__filename|module|exports)\s*=)/, '$1var$2');
+        transformed.push(line);
+      }
     }
 
     let result = 'Object.defineProperty(exports, "__esModule", { value: true });\n' + transformed.join('\n');

@@ -66,7 +66,7 @@ handler (tried, reverted) does NOT help — the value itself is wrong. Two real 
 non-trivial: (a) rewrite `import(` in each loaded module's source to `__dynamicImportHandler(
 spec, __filename)` so the referrer is the correct module path (fragile: import( in strings);
 (b) give each eval'd module correct host-defined-options carrying its resource_name (proper).
-eslint now FULLY WORKS (lints real code, output identical to node) after the ?query strip below; tsc needs a real ESM loader (below). Found running real CLI tools.
+import.meta.url/.dirname/.filename and the ESM createRequire pattern now work (marked still fails on an export form the regex misses — complex ESM, needs the real loader). eslint now FULLY WORKS (lints real code, output identical to node) after the ?query strip below; tsc needs a real ESM loader (below). Found running real CLI tools.
 
 ### milo has no real ESM loader — only a regex CJS transform
 `_esmToCjs` (bootstrap.js) line-by-line regexes import/export into require/exports. It now
