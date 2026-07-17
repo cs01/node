@@ -55,7 +55,10 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
-### fetch() over https intermittently truncates at 16KB (TLS record) multiples
+### [x] fetch() corrupted bodies — FIXED 2026-07-16 (http 97 -> 102)
+ClientRequest.end() was not idempotent, so every fetch GET opened TWO connections whose
+responses interleaved into one shared _chunkBuf. See lifecycle-probes/PLAYBOOK.md 5u.
+### (original report)
 RACE. Same URL 3x: 146247 / 98304 / 162631. https.get on the same URL is 3/3 correct, so it
 is fetch-specific, not the tls read path. Only reproduces over the real network. Breaks any
 app using fetch against a remote https API. See lifecycle-probes/PLAYBOOK.md 5u for what is

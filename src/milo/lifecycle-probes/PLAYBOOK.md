@@ -886,7 +886,30 @@ feed ciphertext in from the underlying stream's 'data', pump plaintext out via S
 drain SSL_write output from the wbio back to the stream's write(). It replaces SSL_set_fd
 everywhere and would also delete tls.js's duplicate connect path.
 
-## 5u. OPEN BUG: fetch() over HTTPS intermittently truncates at TLS-record boundaries
+## 5u. SOLVED: fetch() sent every GET TWICE. ClientRequest.end() was not idempotent.
+
+**Cause (http.js:801):** `end()` called `_send()` unconditionally, no `finished` guard.
+https.js's `_makeRequest` already ends a GET, so fetch's own `req.end()` fired `_send()` a
+SECOND time — two dns lookups, two tls connections, the request sent twice. Both responses
+fed the ONE shared `reqObj._chunkBuf`, so on a real network their TLS records interleaved,
+desynced the chunk-size parser, and one connection's `0\r\n\r\n` terminated the other's `res`:
+'end' fired early, silently, `res.complete=true`, body corrupt. `https.get` was immune ONLY
+because `get()` happens to guard with `if (!req.finished) req.end()`.
+Fix: one line in `end()` — node's never re-sends on a second call. http 97 -> 102.
+
+**Why I misdiagnosed it for a whole session:** I called it "truncation" and hunted the TLS
+read path. The tell was there and I skipped past it — one run returned **13 bytes TOO MANY**
+(162644 vs 162631). Data cannot be both short and long from a truncating reader; that says
+INTERLEAVING, not truncation. **When a symptom has a direction, check the counter-example
+first: it eliminates whole families of cause for free.**
+Everything I "ruled out" was correctly ruled out and still useless, because I never asked why
+https.get differed — the answer was 4 lines away in https.js:211.
+
+**Still latent (recorded, benign today):** `_chunkBuf` lives on the ClientRequest — per-request
+state used as per-CONNECTION state. Harmless now that only one connection exists per request;
+move it into the `doConnect` closure if a request ever legitimately opens two.
+
+## 5u-old. (original report, kept — the ruled-out list is still accurate)
 
 Found by running a REAL app (express + prisma + sqlite3 + trpc) — no test in the suite covers
 it. `Response.json()` throws `Unexpected non-whitespace character after JSON` /
