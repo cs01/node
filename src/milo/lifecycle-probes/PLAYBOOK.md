@@ -986,6 +986,20 @@ only an `await once('drain')` writer over a SYNC transform triggers it. The bug 
 gap between what I could synthesize and what tRPC actually does. Found by a fresh-context
 subagent after i'd ruled out gzip/buffers/close-destroy and narrowed to "stream stall".
 
+## 5x. stream-audit.sh — guards the stream-lifecycle family (2026-07-16)
+
+Two stream bugs shipped this session (5531a4f4107 write()/drain returned false+fired drain
+early; 0ae226c8c61 autoDestroy on `ended` not `endEmitted` stranded buffered data), BOTH found
+only by a real app — the 2143-test suite passed throughout. Shared shape: a stream
+self-completes WRONG when a consumer attaches AFTER the data/finish already landed (trpc's
+`await once('drain')`, node-fetch v2's `res.pipe(new PassThrough())` read-later).
+`bash src/milo/lifecycle-probes/stream-audit.sh` exercises 6 such shapes (late-consumer,
+pipe-chain-late, transform-flush-late, readable-from-late, writable-end-cb, pipeline-3stage)
+and DIFFS milo's output against the oracle's (not hardcoded expectations, so a wrong assumption
+cannot false-fail). All 6 match today. Run it after any stream.js change, alongside
+run-probes.sh + cpu-audit.sh. It found no NEW bug — confirming the family is clean beyond the
+two fixed edge cases — but exists so the next regression in it shows up without the live app.
+
 ## 5w-old. (original investigation, kept for the ruled-out list)
 
 A real express+compression+trpc app truncates a large gzipped response to ~57KB gzip /
