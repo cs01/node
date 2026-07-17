@@ -11,6 +11,8 @@ extern fn nm_zlib_stream_write(handle: *u8, isDeflate: i32, input: *u8, inputLen
 extern fn nm_zlib_stream_reset(handle: *u8, isDeflate: i32): i32
 extern fn nm_zlib_stream_close(handle: *u8, isDeflate: i32): void
 extern fn malloc(size: i64): *u8
+extern fn realloc(ptr: *u8, size: i64): *u8
+extern fn memcpy(dst: *u8, src: *u8, n: i64): *u8
 extern fn free(ptr: *u8): void
 
 // zlibOp(inputUint8Array, mode, level) → Uint8Array
@@ -153,24 +155,48 @@ fn zlibStreamWrite(info: *u8, _ud: *u8): void {
         let inputLen = inputArr.typedArrayByteLength(iso) as i32
         let flush = ci.i32Arg(3, 0)
 
-        var outSize: i32 = inputLen * 2 + 256
-        if outSize < 16384 { outSize = 16384 }
-        var outBuf = malloc(outSize as i64)
-        if outBuf as i64 == 0 { return }
+        // Scratch buffer big enough for the real-input call (deflate output <= ~2x input).
+        // Any OVERFLOW happens on Z_FINISH, where all input is already consumed and only
+        // pending output remains — so after the first call we drain with EMPTY input until
+        // the buffer stops coming back full. The old code did ONE call into ONE buffer and
+        // silently dropped everything past it, capping every stream chunk at 16384 and
+        // truncating any gzip response over 16KB (the app's compression middleware).
+        var outSize: i64 = (inputLen as i64) * 2 + 256
+        if outSize < 65536 { outSize = 65536 }
+        let scratch = malloc(outSize)
+        if scratch as i64 == 0 { return }
 
-        let written = nm_zlib_stream_write(handle, isDeflate, inputData, inputLen, outBuf, outSize, flush)
-        if written < 0 {
-            free(outBuf)
-            return
+        var accum = malloc(0 as i64)
+        var accumLen: i64 = 0
+        var first = true
+        var failed = false
+        var draining = true
+        while draining {
+            var inPtr = inputData
+            var inLen = inputLen
+            if !first { inPtr = scratch; inLen = 0 }   // drain-only: no new input
+            let written = nm_zlib_stream_write(handle, isDeflate, inPtr, inLen, scratch, outSize as i32, flush)
+            first = false
+            if written < 0 { failed = true; draining = false }
+            else {
+                if written > 0 {
+                    accum = realloc(accum, accumLen + written as i64)
+                    memcpy((accum as i64 + accumLen) as *u8, scratch, written as i64)
+                    accumLen = accumLen + written as i64
+                }
+                // buffer not full => zlib had room left => all output drained.
+                if (written as i64) < outSize { draining = false }
+            }
         }
+        free(scratch)
+        if failed { free(accum); return }
 
-        let ab = iso.arraybufferNew(written as i64)
-        let result = iso.uint8arrayNew(ab, 0, written as i64)
+        let ab = iso.arraybufferNew(accumLen)
+        let result = iso.uint8arrayNew(ab, 0, accumLen)
         let resultData = result.typedArrayData(iso)
-        for i in 0..written as i64 {
-            resultData[i] = outBuf[i]
-        }
-        free(outBuf)
+        var j: i64 = 0
+        while j < accumLen { resultData[j] = accum[j]; j = j + 1 }
+        free(accum)
         ci.ret(result)
     }
 }

@@ -1095,10 +1095,16 @@ int nm_zlib_inflate(const unsigned char* in, int in_len, unsigned char* out, int
     strm.next_out = out;
     strm.avail_out = out_len;
     int ret = inflate(&strm, Z_NO_FLUSH);
-    int written = out_len - strm.avail_out;
+    int avail_out = strm.avail_out;
+    int written = out_len - avail_out;
     inflateEnd(&strm);
     if (ret == Z_STREAM_END) return written;
-    // Partial/truncated: return data as negative-encoded
+    // Output buffer FILLED before the stream ended (avail_out == 0, more input pending):
+    // the buffer is simply too small — signal -1 so the caller retries with a bigger one.
+    // This was encoded as -(written+1), identical to a genuine truncation, so the JS retry
+    // loop (which only grows on exactly -1) never grew and capped every decode at 16384.
+    if (avail_out == 0 && (ret == Z_OK || ret == Z_BUF_ERROR)) return -1;
+    // Genuinely truncated/corrupt input with some usable bytes: negative-encoded partial.
     if (written > 0 && (ret == Z_OK || ret == Z_BUF_ERROR || ret == Z_DATA_ERROR))
         return -(written + 1);
     return -1;
