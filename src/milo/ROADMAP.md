@@ -53,7 +53,23 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ## quick wins (biggest compat % gain per effort)
 
-### error codes (cross-module) — see `## critical
+### error codes (cross-module) — see `## real-world tool/framework compat (verified vs oracle, 2026-07-16)
+
+Running actual tools is the truest compat signal — it found 8 app bugs the 2143-test suite
+missed. Verified working under milo (output identical to ./out/Release/node):
+  SERVERS/HTTP: express, fastify, ws (websockets), http/https/http2
+  CLIENTS:      axios, node-fetch, native fetch
+  TOOLS:        eslint, rollup, mocha
+  DATA/CRYPTO:  pg (postgres client), jsonwebtoken, handlebars, sharp, @node-rs/argon2,
+                @napi-rs/uuid, sqlite3 (napi), prisma
+  LOGGING:      pino
+  APP:          a full express+prisma+sqlite3+trpc backend serves real traffic
+NOT working (all one root cause — no real ESM loader, regex _esmToCjs can't handle complex
+ESM; see below): tsc, prettier, marked, got (got is ESM-only so node can't require it either).
+Minor: a type:module package required from CJS gives a confusing SyntaxError where node gives
+ERR_REQUIRE_ESM — milo tries to transform it instead of refusing. Low value.
+
+## critical
 
 ### [x] http.Server.listen({port,host}, cb) fired no callback — fastify hung (FIXED)
 The options-object listen form was parsed as a positional port, so the object landed in
