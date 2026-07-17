@@ -36,6 +36,10 @@ extern fn kevent(kq: i32, changelist: *u8, nchanges: i32, eventlist: *u8, nevent
 // inet_pton / inet_ntop / getsockname
 extern fn inet_pton(af: i32, src: *u8, dst: *u8): i32
 extern fn inet_ntop(af: i32, src: *u8, dst: *u8, size: i32): *u8
+// <net/if.h> — link-local v6 addresses carry a zone ("fe80::1%lo0"); these map the zone
+// name to the sin6_scope_id the kernel wants, and back for reporting.
+extern fn if_nametoindex(name: *u8): u32
+extern fn if_indextoname(idx: u32, buf: *u8): *u8
 extern fn getsockname(fd: i32, addr: *u8, addrlen: *i32): i32
 extern fn getpeername(fd: i32, addr: *u8, addrlen: *i32): i32
 extern fn shutdown(fd: i32, how: i32): i32
@@ -127,8 +131,18 @@ fn buildSockAddr(host: *u8, port: i32, addr: *u8, family: i32): i64 {
             if hostIsEmpty(host) {
                 return SOCKADDR_IN6_LEN   // :: — in6addr_any, already zeroed
             }
-            if inet_pton(AF_INET6, host, (addr as i64 + 8) as *u8) != 1 {
+            var addrPart: [u8; 256] = [0; 256]
+            var zonePart: [u8; 64] = [0; 64]
+            let hasZone = splitZone(host, addrPart as *u8, zonePart as *u8)
+            if inet_pton(AF_INET6, addrPart as *u8, (addr as i64 + 8) as *u8) != 1 {
                 return -1
+            }
+            if hasZone {
+                let idx = if_nametoindex(zonePart as *u8)
+                if idx == 0 as u32 {
+                    return -1   // named an interface that does not exist
+                }
+                setSockAddrScopeId(addr, idx)
             }
             return SOCKADDR_IN6_LEN
         }
@@ -143,6 +157,74 @@ fn buildSockAddr(host: *u8, port: i32, addr: *u8, family: i32): i64 {
             return -1
         }
         return SOCKADDR_IN_LEN
+    }
+}
+
+// sin6_scope_id: 4 bytes at offset 24, host byte order (unlike the port, which is network
+// order). Zero means "no zone", which is every address except a link-local one.
+fn sockAddrScopeId(addr: *u8): u32 {
+    unsafe {
+        var v: u32 = 0
+        var i: i64 = 0
+        while i < 4 {
+            let b = (*((addr as i64 + 24 + i) as *u8)) as u32
+            v = v | (b << ((i * 8) as u32))
+            i = i + 1
+        }
+        return v
+    }
+}
+
+fn setSockAddrScopeId(addr: *u8, scope: u32): void {
+    unsafe {
+        var i: i64 = 0
+        while i < 4 {
+            *((addr as i64 + 24 + i) as *u8) = ((scope >> ((i * 8) as u32)) & 0xff) as u8
+            i = i + 1
+        }
+    }
+}
+
+// Split "fe80::1%lo0" at the '%'. Writes the address part into `addrOut` and the zone into
+// `zoneOut`; returns true if a zone was present.
+//
+// inet_pton on macOS actually ACCEPTS the %zone suffix and returns 1 — but it only writes
+// the 16 address bytes and silently drops the zone, so the scope_id stays 0 and the
+// address comes back as a bare "fe80::1". A link-local address without its zone is not
+// routable, so the zone has to be carried separately.
+fn splitZone(host: *u8, addrOut: *u8, zoneOut: *u8): bool {
+    unsafe {
+        var i: i64 = 0
+        var pct: i64 = -1
+        while i < 255 {
+            let b = *((host as i64 + i) as *u8)
+            if b == 0 {
+                break
+            }
+            if b == 37 && pct < 0 {   // '%'
+                pct = i
+            }
+            i = i + 1
+        }
+        let total = i
+        let addrLen = if pct < 0 { total } else { pct }
+        var j: i64 = 0
+        while j < addrLen {
+            *((addrOut as i64 + j) as *u8) = *((host as i64 + j) as *u8)
+            j = j + 1
+        }
+        *((addrOut as i64 + addrLen) as *u8) = 0 as u8
+        if pct < 0 {
+            *(zoneOut) = 0 as u8
+            return false
+        }
+        var k: i64 = 0
+        while pct + 1 + k < total {
+            *((zoneOut as i64 + k) as *u8) = *((host as i64 + pct + 1 + k) as *u8)
+            k = k + 1
+        }
+        *((zoneOut as i64 + k) as *u8) = 0 as u8
+        return true
     }
 }
 
@@ -169,7 +251,36 @@ fn sockAddrText(addr: *u8, out: *u8, outLen: i32): bool {
     let fam = sockAddrFamily(addr)
     unsafe {
         if fam == AF_INET6 {
-            return (inet_ntop(AF_INET6, (addr as i64 + 8) as *u8, out, outLen) as i64) != 0
+            if (inet_ntop(AF_INET6, (addr as i64 + 8) as *u8, out, outLen) as i64) == 0 {
+                return false
+            }
+            // inet_ntop never emits the zone, so a link-local address would read back as a
+            // bare "fe80::1" — which is what node reports as "fe80::1%lo0".
+            let scope = sockAddrScopeId(addr)
+            if scope != 0 as u32 {
+                var nameBuf: [u8; 64] = [0; 64]
+                if (if_indextoname(scope, nameBuf as *u8) as i64) != 0 {
+                    var n: i64 = 0
+                    while n < outLen as i64 {
+                        if *((out as i64 + n) as *u8) == 0 {
+                            break
+                        }
+                        n = n + 1
+                    }
+                    *((out as i64 + n) as *u8) = 37 as u8   // '%'
+                    var m: i64 = 0
+                    while m < 63 {
+                        let b = *((nameBuf as *u8 as i64 + m) as *u8)
+                        if b == 0 {
+                            break
+                        }
+                        *((out as i64 + n + 1 + m) as *u8) = b
+                        m = m + 1
+                    }
+                    *((out as i64 + n + 1 + m) as *u8) = 0 as u8
+                }
+            }
+            return true
         }
         return (inet_ntop(AF_INET, (addr as i64 + 4) as *u8, out, outLen) as i64) != 0
     }
