@@ -55,6 +55,14 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### milo has no real ESM loader — only a regex CJS transform
+`_esmToCjs` (bootstrap.js) line-by-line regexes import/export into require/exports. It now
+also runs as a fallback when a .js file fails as CJS with a SyntaxError and contains
+import/export (node-27-style syntax auto-detect) — so SIMPLE ESM-syntax .js files load. But
+COMPLEX ESM (typescript's lib: dynamic import, import.meta, deep re-exports, TLA) exceeds the
+regex and still fails — `tsc` does not run. A real ESM loader (V8 SourceTextModule / proper
+module linking) is the fix; large. Found running the TypeScript compiler under milo.
+
 ### [x] chainControl/roadConditions route hang — FIXED (0ae226c8c61)
 A PassThrough whose input finished before a consumer attached self-destroyed on writable
 'finish' while data was still buffered, so 'end' never fired. stream.js autoDestroy was gated

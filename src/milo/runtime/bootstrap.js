@@ -1384,13 +1384,19 @@
       let src = fileSrc;
       // Strip shebang lines — V8 doesn't handle them, Node's C++ loader normally does this
       if (src.charCodeAt(0) === 0x23 && src.charCodeAt(1) === 0x21) src = src.replace(/^#!.*\n/, '');
-      if (_isESM(resolved)) src = _esmToCjs(src, resolved);
+      let _esmTransformed = false;
+      if (_isESM(resolved)) { src = _esmToCjs(src, resolved); _esmTransformed = true; }
       // Honor a user-customized Module.wrapper (some tests prepend to it); otherwise
       // use the fast new Function path so default loading/stack-lines stay unchanged.
       // Skip for builtins — requiring 'module' here would recurse while loading it.
       let _wrap;
       if (!isBuiltin) { try { _wrap = globalThis.require('module').wrapper; } catch {} }
-      try {
+      // A .js file with no "type":"module" can still be ESM — node 27 auto-detects import/
+      // export syntax and runs it as a module (default now). milo only checked .mjs/type, so
+      // an ESM-syntax .js (e.g. typescript's bin/tsc: `import "../lib/tsc.js"`) eval'd as CJS
+      // and died with "Invalid or unexpected token". Mirror node's real strategy: try CJS,
+      // and on a SyntaxError retry as ESM. Only files that ALREADY fail are touched.
+      const _runModule = () => {
         if (_wrap && _wrap[0] !== '(function (exports, require, module, __filename, __dirname) { ') {
           const compiled = (0, eval)(_wrap[0] + src + _wrap[1]);
           compiled.call(mod.exports, mod.exports, modRequire, mod, resolved, dname);
@@ -1401,6 +1407,23 @@
           // .call(mod.exports, ...) so top-level `this` === module.exports (Node semantics).
           const wrapped = '(function (exports, require, module, __filename, __dirname, primordials) { ' + src + '\n})\n//# sourceURL=' + resolved;
           (0, eval)(wrapped).call(mod.exports, mod.exports, modRequire, mod, resolved, dname, primordials);
+        }
+      };
+      try {
+        try {
+          _runModule();
+        } catch (e0) {
+          // Retry as ESM once, only on a SyntaxError from an untransformed source that
+          // actually contains a top-level import/export.
+          if (!_esmTransformed && e0 instanceof SyntaxError &&
+              /(^|\n)\s*(import|export)\b/.test(src)) {
+            src = _esmToCjs(fileSrc.charCodeAt(0) === 0x23 && fileSrc.charCodeAt(1) === 0x21
+                            ? fileSrc.replace(/^#!.*\n/, '') : fileSrc, resolved);
+            _esmTransformed = true;
+            _runModule();
+          } else {
+            throw e0;
+          }
         }
       } catch (e) {
         // A module that throws while loading must NOT be cached — re-requiring it
