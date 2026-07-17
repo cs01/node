@@ -139,7 +139,12 @@ function _addCatch(ee, promise, type, args) {
 EventEmitter.prototype.on = function(type, fn) {
   if (typeof fn !== 'function') throw _ERR_INVALID_ARG_TYPE('listener', 'function', fn);
   if (!this._events) this._events = Object.create(null);
-  if (type !== 'newListener' && typeof this.emit === 'function') this.emit('newListener', type, fn.listener || fn);
+  // Only emit 'newListener' when something is ACTUALLY listening for it — node gates on
+  // `events.newListener !== undefined`. Emitting it unconditionally made every .on() fire a
+  // 'newListener' event; libraries that override emit() to reject reserved names (socket.io's
+  // Namespace/BroadcastOperator) then threw '"newListener" is a reserved event name' on any
+  // .on() call.
+  if (type !== 'newListener' && this._events.newListener !== undefined && typeof this.emit === 'function') this.emit('newListener', type, fn.listener || fn);
   const existing = this._events[type];
   if (!existing) this._events[type] = fn;
   else if (typeof existing === 'function') this._events[type] = [existing, fn];

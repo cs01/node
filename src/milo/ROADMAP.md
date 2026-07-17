@@ -57,7 +57,7 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 Running actual tools is the truest compat signal — it found 8 app bugs the 2143-test suite
 missed. Verified working under milo (output identical to ./out/Release/node):
-  SERVERS/HTTP: express, fastify, ws (websockets), http/https/http2
+  SERVERS/HTTP: express, fastify, koa, socket.io (real-time), ws, http/https/http2
   CLIENTS:      axios, node-fetch, native fetch
   TOOLS:        eslint, rollup, mocha
   DATA/CRYPTO:  pg (postgres client), jsonwebtoken, handlebars, sharp, @node-rs/argon2,
