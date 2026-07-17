@@ -145,14 +145,23 @@ function connect(options, cb) {
   if (cb) tlsSock.once('secureConnect', cb);
 
   net._ensurePoll();
-  tlsSock._fd = tcp.socket();
-  if (tlsSock._fd < 0) {
-    process.nextTick(() => tlsSock.emit('error', new Error('socket() failed')));
-    return tlsSock;
-  }
 
   const dns = require('dns');
+  // The family is fixed at socket() time, so it must come from the RESOLVED ip. This used to
+  // call tcp.socket() with no family (v4-only), map 'localhost' to 127.0.0.1 by hand, and
+  // pin dns.lookup to family 4 — a duplicate of net.js's connect that missed all of its
+  // dns / IPv6 / autoSelectFamily handling.
   const doConnect = (ip) => {
+    // `tls.connect({port:0}, cb); conn.destroy()` destroys BEFORE an async lookup returns —
+    // without this guard the callback then builds a socket on a dead object and hangs
+    // (test-tls-client-abort). net.js's connect has the same guard.
+    if (tlsSock.destroyed) return;
+    const family = (ip && ip.includes(':')) ? 30 /* AF_INET6 */ : 2 /* AF_INET */;
+    tlsSock._fd = tcp.socket(family);
+    if (tlsSock._fd < 0) {
+      process.nextTick(() => tlsSock.emit('error', new Error('socket() failed')));
+      return;
+    }
     tcp.connect(tlsSock._fd, ip, port);
     tcp.pollAdd(tlsSock._fd, tcp.EVFILT_WRITE);
     net.Socket._sockets.set(tlsSock._fd, tlsSock);
@@ -170,10 +179,11 @@ function connect(options, cb) {
     tcp.pollAdd(this._fd, tcp.EVFILT_WRITE);
   };
 
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host === 'localhost') {
-    doConnect(host === 'localhost' ? '127.0.0.1' : host);
+  if (net.isIP(host)) {
+    doConnect(host); // literal: no resolution, matching node
   } else {
-    dns.lookup(host, 4, (err, address) => {
+    dns.lookup(host, (err, address) => {   // no family pin — let the resolver decide
+      if (tlsSock.destroyed) return;
       if (err) { tlsSock.emit('error', err); return; }
       doConnect(address);
     });
