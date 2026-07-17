@@ -508,6 +508,25 @@ class Server extends EventEmitter {
             buffer = buffer.slice(headerEnd + 4);
             const lines = headerPart.split('\r\n');
             const [method, url, version] = lines[0].split(' ');
+            // The request line was never validated: "GARBAGE NOT HTTP" parsed happily into
+            // method='GARBAGE'. Node's parser rejects it and emits 'clientError' with an
+            // HPE_* code; with no listener it answers 400 and destroys (lib/_http_server.js
+            // socketOnError). 13 tests reference clientError.
+            const _badMethod = !METHODS.includes(method);
+            const _badVersion = !/^HTTP\/1\.[01]$/.test(version || '');
+            if (_badMethod || _badVersion) {
+              // node checks the METHOD first: "GARBAGE NOT HTTP" is HPE_INVALID_METHOD, not
+              // a version complaint, because GARBAGE is not a known method.
+              const e = new Error(_badMethod ? 'Parse Error: Invalid method encountered'
+                                             : 'Parse Error: Invalid HTTP version');
+              e.code = _badMethod ? 'HPE_INVALID_METHOD' : 'HPE_INVALID_VERSION';
+              e.rawPacket = buffer;
+              buffer = Buffer.alloc(0);
+              if (!this.emit('clientError', e, socket)) {
+                try { socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'); } catch {}
+              }
+              return;
+            }
             const req = new (this[kIncomingMessage])();
             req.method = method;
             req.url = url;
