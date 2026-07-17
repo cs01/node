@@ -173,6 +173,132 @@ class AsyncPool {
   int ran_ = 0;
 };
 
+// --- napi_threadsafe_function ---------------------------------------------------------------
+//
+// Any thread may post a JS call; the call runs on the LOOP thread. node builds this on
+// uv_async_send; milo's equivalent is the EVFILT_USER wakeup (nm_kq_wake_main).
+//
+// The JS function is held as a napi_ref (a persistent). Holding a v8::Local across threads
+// or across the posting boundary would dangle — the exact bug that trapped V8 in the buffer
+// creators.
+struct MiloTsfn {
+  napi_env env;
+  napi_ref func_ref;                          // nullptr if the addon passed no JS func
+  void* context;
+  napi_threadsafe_function_call_js call_js;
+  napi_finalize thread_finalize_cb;
+  void* thread_finalize_data;
+  size_t max_queue_size;                      // 0 = unbounded
+  pthread_mutex_t mu;
+  pthread_cond_t room;                        // blocking mode waits here when full
+  std::deque<void*> queue;
+  int thread_count;
+  bool closing;
+  bool refed;                                 // ref'd tsfns keep the loop alive (node default)
+};
+
+class TsfnRegistry {
+ public:
+  static TsfnRegistry& get() { static TsfnRegistry r; return r; }
+
+  void add(MiloTsfn* t) {
+    pthread_mutex_lock(&mu_); all_.push_back(t); pthread_mutex_unlock(&mu_);
+  }
+  void remove(MiloTsfn* t) {
+    pthread_mutex_lock(&mu_);
+    for (auto it = all_.begin(); it != all_.end(); ++it)
+      if (*it == t) { all_.erase(it); break; }
+    pthread_mutex_unlock(&mu_);
+  }
+
+  // Loop thread only.
+  int drain() {
+    std::deque<MiloTsfn*> snapshot;
+    pthread_mutex_lock(&mu_); snapshot = all_; pthread_mutex_unlock(&mu_);
+    int ran = 0;
+    for (MiloTsfn* t : snapshot) {
+      for (;;) {
+        void* data = nullptr;
+        bool have = false;
+        pthread_mutex_lock(&t->mu);
+        if (!t->queue.empty()) { data = t->queue.front(); t->queue.pop_front(); have = true; }
+        pthread_mutex_unlock(&t->mu);
+        if (!have) break;
+        pthread_cond_signal(&t->room);          // a blocked poster may now proceed
+        invoke(t, data);
+        ran++;
+      }
+    }
+    reap();
+    return ran;
+  }
+
+  // A ref'd tsfn with live threads keeps the loop alive; so does anything still queued.
+  bool busy() {
+    pthread_mutex_lock(&mu_);
+    bool b = false;
+    for (MiloTsfn* t : all_) {
+      pthread_mutex_lock(&t->mu);
+      if ((t->refed && t->thread_count > 0) || !t->queue.empty()) b = true;
+      pthread_mutex_unlock(&t->mu);
+      if (b) break;
+    }
+    pthread_mutex_unlock(&mu_);
+    return b;
+  }
+
+ private:
+  void invoke(MiloTsfn* t, void* data) {
+    napi_env env = t->env;
+    v8::HandleScope scope(env->isolate);        // local to THIS frame; nothing escapes
+    v8::Context::Scope ctx_scope(env->context());
+    napi_value js_func = nullptr;
+    if (t->func_ref != nullptr) napi_get_reference_value(env, t->func_ref, &js_func);
+    env->CallIntoModule([&](napi_env e) {
+      if (t->call_js != nullptr) {
+        t->call_js(e, js_func, t->context, data);
+      } else if (js_func != nullptr) {
+        // Default per node: call the function with no args, ignoring data.
+        napi_value undef, ret;
+        napi_get_undefined(e, &undef);
+        napi_call_function(e, undef, js_func, 0, nullptr, &ret);
+      }
+    });
+  }
+
+  // Finalize tsfns whose last thread released AND whose queue has drained.
+  void reap() {
+    std::deque<MiloTsfn*> dead;
+    pthread_mutex_lock(&mu_);
+    for (auto it = all_.begin(); it != all_.end();) {
+      MiloTsfn* t = *it;
+      pthread_mutex_lock(&t->mu);
+      bool done = t->closing && t->thread_count <= 0 && t->queue.empty();
+      pthread_mutex_unlock(&t->mu);
+      if (done) { dead.push_back(t); it = all_.erase(it); } else { ++it; }
+    }
+    pthread_mutex_unlock(&mu_);
+    for (MiloTsfn* t : dead) {
+      napi_env env = t->env;
+      v8::HandleScope scope(env->isolate);
+      v8::Context::Scope ctx_scope(env->context());
+      if (t->thread_finalize_cb != nullptr) {
+        env->CallIntoModule([&](napi_env e) {
+          t->thread_finalize_cb(e, t->thread_finalize_data, t->context);
+        });
+      }
+      if (t->func_ref != nullptr) napi_delete_reference(env, t->func_ref);
+      pthread_mutex_destroy(&t->mu);
+      pthread_cond_destroy(&t->room);
+      delete t;
+    }
+  }
+
+  TsfnRegistry() { pthread_mutex_init(&mu_, nullptr); }
+  pthread_mutex_t mu_;
+  std::deque<MiloTsfn*> all_;
+};
+
 }  // namespace
 
 // milo's Buffer is a JS-side class with no C++ constructor, but `Buffer.from(arrayBuffer)`
@@ -320,12 +446,131 @@ napi_status NAPI_CDECL napi_cancel_async_work(node_api_basic_env env, napi_async
   return napi_clear_last_error((napi_env)env);
 }
 
+// --- napi_threadsafe_function public API -----------------------------------------------------
+napi_status NAPI_CDECL napi_create_threadsafe_function(
+    napi_env env, napi_value func, napi_value async_resource,
+    napi_value async_resource_name, size_t max_queue_size,
+    size_t initial_thread_count, void* thread_finalize_data,
+    napi_finalize thread_finalize_cb, void* context,
+    napi_threadsafe_function_call_js call_js_cb, napi_threadsafe_function* result) {
+  (void)async_resource; (void)async_resource_name;
+  if (env == nullptr || result == nullptr || initial_thread_count == 0) {
+    return napi_set_last_error(env, napi_invalid_arg);
+  }
+  // node requires either a JS func or a call_js_cb — with neither there is nothing to call.
+  if (func == nullptr && call_js_cb == nullptr) {
+    return napi_set_last_error(env, napi_invalid_arg);
+  }
+  MiloTsfn* t = new MiloTsfn();
+  t->env = env;
+  t->func_ref = nullptr;
+  t->context = context;
+  t->call_js = call_js_cb;
+  t->thread_finalize_cb = thread_finalize_cb;
+  t->thread_finalize_data = thread_finalize_data;
+  t->max_queue_size = max_queue_size;
+  t->thread_count = (int)initial_thread_count;
+  t->closing = false;
+  t->refed = true;   // node: a fresh tsfn is ref'd and holds the loop open
+  pthread_mutex_init(&t->mu, nullptr);
+  pthread_cond_init(&t->room, nullptr);
+  // A persistent, NOT a Local: this outlives the current scope and is read from the loop
+  // thread long after this call returns.
+  if (func != nullptr) {
+    napi_status st = napi_create_reference(env, func, 1, &t->func_ref);
+    if (st != napi_ok) { delete t; return napi_set_last_error(env, st); }
+  }
+  TsfnRegistry::get().add(t);
+  *result = reinterpret_cast<napi_threadsafe_function>(t);
+  return napi_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL napi_get_threadsafe_function_context(
+    napi_threadsafe_function func, void** result) {
+  if (func == nullptr || result == nullptr) return napi_invalid_arg;
+  *result = reinterpret_cast<MiloTsfn*>(func)->context;
+  return napi_ok;
+}
+
+// Callable from ANY thread — this is the whole point.
+napi_status NAPI_CDECL napi_call_threadsafe_function(
+    napi_threadsafe_function func, void* data,
+    napi_threadsafe_function_call_mode is_blocking) {
+  if (func == nullptr) return napi_invalid_arg;
+  MiloTsfn* t = reinterpret_cast<MiloTsfn*>(func);
+  pthread_mutex_lock(&t->mu);
+  if (t->closing) { pthread_mutex_unlock(&t->mu); return napi_closing; }
+  if (t->max_queue_size > 0 && t->queue.size() >= t->max_queue_size) {
+    if (is_blocking != napi_tsfn_blocking) {
+      pthread_mutex_unlock(&t->mu);
+      return napi_queue_full;
+    }
+    // Blocking mode: wait for the loop to drain one. Re-check `closing` on wake — the tsfn
+    // can be aborted while we sleep.
+    while (t->max_queue_size > 0 && t->queue.size() >= t->max_queue_size && !t->closing) {
+      pthread_cond_wait(&t->room, &t->mu);
+    }
+    if (t->closing) { pthread_mutex_unlock(&t->mu); return napi_closing; }
+  }
+  t->queue.push_back(data);
+  pthread_mutex_unlock(&t->mu);
+  // Interrupt the loop's kevent so the JS call runs now, not at the next timed poll.
+  nm_kq_wake_main();
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_acquire_threadsafe_function(napi_threadsafe_function func) {
+  if (func == nullptr) return napi_invalid_arg;
+  MiloTsfn* t = reinterpret_cast<MiloTsfn*>(func);
+  pthread_mutex_lock(&t->mu);
+  if (t->closing) { pthread_mutex_unlock(&t->mu); return napi_closing; }
+  t->thread_count++;
+  pthread_mutex_unlock(&t->mu);
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_release_threadsafe_function(
+    napi_threadsafe_function func, napi_threadsafe_function_release_mode mode) {
+  if (func == nullptr) return napi_invalid_arg;
+  MiloTsfn* t = reinterpret_cast<MiloTsfn*>(func);
+  pthread_mutex_lock(&t->mu);
+  t->thread_count--;
+  // abort closes immediately and discards the queue; release closes once the last thread
+  // lets go, still delivering whatever is queued (node semantics).
+  if (mode == napi_tsfn_abort) { t->closing = true; t->queue.clear(); }
+  else if (t->thread_count <= 0) { t->closing = true; }
+  pthread_mutex_unlock(&t->mu);
+  pthread_cond_broadcast(&t->room);   // free any blocked poster
+  nm_kq_wake_main();                  // let the loop reap/finalize
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_ref_threadsafe_function(node_api_basic_env env,
+                                                    napi_threadsafe_function func) {
+  (void)env;
+  if (func == nullptr) return napi_invalid_arg;
+  MiloTsfn* t = reinterpret_cast<MiloTsfn*>(func);
+  pthread_mutex_lock(&t->mu); t->refed = true; pthread_mutex_unlock(&t->mu);
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_unref_threadsafe_function(node_api_basic_env env,
+                                                      napi_threadsafe_function func) {
+  (void)env;
+  if (func == nullptr) return napi_invalid_arg;
+  MiloTsfn* t = reinterpret_cast<MiloTsfn*>(func);
+  pthread_mutex_lock(&t->mu); t->refed = false; pthread_mutex_unlock(&t->mu);
+  nm_kq_wake_main();   // the loop may now be free to exit
+  return napi_ok;
+}
+
 extern "C" {
 
 // Called by the event loop each turn: runs completion callbacks on the LOOP thread.
 void nm_napi_drain(void* info_ptr, void* rt_data) {
   (void)info_ptr; (void)rt_data;
   AsyncPool::get().drain();
+  TsfnRegistry::get().drain();
 }
 
 // Loop liveness: true while any submitted work has not delivered its callback. Exiting with
@@ -334,7 +579,7 @@ void nm_napi_busy(void* info_ptr, void* rt_data) {
   (void)rt_data;
   const v8::FunctionCallbackInfo<v8::Value>& info =
       *reinterpret_cast<const v8::FunctionCallbackInfo<v8::Value>*>(info_ptr);
-  info.GetReturnValue().Set(AsyncPool::get().busy());
+  info.GetReturnValue().Set(AsyncPool::get().busy() || TsfnRegistry::get().busy());
 }
 
 

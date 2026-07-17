@@ -41,8 +41,17 @@ node::OnScopeLeave from them). Nothing is forked into the tree; the copies regen
 
 ## What is NOT done
 
-- **`napi_threadsafe_function`** (7 fns) — the EVFILT_USER primitive now exists, so this is
-  unblocked, just unwritten.
+- ~~`napi_threadsafe_function`~~ **DONE.** All 7. Any thread posts; the JS call runs on the
+  LOOP thread. The JS function is held as a napi_ref, never a Local — a Local would dangle
+  across the posting boundary (see the buffer bug above). Blocking mode waits on a condvar and
+  re-checks `closing` on wake; `napi_tsfn_abort` discards the queue, plain release still
+  delivers what is queued (node semantics). A ref'd tsfn with live threads keeps the loop
+  alive. Verified: a native pthread posting every 60ms delivers at 62/127/192/257/319ms.
+
+  **Gotcha worth knowing:** loading an addon now calls `net._ensurePoll()`. EVFILT_USER only
+  works if a kqueue exists, and a script with no sockets otherwise takes the uninterruptible
+  `sleepMs` path — completions then round up to the loop's 100ms tick (60ms posts arrived at
+  106/212/314ms). One fd per addon-using process buys correct latency.
 - **async_hooks context** — `napi_create_async_work`'s async_resource/name and
   `napi_make_callback`'s async_context are accepted and IGNORED. Work executes correctly;
   only async-hooks introspection (async_id/triggerId/destroy) is absent.
