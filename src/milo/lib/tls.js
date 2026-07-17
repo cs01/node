@@ -121,7 +121,20 @@ class TLSSocket extends net.Socket {
         tcp.pollRemove(this._fd, tcp.EVFILT_WRITE);
         if (this._tlsServer) this._tlsServer.emit('secureConnection', this);
       } else if (result === -1) {
-        this.destroy(new Error('TLS handshake failed'));
+        // A rejected client handshake was dropped SILENTLY: node emits 'tlsClientError' on
+        // the server with the reason, and without it an operator has no way to see why a
+        // client was refused (wrong CA, no cert, version mismatch...). Carry OpenSSL's own
+        // wording rather than a generic string.
+        const reason = tcp.sslLastError() || 'TLS handshake failed';
+        const err = new Error(reason);
+        err.code = 'ERR_SSL_HANDSHAKE_FAILURE';
+        const srv = this._tlsServer;
+        this.destroy();
+        // Emitted AFTER destroy, and only if someone is listening — node's contract is that
+        // an unhandled tlsClientError must not take the server down.
+        if (srv && srv.listenerCount('tlsClientError') > 0) {
+          srv.emit('tlsClientError', err, this);
+        }
       }
       // result === 0 means WANT_READ/WANT_WRITE — wait for next event
       return;

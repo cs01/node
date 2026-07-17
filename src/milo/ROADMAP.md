@@ -69,10 +69,12 @@ store AND the advertised client_CA_list (without the list a client often cannot 
 cert to offer and sends none). Verified server-side: certless client never reaches the
 handler; a valid client is accepted as peer=agent1. Mutual TLS now works end to end.
 
-### tls server does not emit 'tlsClientError'
-When the server rejects a client handshake it drops the connection SILENTLY; node emits
-'tlsClientError' with the reason. So a milo server gives an operator no way to see WHY a
-client was refused. Found while verifying mTLS enforcement.
+### [x] tls server emits 'tlsClientError' (FIXED 2026-07-16, tls 26 -> 27)
+Was: a rejected client handshake was dropped silently, so an operator could not see WHY a
+client was refused. Now carries OpenSSL's own reason (ERR_error_string of the real failure —
+e.g. error:0A0000C7 "peer did not return a certificate", the same code node reports) instead
+of a generic 'TLS handshake failed'. Emitted after destroy and only when someone is
+listening, per node's contract that an unhandled tlsClientError must not kill the server.
 
 ### [x] tls server honours minVersion/maxVersion/ciphers/ciphersuites (FIXED 2026-07-16)
 Was: nm_ssl_server_ctx_new took only cert+key, so a server built with {maxVersion:'TLSv1.2',

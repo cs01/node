@@ -654,6 +654,20 @@ const char* nm_ssl_protocol(long long ssl_ptr) {
     return ssl ? SSL_get_version(ssl) : "";
 }
 
+// The reason the last SSL op failed, as OpenSSL words it (e.g. "peer did not return a
+// certificate"). A rejected handshake was reported as the bare string "TLS handshake failed",
+// which tells an operator nothing about WHY a client was refused. Drains the error queue.
+char* nm_ssl_last_error_string(void) {
+    char* out = (char*)malloc(512);
+    if (!out) return NULL;
+    out[0] = 0;
+    unsigned long e = ERR_get_error();
+    if (e == 0) return out;
+    ERR_error_string_n(e, out, 512);
+    ERR_clear_error();  // leftovers would be misattributed to the NEXT failure
+    return out;
+}
+
 long nm_ssl_verify_result(long long ssl_ptr) {
     SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
     if (!ssl) return -1;

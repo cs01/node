@@ -58,6 +58,7 @@ extern fn nm_ssl_verify_result(ssl: i64): i64
 extern fn nm_ssl_peer_cert_json(ssl: i64): *u8
 extern fn nm_ssl_cipher_info(ssl: i64): *u8
 extern fn nm_ssl_protocol(ssl: i64): *u8
+extern fn nm_ssl_last_error_string(): *u8
 extern fn nm_ssl_read(ssl: i64, buf: *u8, len: i32): i32
 extern fn nm_ssl_write(ssl: i64, data: *u8, len: i32): i32
 extern fn nm_ssl_pending(ssl: i64): i32
@@ -992,6 +993,17 @@ fn sslProtocolOp(info: *u8, _ud: *u8): void {
     }
 }
 
+// sslLastError() → OpenSSL's reason for the last failure, or ""
+fn sslLastErrorOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let p = nm_ssl_last_error_string()
+        if p as i64 == 0 { ci.retStr("" as *u8); return }
+        ci.retStr(p)
+        free(p)
+    }
+}
+
 // sslVerifyResult(sslHandle) → 0 = chain verified, -2 = peer sent no cert, else X509_V_ERR_*
 fn sslVerifyResultOp(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
@@ -1612,6 +1624,7 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "sslPeerCertJson" as *u8, sslPeerCertJson as *u8)
         c.setMethod(exp, "sslCipherInfo" as *u8, sslCipherInfo as *u8)
         c.setMethod(exp, "sslProtocol" as *u8, sslProtocolOp as *u8)
+        c.setMethod(exp, "sslLastError" as *u8, sslLastErrorOp as *u8)
         c.setMethod(exp, "sslConnectContinue" as *u8, sslConnectContinueOp as *u8)
         c.setMethod(exp, "sslRead" as *u8, sslRead as *u8)
         c.setMethod(exp, "sslWrite" as *u8, sslWrite as *u8)
