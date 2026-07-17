@@ -55,6 +55,17 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## real-world tool/framework compat (verified vs oracle, 2026-07-16)
 
+CONVERGENCE (after ~40 libraries tested): the CJS / pure-computation ecosystem is broadly
+SOLID — the last two test batches (ajv, js-yaml, fast-xml-parser, date-fns, iconv-lite,
+bcryptjs, reflect-metadata, protobufjs, lru-cache, cheerio, ejs, zod, ...) found ZERO new
+milo bugs. Even ajv (generates validators via new Function) and protobufjs (binary codec)
+work. The small-safe-fix vein from real CJS tools is largely mined out. ALL remaining failures
+now concentrate in TWO architectural gaps: (1) no real ESM loader (blocks tsc, prettier,
+marked, got, execa — regex _esmToCjs + no TLA), (2) dynamic-import referrer always bootstrap
+(blocks webpack, prettier). Both are C++/core-loader changes. THE next lever is the ESM loader;
+it is the single item unblocking the most real software. Not a thin-context fix — do it
+focused. Everything else here already runs.
+
 Running actual tools is the truest compat signal — it found 8 app bugs the 2143-test suite
 missed. Verified working under milo (output identical to ./out/Release/node):
   SERVERS/HTTP: express, fastify, koa, socket.io (real-time), ws, http/https/http2
@@ -62,7 +73,8 @@ missed. Verified working under milo (output identical to ./out/Release/node):
   TOOLS:        eslint, rollup, mocha
   STREAMING:    csv-parse, tar (pack/gzip/extract), busboy, multer (file upload)
   MIDDLEWARE:   helmet, express-rate-limit, form-data (full stack works)
-  CLI/PARSE:    commander, zod, cheerio, ejs, dayjs
+  CLI/PARSE:    commander, zod, cheerio, ejs, dayjs, ajv, js-yaml, fast-xml-parser, date-fns
+  CRYPTO/ENC:   iconv-lite, bcryptjs, reflect-metadata, protobufjs, lru-cache
   MISC:         graphql, nodemailer, mqtt, node-cron (all work)
   DATA/CRYPTO:  pg (postgres client), jsonwebtoken, handlebars, sharp, @node-rs/argon2,
                 @napi-rs/uuid, sqlite3 (napi), prisma
