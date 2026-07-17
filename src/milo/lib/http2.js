@@ -399,8 +399,13 @@ class ClientHttp2Session extends Http2Session {
     // ~:2916). milo sent :method undefined, so the server saw no method at all.
     if (rest[':method'] === undefined) rest[':method'] = 'GET';
     if (rest[':path'] === undefined) rest[':path'] = '/';
-    if (rest[':scheme'] === undefined) rest[':scheme'] = 'https';
-    if (rest[':authority'] === undefined && this._authority) rest[':authority'] = this._authority;
+    if (rest[':scheme'] === undefined) rest[':scheme'] = this._protocol || 'https';
+    // node: `if (getAuthority(headers) === undefined) headers[:authority] = kAuthority`,
+    // and getAuthority checks :authority OR **host** (lib/internal/http2/util.js) — a
+    // request carrying a host header must NOT get :authority auto-filled on top of it.
+    if (rest[':authority'] === undefined && rest.host === undefined && this._authority) {
+      rest[':authority'] = this._authority;
+    }
     const list = objectToHeaders(rest, []);
     const hasBody = options.endStream === false;
     // send HEADERS immediately so they precede any body DATA the caller writes
@@ -659,6 +664,11 @@ function connect(authority, options, listener) {
   const host = url.hostname || 'localhost';
   const socket = net.connect(port, host);
   const session = new ClientHttp2Session(socket);
+  // connect() parsed these out of the url and then threw them away, so :authority came out
+  // undefined and :scheme was guessed. node derives both from the connection
+  // (lib/internal/http2/core.js: kAuthority / kProtocol).
+  session._authority = url.host || (url.port ? `${host}:${url.port}` : host);
+  session._protocol = url.protocol === 'https:' ? 'https' : 'http';
   socket.on('connect', () => { if (listener) listener(session, socket); session.emit('connect', session, socket); });
   return session;
 }
