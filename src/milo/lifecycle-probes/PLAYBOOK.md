@@ -783,6 +783,27 @@ re-register poll filters against the TLS socket, and handle the inner socket sti
 connect path that bypasses net.js (see 5l-old) — adopting `options.socket` is the natural
 moment to delete it and route everything through net.js.
 
+## 5r. test-tls-inception: TLSSocket is a HALF-STREAM. push() alone does NOT fix it (2026-07-16)
+
+inception is a TLS proxy built on `pipe()` (`dest.pipe(socket); socket.pipe(dest)`, 40KB body),
+so it needs TLSSocket to behave as a real stream. It does not: the post-handshake read loop
+calls `this.emit('data', ...)` DIRECTLY, bypassing the stream machinery, so the socket never
+enters flowing mode and `pipe()` never sees the data. net.Socket's read path already pushes.
+
+**Tried the obvious one-liner (emit('data') -> push(), push(null) on EOF): REVERTED.** It
+fixed nothing and BROKE test-tls-on-empty-socket (PASS -> hang). Reason: TLSSocket fights the
+stream's own state — it assigns `this.readable = false` as a plain property (tls.js:128, 163)
+alongside `super()` from net.Socket, so `_readableState` was never actually driving this
+socket. Switching the producer to push() while the consumer side is still hand-rolled leaves
+neither path working. **Do not retry the one-liner.**
+
+**What it actually needs:** make TLSSocket a real Readable — stop assigning `this.readable`,
+let push()/push(null) drive `_readableState`, and delete the manual 'end' emit (push(null)
+produces it). That is a real refactor of tls.js's read path, and per the adapter-over-refactor
+rule it should WRAP net.Socket's existing push path rather than reinvent it. Verify against
+BOTH on-empty-socket (hand-rolled `s.on('data')` consumer) and inception (pipe consumer) —
+they exercise the two halves and the one-liner traded one for the other.
+
 ## 5m. NEXT UP — scoped, not started (2026-07-16 end of session)
 
 Ranked by expected value. All verified against `./out/Release/node` unless noted.
