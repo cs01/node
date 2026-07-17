@@ -389,10 +389,12 @@ class Socket extends EventEmitter {
   }
   ref() { return this; }
   unref() { return this; }
-  setRecvBufferSize() {}
-  setSendBufferSize() {}
-  getRecvBufferSize() { return 65536; }
-  getSendBufferSize() { return 65536; }
+  // Real setsockopt/getsockopt(SO_RCVBUF/SO_SNDBUF) — these were a no-op set and a hardcoded
+  // 65536 get, so setRecvBufferSize was silently ignored and getRecvBufferSize lied.
+  setRecvBufferSize(size) { if (this._fd >= 0) tcp.setSockBuffer(this._fd, 0, size); }
+  setSendBufferSize(size) { if (this._fd >= 0) tcp.setSockBuffer(this._fd, 1, size); }
+  getRecvBufferSize() { return this._fd >= 0 ? tcp.getSockBuffer(this._fd, 0) : 0; }
+  getSendBufferSize() { return this._fd >= 0 ? tcp.getSockBuffer(this._fd, 1) : 0; }
 }
 
 function createSocket(options, listener) {

@@ -855,6 +855,38 @@ fn tcpSoError(info: *u8, _ud: *u8): void {
     }
 }
 
+// Socket buffer sizes (SO_RCVBUF=0x1002 / SO_SNDBUF=0x1001, SOL_SOCKET=0xffff). Node sets
+// the kernel buffer and reads back what the kernel actually granted — dgram's
+// get/setRecvBufferSize were a no-op set and a hardcoded 65536 get.
+// setSockBuffer(fd, isSend, size) -> 0 on success, -1 on error
+fn setSockBuffer(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let fd = ci.i32Arg(0, -1)
+        let isSend = ci.i32Arg(1, 0)
+        var val: [i32; 1] = [ci.i32Arg(2, 0)]
+        var opt: i32 = 0x1002
+        if isSend != 0 { opt = 0x1001 }
+        let r = setsockopt(fd, 0xffff, opt, val as *u8, 4)
+        ci.retI32(r)
+    }
+}
+
+// getSockBuffer(fd, isSend) -> current buffer size, or -1 on error
+fn getSockBuffer(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    unsafe {
+        let fd = ci.i32Arg(0, -1)
+        let isSend = ci.i32Arg(1, 0)
+        var val: [i32; 1] = [0]
+        var len: [i32; 1] = [4]
+        var opt: i32 = 0x1002
+        if isSend != 0 { opt = 0x1001 }
+        let r = getsockopt(fd, 0xffff, opt, val as *u8, len as *u8)
+        if r != 0 { ci.retI32(-1) } else { ci.retI32(val[0]) }
+    }
+}
+
 fn tcpSetKeepAlive(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     unsafe {
@@ -1635,6 +1667,8 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "sslPeerCertJson" as *u8, sslPeerCertJson as *u8)
         c.setMethod(exp, "sslCipherInfo" as *u8, sslCipherInfo as *u8)
         c.setMethod(exp, "sslProtocol" as *u8, sslProtocolOp as *u8)
+        c.setMethod(exp, "setSockBuffer" as *u8, setSockBuffer as *u8)
+        c.setMethod(exp, "getSockBuffer" as *u8, getSockBuffer as *u8)
         c.setMethod(exp, "sslLastError" as *u8, sslLastErrorOp as *u8)
         c.setMethod(exp, "sslConnectContinue" as *u8, sslConnectContinueOp as *u8)
         c.setMethod(exp, "sslRead" as *u8, sslRead as *u8)
