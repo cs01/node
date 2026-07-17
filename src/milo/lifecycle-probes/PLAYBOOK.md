@@ -1223,6 +1223,26 @@ pgrep -f milo-node    # still there
 Real GNU timeout kills. This is a milo stdlib/tool bug, not a node-milo bug — but it
 silently corrupts any test methodology built on `timeout`.
 
+## findings
+
+**test-net-connect-options-port — ROOT CAUSE CONFIRMED 2026-07-17 (fix pending; net.js was
+locked by an in-flight subagent, so recorded not applied).** The 72-connection block, the port
+type/range validation, the hints validation, and the localhost+hex-port connects ALL pass in
+milo — verified byte-identical to `./out/Release/node`. The ONLY divergence is the tail:
+`server.on('close', () => asyncFailToConnect(0))`. `net.connect(0, '127.0.0.1')` (port 0):
+- oracle: emits `error EADDRNOTAVAIL` (`Error: connect EADDRNOTAVAIL 127.0.0.1 - Local ...`)
+- milo:  emits NEITHER 'error' NOR 'connect' — the socket hangs forever, so the test's
+         `mustCallAtLeast` onError never fires and the whole file times out.
+Repro `/tmp/p0.js`: `net.connect(0,'127.0.0.1')` + error/connect/1.5s-timeout listeners.
+Hypothesis for the fix (net.js connect path): connecting to port 0 on macOS fails immediately
+(the `connect(2)` syscall returns EADDRNOTAVAIL, not EINPROGRESS), but milo's `_doConnect`
+either ignores the synchronous connect() return or registers EVFILT_WRITE and waits for a
+readiness event that never comes. Check `_doConnect` / `_onConnected` in net.js: surface the
+synchronous connect() errno (EADDRNOTAVAIL=49) as a `destroy(err)` on nextTick instead of
+parking on EVFILT_WRITE. Minor sibling bug noticed: milo's `dns.ADDRCONFIG`/`V4MAPPED`/`ALL`
+are all 0 (node's are real bit flags 0x…), so `hints` sums differ — harmless here (the test
+regex `/Received \d+/` still matches) but worth fixing for dns correctness.
+
 ## 6. after the core fixes land (in order of expected yield)
 
 1. Re-run probes + net. Expect p01/p02/p04 green and several of these to flip:
