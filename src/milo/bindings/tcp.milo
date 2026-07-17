@@ -1031,7 +1031,8 @@ fn sslConnectContinueOp(info: *u8, _ud: *u8): void {
     }
 }
 
-// sslRead(sslHandle) → Uint8Array or undefined (closed) or empty Uint8Array (EAGAIN)
+// sslRead(sslHandle) → Uint8Array (data) | undefined (clean EOF) | null (FATAL, see
+//   sslLastError) | empty Uint8Array (EAGAIN/WANT_READ)
 fn sslRead(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     unsafe {
@@ -1053,7 +1054,17 @@ fn sslRead(info: *u8, _ud: *u8): void {
         } else if n == 0 {
             free(buf)
             ci.retUndefined()
+        } else if n == -1 {
+            // FATAL (SSL_ERROR_SSL) — e.g. the peer sent a fatal alert. This used to fall
+            // into the branch below and return an empty array, i.e. "no data yet, try
+            // again": the caller waited, the socket closed, and the real reason (say
+            // TLSV13_ALERT_CERTIFICATE_REQUIRED) was swallowed with no error at all.
+            // null is distinguishable from undefined (clean EOF) and from an empty array
+            // (WANT_READ), so the read path can destroy WITH an error.
+            free(buf)
+            ci.retNull()
         } else {
+            // -2 = WANT_READ/WANT_WRITE: genuinely nothing to read yet.
             free(buf)
             let ab = iso.arraybufferNew(0 as i64)
             let result = iso.uint8arrayNew(ab, 0 as i64, 0 as i64)

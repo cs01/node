@@ -158,6 +158,17 @@ class TLSSocket extends net.Socket {
     if (!this._ssl) return;
     for (;;) {
       const data = tcp.sslRead(this._ssl);
+      if (data === null) {
+        // FATAL: the peer sent a fatal alert (e.g. TLSV13_ALERT_CERTIFICATE_REQUIRED when a
+        // server demands a client cert we did not send). In TLS1.3 the client's handshake
+        // COMPLETES first and the alert only arrives here, on the next read — so this is the
+        // only place it can surface. Previously sslRead reported it as "no data yet" and the
+        // socket closed with no error at all, leaving a caller nothing to debug.
+        const err = new Error(tcp.sslLastError() || 'TLS read failed');
+        err.code = 'ERR_SSL_HANDSHAKE_FAILURE';
+        this.destroy(err);
+        return;
+      }
       if (data === undefined) {
         // push(null), not a synchronous emit('end'): the stream owes 'end' to pipe() and to
         // flow control. It schedules 'end' on nextTick, and stream.js gates that on

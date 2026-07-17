@@ -14,6 +14,7 @@ extern fn v8c_fci_return_uint32(info: *u8, val: u32): void
 extern fn v8c_fci_return_double(info: *u8, val: f64): void
 extern fn v8c_fci_return_bool(info: *u8, val: i32): void
 extern fn v8c_fci_return_undefined(info: *u8): void
+extern fn v8c_fci_return_null(info: *u8): void
 extern fn v8c_fci_return_string(info: *u8, str: *u8): void
 extern fn v8c_fci_return_string_len(info: *u8, str: *u8, len: i32): void
 
@@ -131,6 +132,12 @@ impl CallbackInfo {
 
     fn retBool(self: CallbackInfo, val: i32): void {
          v8c_fci_return_bool(self.ptr, val) 
+    }
+
+    // null is distinct from undefined at the JS boundary — sslRead needs both (undefined =
+    // clean EOF, null = fatal error).
+    fn retNull(self: CallbackInfo): void {
+        unsafe { v8c_fci_return_null(self.ptr) }
     }
 
     fn retUndefined(self: CallbackInfo): void {

@@ -55,7 +55,18 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
-### tls client swallows a fatal alert entirely — no error, just a silent close
+### [x] tls client swallows a fatal alert — FIXED 2026-07-16
+Root cause was NOT the handshake branch (that diagnosis is preserved below because the
+obvious fix there is dead code). It was sslRead's binding: nm_ssl_read already returned -1
+FATAL / 0 clean-EOF / -2 WANT_READ correctly, but tcp.milo collapsed -1 and -2 into the same
+empty Uint8Array — "nothing to read yet". So a fatal alert read as "try again", the caller
+waited, and the socket closed with NO error. Now null = fatal (distinct from undefined =
+clean EOF and empty array = retry), which needed retNull added to v8.milo — v8c_fci_return_null
+existed in v8capi but was never exposed, which is likely WHY the branch was collapsed.
+Verified: node ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED / milo ERR_SSL_HANDSHAKE_FAILURE
+(was silence). Original diagnosis:
+
+### (original) tls client swallows a fatal alert entirely — no error, just a silent close
 A client rejected by the server reports NOTHING: node gives
 `ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`, milo emits no error at all and just closes.
 Root cause: in TLS1.3 the client's handshake COMPLETES (sslConnectContinue returns 1,
