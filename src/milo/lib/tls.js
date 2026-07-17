@@ -76,9 +76,14 @@ class TLSSocket extends net.Socket {
     const skipHostCheck = typeof o.checkServerIdentity === 'function' ||
                           o.rejectUnauthorized === false;
     const verifyHost = skipHostCheck ? '' : (o.servername || o.host || hostname || '');
+    // cert/key = this client's identity for mutual TLS. Dropped entirely before, so an mTLS
+    // client presented NO certificate and silently connected unauthenticated.
+    const _pem = (v) => !v ? '' : (Array.isArray(v) ? v.map(_pem).join('\n')
+                                 : (Buffer.isBuffer(v) ? v.toString('utf8') : String(v)));
     this._ssl = tcp.sslConnectStart(this._fd, hostname, _caFromOptions(o), verifyHost,
                                     o.minVersion || '', o.maxVersion || '',
-                                    o.ciphers || '', o.ciphersuites || '');
+                                    o.ciphers || '', o.ciphersuites || '',
+                                    _pem(o.cert), _pem(o.key));
     if (!this._ssl || this._ssl < 0) {
       this._ssl = 0;
       process.nextTick(() => this.emit('error', new Error('TLS handshake init failed')));

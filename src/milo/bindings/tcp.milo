@@ -52,7 +52,7 @@ extern fn nm_fs_open(path: *u8, flags: i32, mode: i32): i32
 
 // TLS via OpenSSL (helpers in entry.c)
 extern fn nm_ssl_connect(fd: i32, hostname: *u8): i64
-extern fn nm_ssl_connect_start(fd: i32, hostname: *u8, caPem: *u8, verifyHost: *u8, minVer: *u8, maxVer: *u8, ciphers: *u8, cipherSuites: *u8): i64
+extern fn nm_ssl_connect_start(fd: i32, hostname: *u8, caPem: *u8, verifyHost: *u8, minVer: *u8, maxVer: *u8, ciphers: *u8, cipherSuites: *u8, certPem: *u8, keyPem: *u8): i64
 extern fn nm_ssl_connect_continue(ssl: i64): i32
 extern fn nm_ssl_verify_result(ssl: i64): i64
 extern fn nm_ssl_peer_cert_json(ssl: i64): *u8
@@ -925,10 +925,19 @@ fn sslConnectStart(info: *u8, _ud: *u8): void {
         if ci.length() > 5 { ci.arg(5).writeUtf8(iso, cMaxBuf as *u8, 31) }
         if ci.length() > 6 { ci.arg(6).writeUtf8(iso, cCsBuf, 4095) }
         if ci.length() > 7 { ci.arg(7).writeUtf8(iso, cSuBuf, 1023) }
+        // args 8-9: client identity for mutual tls. Heap: a cert bundle + key exceed any
+        // sane stack buffer.
+        let certBuf = calloc(1, 65536)
+        let keyBuf = calloc(1, 65536)
+        if ci.length() > 8 { ci.arg(8).writeUtf8(iso, certBuf, 65535) }
+        if ci.length() > 9 { ci.arg(9).writeUtf8(iso, keyBuf, 65535) }
         let ssl = nm_ssl_connect_start(fd, hostBuf as *u8, caBuf, vhBuf as *u8,
-                                       cMinBuf as *u8, cMaxBuf as *u8, cCsBuf, cSuBuf)
+                                       cMinBuf as *u8, cMaxBuf as *u8, cCsBuf, cSuBuf,
+                                       certBuf, keyBuf)
         free(cCsBuf)
         free(cSuBuf)
+        free(certBuf)
+        free(keyBuf)
         free(caBuf)
         ci.retF64(ssl as f64)
     }

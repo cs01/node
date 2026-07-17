@@ -423,10 +423,41 @@ long long nm_ssl_connect(int fd, const char* hostname) {
 // (62), so the existing verify path reports it with no extra plumbing.
 static int nm_tls_ver(const char* v);  // defined with the server ctx below
 
+// Attach a client identity (mutual TLS) to THIS ssl only. Per-SSL, not per-CTX: the client
+// ctx is shared process-wide, so SSL_CTX_use_* would attach one caller's identity — its
+// private key — to every other connection in the process.
+// Drains the whole PEM: a cert file may bundle intermediates, and sending only the leaf
+// leaves the server unable to build a chain (same bug the server side already had).
+static void nm_ssl_apply_client_cert(SSL* ssl, const char* cert_pem, const char* key_pem) {
+    if (!cert_pem || !cert_pem[0] || !key_pem || !key_pem[0]) return;
+    BIO* cb = BIO_new_mem_buf(cert_pem, -1);
+    if (cb) {
+        X509* leaf = PEM_read_bio_X509(cb, NULL, NULL, NULL);
+        if (leaf) {
+            SSL_use_certificate(ssl, leaf);
+            X509_free(leaf);
+            X509* extra;
+            while ((extra = PEM_read_bio_X509(cb, NULL, NULL, NULL)) != NULL) {
+                if (SSL_add1_chain_cert(ssl, extra) != 1) { /* keep going */ }
+                X509_free(extra);
+            }
+        }
+        BIO_free(cb);
+    }
+    BIO* kb = BIO_new_mem_buf(key_pem, -1);
+    if (kb) {
+        EVP_PKEY* pk = PEM_read_bio_PrivateKey(kb, NULL, NULL, NULL);
+        if (pk) { SSL_use_PrivateKey(ssl, pk); EVP_PKEY_free(pk); }
+        BIO_free(kb);
+    }
+    ERR_clear_error();  // the read loops always end on a benign "no start line"
+}
+
 long long nm_ssl_connect_start(int fd, const char* hostname, const char* ca_pem,
                                const char* verify_host, const char* min_ver,
                                const char* max_ver, const char* ciphers,
-                               const char* ciphersuites) {
+                               const char* ciphersuites, const char* cert_pem,
+                               const char* key_pem) {
     nm_ssl_ensure_init();
 
     // Verify socket is non-blocking
@@ -446,6 +477,7 @@ long long nm_ssl_connect_start(int fd, const char* hostname, const char* ca_pem,
       // TLS1.3 suites are a separate knob; set_cipher_list does not filter them.
       if (ciphers && ciphers[0]) SSL_set_cipher_list(ssl, ciphers);
       if (ciphersuites && ciphersuites[0]) SSL_set_ciphersuites(ssl, ciphersuites); }
+    nm_ssl_apply_client_cert(ssl, cert_pem, key_pem);
     SSL_set_fd(ssl, fd);
     if (hostname && hostname[0]) SSL_set_tlsext_host_name(ssl, hostname);
     if (verify_host && verify_host[0]) {
