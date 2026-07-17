@@ -61,10 +61,13 @@ ciphers:'...'} still negotiated TLSv1.3 with the default list — a caller could
 its OWN server. Note TLS1.3 suites are a SEPARATE knob (SSL_CTX_set_ciphersuites); the
 <=1.2 cipher_list does not filter them, so both are plumbed. tls 26 pass, timeout 6->5.
 
-### tls CLIENT may still drop minVersion/maxVersion/ciphers
-nm_ssl_connect_start takes (fd, hostname, ca, verify_host) — no version/cipher args, so a
-client asking for maxVersion:'TLSv1.2' is likely ignored (it negotiates whatever the server
-offers). Same shape as the server bug just fixed. UNVERIFIED — test before fixing.
+### [x] tls CLIENT honours minVersion/maxVersion/ciphers/ciphersuites (FIXED 2026-07-16)
+The suspicion was correct and now verified+fixed: a client asking maxVersion:'TLSv1.2' against
+a 1.3-capable server negotiated TLSv1.3. Set PER-SSL (SSL_set_min/max_proto_version,
+SSL_set_cipher_list/ciphersuites) — NOT per-CTX: g_ssl_client_ctx is shared by every
+connection in the process, so SSL_CTX_set_* would leak one caller's restriction onto all
+other sockets. Regression-checked both directions: restricted client -> TLSv1.2, unrestricted
+client -> still TLSv1.3.
 
 ### [x] fetch() corrupted bodies — FIXED 2026-07-16 (http 97 -> 102)
 ClientRequest.end() was not idempotent, so every fetch GET opened TWO connections whose

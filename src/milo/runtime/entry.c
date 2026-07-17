@@ -421,8 +421,12 @@ long long nm_ssl_connect(int fd, const char* hostname) {
 // cert for evil.com passes for api.weather.gov and `authorized` still reports true.
 // SSL_set1_host folds the result into SSL_get_verify_result as X509_V_ERR_HOSTNAME_MISMATCH
 // (62), so the existing verify path reports it with no extra plumbing.
+static int nm_tls_ver(const char* v);  // defined with the server ctx below
+
 long long nm_ssl_connect_start(int fd, const char* hostname, const char* ca_pem,
-                               const char* verify_host) {
+                               const char* verify_host, const char* min_ver,
+                               const char* max_ver, const char* ciphers,
+                               const char* ciphersuites) {
     nm_ssl_ensure_init();
 
     // Verify socket is non-blocking
@@ -433,6 +437,15 @@ long long nm_ssl_connect_start(int fd, const char* hostname, const char* ca_pem,
 
     SSL* ssl = SSL_new(g_ssl_client_ctx);
     nm_ssl_apply_ca(ssl, ca_pem);
+    // Per-SSL, NOT per-CTX: the client ctx is shared by every connection in the process, so
+    // SSL_CTX_set_* here would leak one caller's restriction onto everyone else's sockets.
+    // These were dropped entirely — a client asking maxVersion:'TLSv1.2' still negotiated 1.3.
+    { int mn = nm_tls_ver(min_ver), mx = nm_tls_ver(max_ver);
+      if (mn) SSL_set_min_proto_version(ssl, mn);
+      if (mx) SSL_set_max_proto_version(ssl, mx);
+      // TLS1.3 suites are a separate knob; set_cipher_list does not filter them.
+      if (ciphers && ciphers[0]) SSL_set_cipher_list(ssl, ciphers);
+      if (ciphersuites && ciphersuites[0]) SSL_set_ciphersuites(ssl, ciphersuites); }
     SSL_set_fd(ssl, fd);
     if (hostname && hostname[0]) SSL_set_tlsext_host_name(ssl, hostname);
     if (verify_host && verify_host[0]) {

@@ -52,7 +52,7 @@ extern fn nm_fs_open(path: *u8, flags: i32, mode: i32): i32
 
 // TLS via OpenSSL (helpers in entry.c)
 extern fn nm_ssl_connect(fd: i32, hostname: *u8): i64
-extern fn nm_ssl_connect_start(fd: i32, hostname: *u8, caPem: *u8, verifyHost: *u8): i64
+extern fn nm_ssl_connect_start(fd: i32, hostname: *u8, caPem: *u8, verifyHost: *u8, minVer: *u8, maxVer: *u8, ciphers: *u8, cipherSuites: *u8): i64
 extern fn nm_ssl_connect_continue(ssl: i64): i32
 extern fn nm_ssl_verify_result(ssl: i64): i64
 extern fn nm_ssl_peer_cert_json(ssl: i64): *u8
@@ -895,7 +895,8 @@ fn sslConnect(info: *u8, _ud: *u8): void {
     }
 }
 
-// sslConnectStart(fd, hostname, caPem?, verifyHost?) → ssl handle or -1 on error
+// sslConnectStart(fd, hostname, caPem?, verifyHost?, minVer?, maxVer?, ciphers?, suites?)
+//   → ssl handle or -1 on error
 fn sslConnectStart(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     if ci.length() < 2 { return }
@@ -915,7 +916,19 @@ fn sslConnectStart(info: *u8, _ud: *u8): void {
         if ci.length() > 3 {
             ci.arg(3).writeUtf8(iso, vhBuf as *u8, 255)
         }
-        let ssl = nm_ssl_connect_start(fd, hostBuf as *u8, caBuf, vhBuf as *u8)
+        // args 4-7: optional tls restrictions; empty = keep the default.
+        var cMinBuf: [u8; 32] = [0; 32]
+        var cMaxBuf: [u8; 32] = [0; 32]
+        let cCsBuf = calloc(1, 4096)
+        let cSuBuf = calloc(1, 1024)
+        if ci.length() > 4 { ci.arg(4).writeUtf8(iso, cMinBuf as *u8, 31) }
+        if ci.length() > 5 { ci.arg(5).writeUtf8(iso, cMaxBuf as *u8, 31) }
+        if ci.length() > 6 { ci.arg(6).writeUtf8(iso, cCsBuf, 4095) }
+        if ci.length() > 7 { ci.arg(7).writeUtf8(iso, cSuBuf, 1023) }
+        let ssl = nm_ssl_connect_start(fd, hostBuf as *u8, caBuf, vhBuf as *u8,
+                                       cMinBuf as *u8, cMaxBuf as *u8, cCsBuf, cSuBuf)
+        free(cCsBuf)
+        free(cSuBuf)
         free(caBuf)
         ci.retF64(ssl as f64)
     }

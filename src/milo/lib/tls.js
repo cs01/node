@@ -76,7 +76,9 @@ class TLSSocket extends net.Socket {
     const skipHostCheck = typeof o.checkServerIdentity === 'function' ||
                           o.rejectUnauthorized === false;
     const verifyHost = skipHostCheck ? '' : (o.servername || o.host || hostname || '');
-    this._ssl = tcp.sslConnectStart(this._fd, hostname, _caFromOptions(o), verifyHost);
+    this._ssl = tcp.sslConnectStart(this._fd, hostname, _caFromOptions(o), verifyHost,
+                                    o.minVersion || '', o.maxVersion || '',
+                                    o.ciphers || '', o.ciphersuites || '');
     if (!this._ssl || this._ssl < 0) {
       this._ssl = 0;
       process.nextTick(() => this.emit('error', new Error('TLS handshake init failed')));
