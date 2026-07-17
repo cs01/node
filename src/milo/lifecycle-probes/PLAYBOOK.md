@@ -54,6 +54,26 @@ timeouts downstream (~400 total across modules).
 Everything below was verified live on 2026-07-16. Baselines: net 44 PASS / 47 FAIL /
 12 TIMEOUT / 3 OOM (`net-baseline-2026-07-16.csv` in this dir).
 
+## LEVER CLOSED (2026-07-16). Read this before starting another lifecycle hypothesis.
+
+The premise this playbook was built on — "the hangs are busy-loops that OOM at
+`pollWait -> v8c_array_new`" — is RESOLVED. Exit criterion measured, not assumed: every
+remaining net+tls TIMEOUT was CPU-sampled at 6s and **all 15 sleep (0.04-0.09s CPU). Zero
+spin. Zero OOM.**
+```
+net: 57 PASS / 0 OOM /  5 TIMEOUT      (start of grind: 44 PASS / 3 OOM / 12 TIMEOUT)
+tls: 23 PASS / 0 OOM / 10 TIMEOUT      (3 spin-OOMs killed by 5l)
+probes 9/9
+```
+The remaining timeouts are ordinary hangs and feature gaps (see 5q: `tls.connect({socket})`
+is simply unimplemented and accounts for 3 of them). **They will not yield to lifecycle
+instrumentation** — do not run the spin playbook against them. Diagnose them as normal test
+failures: read the test, run it, find what never fires.
+
+If a NEW spin appears, the machinery here still works: section 0 for discovery, section 4 for
+instrumentation, `run-probes.sh` as the acceptance gate. Otherwise this file is now history +
+the traps list, which stays valuable (READ FIRST is still accurate).
+
 ## 0. the one big discovery — read this first
 
 **"Hangs" are NOT sleep-hangs. They are hot busy-loops that OOM.**
