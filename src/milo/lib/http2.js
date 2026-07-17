@@ -626,6 +626,13 @@ class Http2Server extends EventEmitter {
       session.on('error', (e) => this.emit('sessionError', e));
     });
     this._net.on('error', (e) => this.emit('error', e));
+    // The inner net.Server is where these actually fire; only 'error' was forwarded, so
+    // `server.on('listening')` never fired on an Http2Server and anything gated on it sat
+    // silent forever (the whole write-early-hints file does its work inside that handler).
+    // listen(cb) appeared to work only because the cb is registered on the inner server.
+    this._net.on('listening', () => this.emit('listening'));
+    this._net.on('close', () => this.emit('close'));
+    this._net.on('connection', (sock) => this.emit('connection', sock));
     // createServer's handler is the compat 'request' handler (per Node docs)
     if (handler) this.on('request', handler);
   }
