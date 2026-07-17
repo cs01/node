@@ -55,6 +55,12 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### [x] every timer-only program burned 100% CPU (FIXED 2026-07-16)
+net._pollOnce returned 0 instantly when no kqueue existed (created lazily by the first
+socket) instead of waiting its timeout, so `setTimeout` with no sockets spun at 1.58M
+iterations in 2s: milo 2.52s cpu vs node 0.04s. now 0.03s. no test covers idle cpu — found
+by cpu-sampling a plain idle script. See lifecycle-probes/PLAYBOOK.md 5t.
+
 ### tls is fd-based (SSL_set_fd); node is BIO-pair based
 Blocks TLS-over-TLS (test-tls-inception), TLS over any non-fd duplex, and STARTTLS upgrades.
 All 4 SSL sites in entry.c use SSL_set_fd. Real fix is SSL_set_bio + memory BIO pair, pumping

@@ -4,6 +4,8 @@
 const EventEmitter = require('events');
 const { Duplex } = require('stream');
 const tcp = internalBinding('tcp');
+// for the no-kqueue wait in _pollOnce; the loop must block somewhere
+const _timersBinding = internalBinding('timers');
 // macOS values; the tcp binding is macOS-only (kqueue). Linux would be 10.
 const AF_INET = 2;
 const AF_INET6 = 30;
@@ -16,6 +18,7 @@ const DEFAULT_HOST = '::';
 
 const EVFILT_READ = tcp.EVFILT_READ;   // -1
 const EVFILT_WRITE = tcp.EVFILT_WRITE; // -2
+const EVFILT_USER = -10;               // cross-thread wakeup channel
 const EV_EOF = tcp.EV_EOF;             // 0x8000
 const EVFILT_VNODE = -4;
 const EAGAIN = -35; // darwin EAGAIN, returned negated by nm_write
@@ -722,7 +725,16 @@ function _lcLog(msg) {
 
 // --- I/O pump called from event loop ---
 function _pollOnce(timeout) {
-  if (!pollInited) return 0;
+  if (!pollInited) {
+    // The kqueue is created lazily, the first time something makes a socket. A timer-only
+    // program (setTimeout with no sockets — as common as JS gets) therefore lands here, and
+    // returning 0 INSTANTLY breaks this function's contract: the caller asked to wait
+    // `timeout` ms. The loop's own sleep branch cannot save it, because `poll` is truthy —
+    // so the loop spun at 100% CPU (1.58M iterations in 2s; node uses 0.04s where milo
+    // burned 2.52s). Honour the wait.
+    if (timeout > 0) _timersBinding.sleepMs(timeout);
+    return 0;
+  }
   const events = tcp.pollWait(timeout);
   if (!events || events.length === 0) return 0;
 
@@ -735,6 +747,12 @@ function _pollOnce(timeout) {
       const sock = Socket._sockets.get(fd);
       _lcLog(`poll#${_lcPollEvents} fd=${fd} filter=${filter} eof=${!!(flags & EV_EOF)} known=${!!sock || Server._servers.has(fd)} destroyed=${sock ? sock.destroyed : 'n/a'} rEnded=${sock && sock._readableState ? sock._readableState.ended : 'n/a'}`);
     }
+
+    // Cross-thread wakeup (EVFILT_USER, ident 'milo'). Carries no data — its only job is to
+    // return pollWait early so the loop re-checks queues another thread just fed. It must be
+    // skipped explicitly: its ident is NOT an fd, so the orphan branch below would try to
+    // deregister a bogus fd.
+    if (filter === EVFILT_USER) continue;
 
     // file watcher vnode events
     if (filter === EVFILT_VNODE) {

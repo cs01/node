@@ -54,6 +54,25 @@ timeouts downstream (~400 total across modules).
 Everything below was verified live on 2026-07-16. Baselines: net 44 PASS / 47 FAIL /
 12 TIMEOUT / 3 OOM (`net-baseline-2026-07-16.csv` in this dir).
 
+## 5t. THE BIGGEST SPIN WAS NEVER IN THE SUITE: every timer-only program burned 100% CPU
+
+**`setTimeout` with no sockets spun the loop at 1.58M iterations in 2s. milo 2.52s CPU vs
+node 0.04s.** Found only by CPU-sampling a plain idle script — the "zero spins" audit below
+sampled the 15 remaining net+tls TIMEOUTs, and every one of those HOLDS A SOCKET. A
+timer-only program was never in the sample. The most common shape in JS went unmeasured.
+
+Cause: `net._pollOnce(timeout)` opened with `if (!pollInited) return 0;` — the kqueue is
+created lazily by the first socket, so a timer-only program got an INSTANT return instead of
+the `timeout` ms wait its caller asked for. The loop's own `else { _tb.sleepMs() }` branch
+could not save it, because `poll` (net._pollOnce) is truthy whether or not a kqueue exists.
+Fix: honour the contract — sleep `timeout` when there is no kqueue.
+After: idle 2.52s -> **0.03s** (node 0.05s); idle worker 2.57s -> **0.07s**. Ladder unchanged
+(net 57/5, tls 25/6, probes 9/9) — no test covers idle CPU.
+
+**Lesson: an exit criterion is only as good as its sample.** "Zero spins" was measured over
+the failing tests, so it could only ever find spins in failing tests. This one lived in
+PASSING programs. When auditing for a resource bug, sample the SUCCESS path too.
+
 ## LEVER CLOSED (2026-07-16). Read this before starting another lifecycle hypothesis.
 
 The premise this playbook was built on — "the hangs are busy-loops that OOM at
