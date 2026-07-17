@@ -108,7 +108,28 @@ serves {"ok":true}). No compat-number change (no suite test covers it); the -1 s
 flaky test-http-byteswritten timeout, unrelated (A/B confirmed it times out without the change
 too).
 
-### [HIGH PRIORITY] dynamic import()'s referrer is ALWAYS bootstrap.js — blocks webpack AND prettier
+### [HIGH PRIORITY] dynamic import() referrer wrong — SCOPED, machinery already exists
+Blocks webpack AND prettier. ROOT CAUSE: bootstrap.js's module loader runs each module via
+`(0,eval)(wrapped)`; eval'd code inherits the CALLING script's ScriptOrigin (bootstrap.js), so
+V8's DynamicImportCallback resource_name is always bootstrap and a relative import('./x')
+resolves against src/milo/runtime.
+THE FIX IS BOUNDED — the ScriptOrigin machinery already exists and is unused for this:
+  * deps/v8capi has `v8c_script_compile_run(ctx, source, len, filename)` — compiles with
+    `v8::ScriptOrigin(filename)` and runs, returning the result. V8 GUARANTEES that origin's
+    resource_name flows to the dynamic-import callback (so import() resolves relative to it).
+  * It's exposed to milo (v8.milo compileRun) and used for the ENTRY/bootstrap, but NOT for
+    per-module loading. Even vm.js runInThisContext uses (0,eval) and ignores its filename.
+STEPS (a focused session, module hot-path so verify exhaustively):
+  1. Add a minimal vm binding op `compileHere(code, filename)` = v8c_script_compile_run on the
+     CURRENT context (no sandbox; copy vmRun's arg/writeUtf8 pattern, drop the context copy).
+  2. In bootstrap.js's else-branch, replace `(0,eval)(wrapped)` with that op, filename =
+     `resolved`. The wrapper compiles+runs, returning the wrapper function; then `.call(...)`.
+  3. Also point vm.js runInThisContext at it (honors its filename option).
+  4. VERIFY: a main-module `import('./x.mjs')` resolves to the right dir (was src/milo/runtime);
+     webpack + prettier run; probes 9/9; net>=44; app HTTP 200; 5+ working libs still load.
+     Watch for eval-vs-Script behavioral diffs (strict mode, error shapes) — hence exhaustive.
+  Verified hypothesis basis: V8 flows ScriptOrigin.resource_name to
+  HostImportModuleDynamicallyCallback; milo simply never compiles modules with it.
 `import('../internal/legacy-cli.mjs')` fails because milo cannot resolve a RELATIVE dynamic
 import against the importing module. ROOT CAUSE (confirmed): V8's DynamicImportCallback
 resource_name (deps/v8capi/src/v8capi.cc DynamicImportCallback) is ALWAYS the bootstrap eval
