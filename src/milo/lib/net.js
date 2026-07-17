@@ -170,6 +170,12 @@ class Socket extends Duplex {
       this._undestroy();
       const rs = this._readableState;
       if (rs) { rs._destroyed = false; rs.ended = false; rs.endEmitted = false; rs.flowing = null; rs.buffer = []; rs.length = 0; rs.readable = true; rs.errored = null; rs.errorEmitted = false; }
+      // end()'s one-shot latches survive _undestroy (it resets only ended/ending/finished/
+      // errored). Stale _finishing=true makes the reconnected socket's next end() bail in
+      // tryFinish, so 'finish' never fires, autoDestroy never runs, and 'close' never comes
+      // — the exact reconnect hang in test-net-socket-local-address. Reset them here.
+      const wsz = this._writableState;
+      if (wsz) { wsz._finishing = false; wsz._prefinished = false; wsz._tryFinish = null; wsz._endCbs = null; }
       this._handle = null;
       this._fd = -1;
       this._readPollRemoved = false;

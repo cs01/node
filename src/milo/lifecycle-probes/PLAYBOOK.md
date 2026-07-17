@@ -89,11 +89,15 @@ The premise this playbook was built on — "the hangs are busy-loops that OOM at
 remaining net+tls TIMEOUT was CPU-sampled at 6s and **all 15 sleep (0.04-0.09s CPU). Zero
 spin. Zero OOM.**
 ```
-net: 59 PASS / 0 OOM /  3 TIMEOUT      (start of grind: 44 PASS / 3 OOM / 12 TIMEOUT)
+net: 60 PASS / 0 OOM /  2 TIMEOUT      (start of grind: 44 PASS / 3 OOM / 12 TIMEOUT)
      [end()-before-connect fixed 2026-07-17: _final now defers FIN to 'connect' when fd<0]
      [listen({fd}) fixed 2026-07-17: adopts the fd (was ignored); non-socket fd -> EINVAL]
-     remaining 3: test-net-write-slow (fcntl-variadic blocking, §5e#1), test-net-socket-local-address
-     (reconnect, §5k), test-net-connect-options-port (hostname/dns, §5g)
+     [socket reconnect fixed 2026-07-17 (§5k CLOSED): end() one-shot latches _finishing/
+      _prefinished survived _undestroy, so the reused socket's auto-end() bailed in tryFinish
+      and 'close' never fired. Reset them in connect()'s reconnect block. test-net-socket-
+      local-address flips.]
+     remaining 2: test-net-write-slow (fcntl-variadic blocking, §5e#1),
+     test-net-connect-options-port (connect(0) emits no error, see ## findings)
 tls: 23 PASS / 0 OOM / 10 TIMEOUT      (3 spin-OOMs killed by 5l)
 probes 9/9
 ```
