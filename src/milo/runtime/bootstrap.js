@@ -1220,6 +1220,11 @@
       try { if (_fs.existsSync(p) && !_fs.statSync(p).isDirectory()) return p; } catch { try { return _fs.existsSync(p) ? p : null; } catch {} }
       if (_fs.existsSync(p + '.js')) return p + '.js';
       if (_fs.existsSync(p + '.json')) return p + '.json';
+      // Node's builtin order is .js -> .json -> .node. This was missing, so an extensionless
+      // require of a native addon — `require('./build/Release/foo')`, which is how every
+      // addon is loaded in practice — failed with MODULE_NOT_FOUND even though the .node
+      // file was right there and loadable.
+      if (_fs.existsSync(p + '.node')) return p + '.node';
       // user-registered extensions (require.extensions / Module._extensions)
       try {
         const _ext = globalThis.require('module')._extensions;
