@@ -55,6 +55,13 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### prettier fails: dynamic import() of a relative .mjs does not resolve
+`prettier --no-config file.ts` → `Cannot find module '../internal/legacy-cli.mjs'` via
+__dynamicImportHandler (bootstrap.js:1708). milo's dynamic import() handler does not resolve
+a relative .mjs specifier the way node does (relative to the importing module + .mjs
+extension). eslint --version WORKS; tsc fails (complex ESM, above). Found running real CLI
+tools under milo. Fix: __dynamicImportHandler must resolve .mjs relative paths like require.
+
 ### milo has no real ESM loader — only a regex CJS transform
 `_esmToCjs` (bootstrap.js) line-by-line regexes import/export into require/exports. It now
 also runs as a fallback when a .js file fails as CJS with a SyntaxError and contains
