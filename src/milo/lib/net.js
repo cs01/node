@@ -798,6 +798,16 @@ function _pollOnce(timeout) {
     }
 
     if (flags & EV_EOF) {
+      // A peer that vanishes mid-TLS-handshake can NEVER complete it: SSL just keeps
+      // reporting WANT_READ. Nothing else notices — TLSSocket overrides _onReadable and,
+      // while the handshake is pending, never reaches the recvBinary EOF path below. So the
+      // socket was ended and had reads deregistered here, but was never destroyed: it sat in
+      // _sockets forever with io=true and the loop could not exit (socks=[8] srvs=[]).
+      // Destroying is the only correct outcome — the handshake is unfinishable.
+      if (sock._pendingTlsAccept || sock._pendingTlsConnect) {
+        try { sock.destroy(); } catch (e) { _emitSocketError(sock, e); }
+        continue;
+      }
       if (!sock.destroyed && sock._readableState && !sock._readableState.ended) {
         while (!sock.destroyed && !sock._readableState.ended) {
           const data = tcp.recvBinary(sock._fd);

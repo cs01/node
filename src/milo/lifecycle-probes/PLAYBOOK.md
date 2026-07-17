@@ -640,7 +640,20 @@ READ-only + `_wantWrite(result === 3)` on both paths. Result: **all 3 spins died
 0.06s, OOM 3 -> 0)** and `connect-no-host` STILL broke (PASS -> TIMEOUT). tls 23 -> 22.
 Reverted under the no-regression rule — third time.
 
-**ROOT CAUSE (instrumented, not guessed).** Traced with MILO_TLS_DEBUG + MILO_LIFECYCLE_DEBUG:
+**CORRECTION (same day): the root cause is in net.js, NOT the accept path.**
+`nm_ssl_accept_continue` ALREADY returns -1 on peer-gone, so "the accept path has no EOF
+handling" (below) was wrong — SSL never reports the error because EOF never reaches it. The
+real culprit is net.js's `EV_EOF` branch: it drained raw bytes, pushed null and called
+`_stopReading()` (deregistering READ) but NEVER destroyed the socket. Mid-handshake that
+socket stays `_pendingTlsAccept=true` in `_sockets` forever -> io=true -> loop cannot exit.
+TLSSocket overrides `_onReadable` and never reaches net.js's recvBinary EOF path while the
+handshake is pending, so nothing else could notice. Fixed: destroy on EOF when a handshake is
+pending (an unfinishable handshake has exactly one correct outcome). Neutral with the spin
+present (net 57/5, tls 23/7/3 unchanged) because the spin masks it — its value is unblocking
+the READ-only work.
+
+**ROOT CAUSE as first recorded (partially wrong, kept for the lesson: I asserted a cause from
+one trace without checking the C side, which already handled the case I claimed it didn't):** Traced with MILO_TLS_DEBUG + MILO_LIFECYCLE_DEBUG:
 ```
 [tls] _onReadable fd=8 pendAcc=true   <- server handshake STILL PENDING when the client left
 [lc] iter=18 io=true socks=[8] srvs=[]  <- fd 8 pinned forever, loop cannot exit
