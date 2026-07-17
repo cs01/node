@@ -623,6 +623,10 @@ class Server extends EventEmitter {
     this._server.on('error', (err) => {
       this.emit('error', err);
     });
+    // Only 'error' was forwarded from the inner net.Server, so http.Server never emitted
+    // 'connection' — node emits it for every accepted socket, before any request is parsed.
+    // (Same shape as the Http2Server bug that made the early-hints tests emit zero bytes.)
+    this._server.on('connection', (sock) => this.emit('connection', sock));
     if (cb) this.once('error', cb);
     this._server.listen(port, host, () => {
       this._listening = true;
