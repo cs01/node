@@ -569,7 +569,13 @@ class Server extends EventEmitter {
             res._maxRequestsPerSocket = this.maxRequestsPerSocket;
             res.on('finish', () => {
               socket._httpActive = false;
-              if (this._closing || req.headers['connection'] === 'close') socket.destroy();
+              // socket.end(), NOT destroy(): 'finish' fires when the RESPONSE is done, but the
+              // socket's own write buffer may still hold chunks parked under EAGAIN
+              // backpressure. destroy() drops them — a large Connection: close response (e.g.
+              // anything through compression middleware, many buffered res.write()s) lost its
+              // tail: ~45% truncation, corrupt gzip, blocks that never render. end() flushes
+              // the buffer, then FINs, matching node.
+              if (this._closing || req.headers['connection'] === 'close') socket.end();
             });
             try {
               // Expect: 100-continue -> node emits 'checkContinue' if anyone listens, else
