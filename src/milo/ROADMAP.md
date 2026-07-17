@@ -72,12 +72,17 @@ ERR_REQUIRE_ESM — milo tries to transform it instead of refusing. Low value.
 
 ## critical
 
-### piscina (worker pool) needs worker_threads MessagePort EventEmitter interface
-After adding EventEmitterAsyncResource + perf_hooks.createHistogram, piscina's MAIN thread
-loads and spawns a worker, but the WORKER fails: `port.on is not a function`
-(piscina/dist/worker.js:113). milo's worker-side MessagePort/parentPort lacks the EventEmitter
-methods (.on/.once/.emit). node's MessagePort extends EventTarget AND has EE-style on/once.
-Fix: give the worker MessagePort the EventEmitter surface. Then piscina should run.
+### piscina needs MessagePort TRANSFER between threads (deep worker_threads work)
+After EventEmitterAsyncResource + createHistogram, piscina's MAIN thread loads and spawns a
+worker, but the worker fails `port.on is not a function` (worker.js:113). NOT a missing .on —
+milo already bridges MessagePort->EventEmitter (worker_threads.js:16) and parentPort is an
+EventEmitter. The real gap: piscina creates a MessageChannel and TRANSFERS one port to the
+worker via the transfer list. milo's cross-thread postMessage serializes the value
+(_b.postToWorker with {t,v}) and has no transfer-list support, so a live MessagePort cannot
+cross the thread boundary — it arrives as a dead plain object without .on. Real fix is
+MessagePort transfer (a shared channel handle passed to the worker + rebound as a MessagePort
+on the far side). Substantial. Blocks piscina/tinypool and any lib that hands a worker its own
+MessagePort.
 
 ### [x] http.Server.listen({port,host}, cb) fired no callback — fastify hung (FIXED)
 The options-object listen form was parsed as a positional port, so the object landed in
