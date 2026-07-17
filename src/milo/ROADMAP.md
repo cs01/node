@@ -55,6 +55,19 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### tls client swallows a fatal alert entirely — no error, just a silent close
+A client rejected by the server reports NOTHING: node gives
+`ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`, milo emits no error at all and just closes.
+Root cause: in TLS1.3 the client's handshake COMPLETES (sslConnectContinue returns 1,
+secureConnect fires) and the server's alert only arrives on the next READ — so the
+`result === -1` branch is never taken, and sslRead cannot distinguish a fatal alert from a
+clean EOF: it returns undefined for both, so tls.js pushes null and destroys silently.
+DO NOT "fix" this by adding a reason to the result===-1 branch — that branch is dead for this
+case (verified: adding it changed nothing). The fix is in sslRead's CONTRACT: SSL_read
+failing with SSL_ERROR_SSL must be distinguishable from SSL_ERROR_ZERO_RETURN, e.g. a
+distinct return code carrying ERR_get_error, so the read path can destroy WITH an error.
+This is the client-side twin of the tlsClientError gap just fixed on the server.
+
 ### [x] tls client sends its certificate — mutual TLS works (FIXED 2026-07-16)
 Was: tls.connect({cert,key}) dropped both, so an mTLS client presented NO certificate and
 silently connected unauthenticated. Now SSL_use_certificate + SSL_use_PrivateKey PER-SSL
