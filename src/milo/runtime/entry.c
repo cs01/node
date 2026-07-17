@@ -671,11 +671,35 @@ void nm_ssl_shutdown(long long ssl_ptr) {
 
 // TLS server — create server SSL_CTX with cert+key, accept connections
 // Returns SSL_CTX* as i64, or 0 on failure
+// "TLSv1.3" -> TLS1_3_VERSION etc. 0 = caller said nothing, leave the default.
+static int nm_tls_ver(const char* v) {
+    if (!v || !v[0]) return 0;
+    if (strcmp(v, "TLSv1.3") == 0) return TLS1_3_VERSION;
+    if (strcmp(v, "TLSv1.2") == 0) return TLS1_2_VERSION;
+    if (strcmp(v, "TLSv1.1") == 0) return TLS1_1_VERSION;
+    if (strcmp(v, "TLSv1") == 0)   return TLS1_VERSION;
+    return 0;
+}
+
+// min_ver/max_ver/ciphers were previously dropped: a server created with
+// {maxVersion:'TLSv1.2', ciphers:'...'} still negotiated TLSv1.3 with the default list, so a
+// caller could not restrict what its own server would accept. Only visible once
+// getProtocol()/getCipher() stopped returning hardcoded strings.
 long long nm_ssl_server_ctx_new(const char* cert_pem, int cert_len,
-                                 const char* key_pem, int key_len) {
+                                 const char* key_pem, int key_len,
+                                 const char* min_ver, const char* max_ver,
+                                 const char* ciphers, const char* ciphersuites) {
     SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
     if (!ctx) return 0;
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+    int mn = nm_tls_ver(min_ver), mx = nm_tls_ver(max_ver);
+    if (mn) SSL_CTX_set_min_proto_version(ctx, mn);
+    if (mx) SSL_CTX_set_max_proto_version(ctx, mx);
+    // `ciphers` is the TLS<=1.2 list; TLS1.3 suites are a SEPARATE knob and are NOT filtered
+    // by set_cipher_list — node splits these the same way. Without that split, asking for a
+    // 1.2 cipher silently still allows every 1.3 suite.
+    if (ciphers && ciphers[0]) SSL_CTX_set_cipher_list(ctx, ciphers);
+    if (ciphersuites && ciphersuites[0]) SSL_CTX_set_ciphersuites(ctx, ciphersuites);
 
     // Load the leaf, then EVERY remaining cert in the PEM as chain certs. A cert file may
     // bundle intermediates (test/fixtures/keys/agent6-cert.pem is leaf + the ca3 intermediate);

@@ -337,7 +337,13 @@ class Server extends net.Server {
     }
     const certStr = typeof cert === 'string' ? cert : cert.toString();
     const keyStr = typeof key === 'string' ? key : key.toString();
-    this._sslCtx = tcp.sslServerCtxNew(certStr, keyStr);
+    // Forward the caller's tls restrictions. These used to be dropped, so a server created
+    // with {maxVersion:'TLSv1.2', ciphers:'...'} still negotiated TLSv1.3 with the default
+    // cipher list — the caller could not restrict its OWN server.
+    const t = this._tlsOptions || {};
+    this._sslCtx = tcp.sslServerCtxNew(certStr, keyStr,
+                                       t.minVersion || '', t.maxVersion || '',
+                                       t.ciphers || '', t.ciphersuites || '');
     if (!this._sslCtx) {
       process.nextTick(() => this.emit('error', new Error('Failed to create SSL context')));
       return this;

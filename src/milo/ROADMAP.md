@@ -55,12 +55,16 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
-### tls server ignores maxVersion / ciphers options
-A server created with {maxVersion:'TLSv1.2', ciphers:'...'} still negotiates TLSv1.3 with its
-default cipher list — nm_ssl_server_ctx_new takes only cert+key, so every other tls option is
-dropped. Only became visible once getProtocol()/getCipher() stopped returning hardcoded
-strings and started reporting reality. Client-side maxVersion is likely dropped too (same
-shape as the https.js bug that dropped ca/rejectUnauthorized).
+### [x] tls server honours minVersion/maxVersion/ciphers/ciphersuites (FIXED 2026-07-16)
+Was: nm_ssl_server_ctx_new took only cert+key, so a server built with {maxVersion:'TLSv1.2',
+ciphers:'...'} still negotiated TLSv1.3 with the default list — a caller could not restrict
+its OWN server. Note TLS1.3 suites are a SEPARATE knob (SSL_CTX_set_ciphersuites); the
+<=1.2 cipher_list does not filter them, so both are plumbed. tls 26 pass, timeout 6->5.
+
+### tls CLIENT may still drop minVersion/maxVersion/ciphers
+nm_ssl_connect_start takes (fd, hostname, ca, verify_host) — no version/cipher args, so a
+client asking for maxVersion:'TLSv1.2' is likely ignored (it negotiates whatever the server
+offers). Same shape as the server bug just fixed. UNVERIFIED — test before fixing.
 
 ### [x] fetch() corrupted bodies — FIXED 2026-07-16 (http 97 -> 102)
 ClientRequest.end() was not idempotent, so every fetch GET opened TWO connections whose

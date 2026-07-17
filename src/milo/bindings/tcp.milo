@@ -62,7 +62,7 @@ extern fn nm_ssl_read(ssl: i64, buf: *u8, len: i32): i32
 extern fn nm_ssl_write(ssl: i64, data: *u8, len: i32): i32
 extern fn nm_ssl_pending(ssl: i64): i32
 extern fn nm_ssl_shutdown(ssl: i64): void
-extern fn nm_ssl_server_ctx_new(cert: *u8, certLen: i32, key: *u8, keyLen: i32): i64
+extern fn nm_ssl_server_ctx_new(cert: *u8, certLen: i32, key: *u8, keyLen: i32, minVer: *u8, maxVer: *u8, ciphers: *u8, cipherSuites: *u8): i64
 extern fn nm_ssl_accept(ctx: i64, fd: i32): i64
 extern fn nm_ssl_accept_new(ctx: i64, fd: i32): i64
 extern fn nm_ssl_accept_continue(ssl: i64): i32
@@ -1092,7 +1092,8 @@ fn sslShutdown(info: *u8, _ud: *u8): void {
     }
 }
 
-// sslServerCtxNew(certStr, keyStr) → ctx handle (f64), or 0 on failure
+// sslServerCtxNew(certStr, keyStr, minVersion?, maxVersion?, ciphers?, ciphersuites?)
+//   → ctx handle (f64), or 0 on failure
 fn sslServerCtxNew(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     if ci.length() < 2 { return }
@@ -1103,7 +1104,19 @@ fn sslServerCtxNew(info: *u8, _ud: *u8): void {
         var keyBuf: [u8; 16384] = [0; 16384]
         let keyLen = ci.arg(1).writeUtf8(iso, keyBuf as *u8, 16383)
 
-        let ctx = nm_ssl_server_ctx_new(certBuf as *u8, certLen, keyBuf as *u8, keyLen)
+        // Optional tls restrictions; empty string = "caller said nothing, keep the default".
+        var minBuf: [u8; 32] = [0; 32]
+        var maxBuf: [u8; 32] = [0; 32]
+        let csBuf = calloc(1, 4096)
+        let suBuf = calloc(1, 1024)
+        if ci.length() > 2 { ci.arg(2).writeUtf8(iso, minBuf as *u8, 31) }
+        if ci.length() > 3 { ci.arg(3).writeUtf8(iso, maxBuf as *u8, 31) }
+        if ci.length() > 4 { ci.arg(4).writeUtf8(iso, csBuf, 4095) }
+        if ci.length() > 5 { ci.arg(5).writeUtf8(iso, suBuf, 1023) }
+        let ctx = nm_ssl_server_ctx_new(certBuf as *u8, certLen, keyBuf as *u8, keyLen,
+                                        minBuf as *u8, maxBuf as *u8, csBuf, suBuf)
+        free(csBuf)
+        free(suBuf)
         ci.retF64(ctx as f64)
     }
 }
