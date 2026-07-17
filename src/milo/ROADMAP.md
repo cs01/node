@@ -55,6 +55,13 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### tls server ignores maxVersion / ciphers options
+A server created with {maxVersion:'TLSv1.2', ciphers:'...'} still negotiates TLSv1.3 with its
+default cipher list — nm_ssl_server_ctx_new takes only cert+key, so every other tls option is
+dropped. Only became visible once getProtocol()/getCipher() stopped returning hardcoded
+strings and started reporting reality. Client-side maxVersion is likely dropped too (same
+shape as the https.js bug that dropped ca/rejectUnauthorized).
+
 ### [x] fetch() corrupted bodies — FIXED 2026-07-16 (http 97 -> 102)
 ClientRequest.end() was not idempotent, so every fetch GET opened TWO connections whose
 responses interleaved into one shared _chunkBuf. See lifecycle-probes/PLAYBOOK.md 5u.

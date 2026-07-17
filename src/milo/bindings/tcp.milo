@@ -55,6 +55,9 @@ extern fn nm_ssl_connect(fd: i32, hostname: *u8): i64
 extern fn nm_ssl_connect_start(fd: i32, hostname: *u8, caPem: *u8, verifyHost: *u8): i64
 extern fn nm_ssl_connect_continue(ssl: i64): i32
 extern fn nm_ssl_verify_result(ssl: i64): i64
+extern fn nm_ssl_peer_cert_json(ssl: i64): *u8
+extern fn nm_ssl_cipher_info(ssl: i64): *u8
+extern fn nm_ssl_protocol(ssl: i64): *u8
 extern fn nm_ssl_read(ssl: i64, buf: *u8, len: i32): i32
 extern fn nm_ssl_write(ssl: i64, data: *u8, len: i32): i32
 extern fn nm_ssl_pending(ssl: i64): i32
@@ -918,6 +921,55 @@ fn sslConnectStart(info: *u8, _ud: *u8): void {
     }
 }
 
+// Read the ssl handle from arg 0. Three near-identical ops below rather than one helper
+// dispatching on a function pointer — that comparison does not do what it looks like and
+// called the wrong function, returning garbage that OOM'd v8.
+fn _sslArg(ci: CallbackInfo, iso: Isolate): i64 {
+    unsafe {
+        var sslVal: [f64; 1] = [0.0]
+        ci.arg(0).toF64(iso, sslVal as *f64)
+        return sslVal[0] as i64
+    }
+}
+
+// sslPeerCertJson(sslHandle) → JSON string of the peer cert, or "" if none. C mallocs; free it.
+fn sslPeerCertJson(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 1 { return }
+    let iso = ci.isolate()
+    unsafe {
+        let p = nm_ssl_peer_cert_json(_sslArg(ci, iso))
+        if p as i64 == 0 { ci.retStr("" as *u8); return }
+        ci.retStr(p)
+        free(p)
+    }
+}
+
+// sslCipherInfo(sslHandle) → "name/version/bits", or ""
+fn sslCipherInfo(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 1 { return }
+    let iso = ci.isolate()
+    unsafe {
+        let p = nm_ssl_cipher_info(_sslArg(ci, iso))
+        if p as i64 == 0 { ci.retStr("" as *u8); return }
+        ci.retStr(p)
+        free(p)
+    }
+}
+
+// sslProtocol(sslHandle) → e.g. "TLSv1.3". Borrowed from OpenSSL — do NOT free.
+fn sslProtocolOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 1 { return }
+    let iso = ci.isolate()
+    unsafe {
+        let p = nm_ssl_protocol(_sslArg(ci, iso))
+        if p as i64 == 0 { ci.retStr("" as *u8); return }
+        ci.retStr(p)
+    }
+}
+
 // sslVerifyResult(sslHandle) → 0 = chain verified, -2 = peer sent no cert, else X509_V_ERR_*
 fn sslVerifyResultOp(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
@@ -1514,6 +1566,9 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "pollWake" as *u8, pollWake as *u8)
         c.setMethod(exp, "sslConnectStart" as *u8, sslConnectStart as *u8)
         c.setMethod(exp, "sslVerifyResult" as *u8, sslVerifyResultOp as *u8)
+        c.setMethod(exp, "sslPeerCertJson" as *u8, sslPeerCertJson as *u8)
+        c.setMethod(exp, "sslCipherInfo" as *u8, sslCipherInfo as *u8)
+        c.setMethod(exp, "sslProtocol" as *u8, sslProtocolOp as *u8)
         c.setMethod(exp, "sslConnectContinue" as *u8, sslConnectContinueOp as *u8)
         c.setMethod(exp, "sslRead" as *u8, sslRead as *u8)
         c.setMethod(exp, "sslWrite" as *u8, sslWrite as *u8)

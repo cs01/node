@@ -186,9 +186,33 @@ class TLSSocket extends net.Socket {
     return this;
   }
 
-  getPeerCertificate() { return {}; }
-  getCipher() { return { name: 'TLS_AES_256_GCM_SHA384', version: 'TLSv1.3' }; }
-  getProtocol() { return 'TLSv1.3'; }
+  // These three used to return {} and hardcoded strings. That is not just incomplete: code
+  // doing certificate PINNING inspects getPeerCertificate(), found nothing, and could decide
+  // the connection was fine; getCipher()/getProtocol() reported TLSv1.3 whatever was actually
+  // negotiated.
+  getPeerCertificate(detailed) {
+    if (!this._ssl) return {};
+    const json = tcp.sslPeerCertJson(this._ssl);
+    if (!json) return {};   // peer sent no certificate
+    let c;
+    try { c = JSON.parse(json); } catch { return {}; }
+    return c;
+  }
+
+  getCipher() {
+    if (!this._ssl) return null;
+    const info = tcp.sslCipherInfo(this._ssl);   // "name/version/bits"
+    if (!info) return null;
+    const i = info.lastIndexOf('/');
+    const j = info.lastIndexOf('/', i - 1);
+    if (i < 0 || j < 0) return null;
+    return { name: info.slice(0, j), standardName: info.slice(0, j), version: info.slice(j + 1, i) };
+  }
+
+  getProtocol() {
+    if (!this._ssl) return null;
+    return tcp.sslProtocol(this._ssl) || null;
+  }
 }
 
 function connect(options, cb) {

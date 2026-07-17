@@ -470,6 +470,145 @@ long long nm_ssl_connect_start(int fd, const char* hostname, const char* ca_pem,
 // Verification runs even under the default SSL_VERIFY_NONE — that mode only means "don't
 // abort the handshake", the chain result is still computed — so enforcement is the JS
 // layer's job via rejectUnauthorized, exactly as in node.
+// --- peer certificate / cipher introspection -----------------------------------------------
+// getPeerCertificate() used to return {} and getCipher()/getProtocol() returned hardcoded
+// strings. That is not merely incomplete: code doing certificate PINNING inspects this, finds
+// nothing, and can silently decide the connection is fine. A caller-supplied
+// checkServerIdentity got {} too.
+//
+// The seam is a JSON string: milo's JS parses it. Keeps the C side free of V8.
+static void nm_json_escape(const char* in, char* out, size_t outsz) {
+    size_t o = 0;
+    for (size_t i = 0; in[i] && o + 7 < outsz; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if (c == '"' || c == '\\') { out[o++] = '\\'; out[o++] = c; }
+        else if (c < 0x20) { o += snprintf(out + o, outsz - o, "\\u%04x", c); }
+        else out[o++] = c;
+    }
+    out[o] = 0;
+}
+
+// X509_NAME -> {"CN":"..","O":".."}. Node exposes the short names as keys.
+static void nm_name_to_json(X509_NAME* nm, char* buf, size_t bufsz) {
+    size_t o = 0;
+    o += snprintf(buf + o, bufsz - o, "{");
+    int n = nm ? X509_NAME_entry_count(nm) : 0;
+    int first = 1;
+    for (int i = 0; i < n && o + 128 < bufsz; i++) {
+        X509_NAME_ENTRY* e = X509_NAME_get_entry(nm, i);
+        ASN1_OBJECT* obj = X509_NAME_ENTRY_get_object(e);
+        ASN1_STRING* val = X509_NAME_ENTRY_get_data(e);
+        const char* key = OBJ_nid2sn(OBJ_obj2nid(obj));
+        unsigned char* v = NULL;
+        int vlen = ASN1_STRING_to_UTF8(&v, val);
+        if (vlen < 0) continue;
+        char esc[512];
+        nm_json_escape((const char*)v, esc, sizeof(esc));
+        o += snprintf(buf + o, bufsz - o, "%s\"%s\":\"%s\"", first ? "" : ",", key ? key : "?", esc);
+        first = 0;
+        OPENSSL_free(v);
+    }
+    snprintf(buf + o, bufsz - o, "}");
+}
+
+static void nm_fingerprint(X509* c, const EVP_MD* md, char* out, size_t outsz) {
+    unsigned char d[EVP_MAX_MD_SIZE]; unsigned int dl = 0;
+    out[0] = 0;
+    if (!X509_digest(c, md, d, &dl)) return;
+    size_t o = 0;
+    for (unsigned int i = 0; i < dl && o + 4 < outsz; i++)
+        o += snprintf(out + o, outsz - o, "%s%02X", i ? ":" : "", d[i]);
+}
+
+static void nm_asn1_time(const ASN1_TIME* t, char* out, size_t outsz) {
+    out[0] = 0;
+    BIO* b = BIO_new(BIO_s_mem());
+    if (!b) return;
+    if (ASN1_TIME_print(b, t)) {
+        char* p = NULL; long n = BIO_get_mem_data(b, &p);
+        if (n > 0 && (size_t)n < outsz) { memcpy(out, p, n); out[n] = 0; }
+    }
+    BIO_free(b);
+}
+
+// Peer certificate as a JSON string, or "" when the peer sent none. Caller must free().
+char* nm_ssl_peer_cert_json(long long ssl_ptr) {
+    SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
+    size_t cap = 16384;
+    char* out = (char*)malloc(cap);
+    if (!out) return NULL;
+    out[0] = 0;
+    if (!ssl) return out;
+    X509* c = SSL_get_peer_certificate(ssl);
+    if (!c) return out;
+
+    char subj[2048], iss[2048], vf[128], vt[128], fp1[256], fp256[256], san[2048];
+    nm_name_to_json(X509_get_subject_name(c), subj, sizeof(subj));
+    nm_name_to_json(X509_get_issuer_name(c), iss, sizeof(iss));
+    nm_asn1_time(X509_get0_notBefore(c), vf, sizeof(vf));
+    nm_asn1_time(X509_get0_notAfter(c), vt, sizeof(vt));
+    nm_fingerprint(c, EVP_sha1(), fp1, sizeof(fp1));
+    nm_fingerprint(c, EVP_sha256(), fp256, sizeof(fp256));
+
+    // subjectaltname: node's exact format, "DNS:a, DNS:b, IP Address:1.2.3.4"
+    san[0] = 0;
+    GENERAL_NAMES* gens = (GENERAL_NAMES*)X509_get_ext_d2i(c, NID_subject_alt_name, NULL, NULL);
+    if (gens) {
+        size_t o = 0;
+        for (int i = 0; i < sk_GENERAL_NAME_num(gens) && o + 128 < sizeof(san); i++) {
+            GENERAL_NAME* g = sk_GENERAL_NAME_value(gens, i);
+            if (g->type == GEN_DNS) {
+                unsigned char* v = NULL;
+                if (ASN1_STRING_to_UTF8(&v, g->d.dNSName) >= 0) {
+                    char esc[512]; nm_json_escape((const char*)v, esc, sizeof(esc));
+                    o += snprintf(san + o, sizeof(san) - o, "%sDNS:%s", o ? ", " : "", esc);
+                    OPENSSL_free(v);
+                }
+            } else if (g->type == GEN_IPADD) {
+                unsigned char* p = g->d.iPAddress->data;
+                if (g->d.iPAddress->length == 4)
+                    o += snprintf(san + o, sizeof(san) - o, "%sIP Address:%d.%d.%d.%d",
+                                  o ? ", " : "", p[0], p[1], p[2], p[3]);
+            }
+        }
+        GENERAL_NAMES_free(gens);
+    }
+
+    char serial[128]; serial[0] = 0;
+    { BIGNUM* bn = ASN1_INTEGER_to_BN(X509_get_serialNumber(c), NULL);
+      if (bn) { char* h = BN_bn2hex(bn); if (h) { snprintf(serial, sizeof(serial), "%s", h); OPENSSL_free(h); } BN_free(bn); } }
+
+    snprintf(out, cap,
+             "{\"subject\":%s,\"issuer\":%s,\"valid_from\":\"%s\",\"valid_to\":\"%s\","
+             "\"fingerprint\":\"%s\",\"fingerprint256\":\"%s\",\"serialNumber\":\"%s\""
+             "%s%s%s}",
+             subj, iss, vf, vt, fp1, fp256, serial,
+             san[0] ? ",\"subjectaltname\":\"" : "", san[0] ? san : "", san[0] ? "\"" : "");
+    X509_free(c);
+    return out;
+}
+
+// Negotiated cipher, "name/version/bits" — these were hardcoded to TLS_AES_256_GCM_SHA384.
+char* nm_ssl_cipher_info(long long ssl_ptr) {
+    SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
+    char* out = (char*)malloc(256);
+    if (!out) return NULL;
+    out[0] = 0;
+    if (!ssl) return out;
+    const SSL_CIPHER* ch = SSL_get_current_cipher(ssl);
+    if (!ch) return out;
+    int bits = 0;
+    SSL_CIPHER_get_bits(ch, &bits);
+    snprintf(out, 256, "%s/%s/%d", SSL_CIPHER_get_name(ch), SSL_CIPHER_get_version(ch), bits);
+    return out;
+}
+
+// Negotiated protocol — was hardcoded 'TLSv1.3'.
+const char* nm_ssl_protocol(long long ssl_ptr) {
+    SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
+    return ssl ? SSL_get_version(ssl) : "";
+}
+
 long nm_ssl_verify_result(long long ssl_ptr) {
     SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
     if (!ssl) return -1;
