@@ -195,6 +195,32 @@ function connect(options, cb) {
 
   net._ensurePoll();
 
+  // tls.connect({socket}) — run TLS over a socket the caller already owns (HTTP CONNECT
+  // proxies, STARTTLS). The caller's socket may be connected already, or not yet: on-empty-
+  // socket hands over a fresh net.Socket() and calls socket.connect() afterwards, so adopt
+  // on 'connect' in that case.
+  if (options.socket) {
+    const inner = options.socket;
+    const adopt = () => {
+      if (tlsSock.destroyed) return;
+      tlsSock._fd = inner._fd;
+      // _sockets maps fd -> its ONE live owner. Two owners for one fd is the fd-reuse race
+      // (playbook 0a), so this replaces the entry rather than adding: the inner socket must
+      // stop receiving events the moment TLS takes over.
+      net.Socket._sockets.set(tlsSock._fd, tlsSock);
+      inner._adoptedByTls = true;
+      tcp.pollRemove(tlsSock._fd, tcp.EVFILT_WRITE);
+      tlsSock.remoteAddress = inner.remoteAddress;
+      tlsSock.remotePort = inner.remotePort;
+      tlsSock._connecting = false;
+      if (!tlsSock._startTLS()) return;
+      tcp.pollAdd(tlsSock._fd, tcp.EVFILT_READ);
+    };
+    if (inner._connecting || !(inner._fd >= 0)) inner.once('connect', adopt);
+    else process.nextTick(adopt);
+    return tlsSock;
+  }
+
   const dns = require('dns');
   // The family is fixed at socket() time, so it must come from the RESOLVED ip. This used to
   // call tcp.socket() with no family (v4-only), map 'localhost' to 127.0.0.1 by hand, and

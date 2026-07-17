@@ -55,7 +55,8 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
-### tls.connect({socket}) is ignored — last 3 red tls lifecycle tests
+### [x] tls.connect({socket}) — IMPLEMENTED 2026-07-16 (tls 23 -> 25, timeout 10 -> 7). Remaining: test-tls-inception (nested tls-over-tls), and tls.js still carries a duplicate connect path that bypasses net.js.
+### (original) tls.connect({socket}) is ignored
 tls.connect always allocates its own fd and never reads options.socket, so a caller-supplied
 socket is silently dropped and the connection hangs. Blocks test-tls-inception,
 test-tls-on-empty-socket, test-tls-reuse-host-from-socket. Real node feature (HTTP CONNECT

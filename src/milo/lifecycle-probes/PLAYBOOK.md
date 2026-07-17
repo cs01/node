@@ -749,7 +749,17 @@ Note `_wantWrite` bookkeeping gotcha if you rebuild it: the flag starts `undefin
 naive `if (on === !!this._writeRegistered) return;` early-returns on the first
 deregister-while-actually-registered and the fd spins anyway. Set the flag at EVERY pollAdd site.
 
-## 5q. THE 3 EX-SPIN TESTS NOW HANG FOR A PLAIN FEATURE GAP: tls.connect({socket}) (2026-07-16)
+## 5q. DONE (2026-07-16): tls.connect({socket}) implemented. tls 23 -> 25, TIMEOUT 10 -> 7.
+Adopts the caller's socket: takes `inner._fd`, REPLACES the `_sockets` entry (one fd has
+exactly one live owner — two owners is the 0a fd-reuse race), drops the connect-time WRITE
+registration, then `_startTLS()` + READ. The caller's socket may not be connected yet
+(on-empty-socket hands over a fresh `net.Socket()` and calls `socket.connect()` afterwards),
+so adopt on 'connect' when `_connecting` or no fd yet; otherwise adopt on nextTick.
+Fixed on-empty-socket + reuse-host-from-socket; wrap-econnreset-socket went TIMEOUT -> FAIL
+(a hang became an honest failure). **test-tls-inception still hangs** — nested TLS-over-TLS,
+a different problem; the duplicate connect path noted below is still NOT deleted.
+
+## 5q-old. (original report)
 
 After 5l killed the spins, `test-tls-inception`, `test-tls-on-empty-socket` and
 `test-tls-reuse-host-from-socket` TIMEOUT instead of OOM. **They are not lifecycle bugs.**
