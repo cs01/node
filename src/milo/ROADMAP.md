@@ -55,6 +55,23 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### http2 silently drops trailers — breaks gRPC
+A server calling `stream.sendTrailers({'grpc-status':'0'})` produces NO 'trailers' event on
+the client and no error: node fires it with the values. **gRPC carries its status in
+trailers**, so every gRPC call would complete with no status. `get trailers() { return {} }`
+and `get rawTrailers() { return [] }` (http2.js:483-484) are the visible half — they report an
+empty object rather than admitting nothing was parsed. VERIFIED against the oracle
+2026-07-16.
+
+### stub sweep: other fns that return a plausible constant instead of failing
+Found by grepping lib/*.js for bodies that are just `return <constant>` (the pattern behind
+most of 2026-07-16's bugs: a stub that CLAIMS success rather than failing loudly). UNVERIFIED
+— confirm against the oracle before acting:
+- `async_hooks.js:143 executionAsyncResource() { return {}; }`
+- `worker_threads.js:129-130 get stdout()/get stderr() { return null; }` (node exposes real
+  streams when stdout:true/stderr:true is passed)
+Most other hits in that grep are legitimate (proxy traps, loop predicates) — do not "fix" them.
+
 ### [x] tls client swallows a fatal alert — FIXED 2026-07-16
 Root cause was NOT the handshake branch (that diagnosis is preserved below because the
 obvious fix there is dead code). It was sslRead's binding: nm_ssl_read already returned -1
