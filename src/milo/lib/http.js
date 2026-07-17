@@ -801,6 +801,15 @@ class ClientRequest extends EventEmitter {
   end(data, encoding, cb) {
     if (typeof data === 'function') { cb = data; data = undefined; }
     if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
+    // end() must be idempotent: a bare re-end() is a no-op in node. It was not here — it
+    // called _send() unconditionally, so a second end() opened a SECOND dns lookup, tls
+    // connection and request. fetch hit this every GET (https.js's _makeRequest already
+    // ends the request, then fetch ends it again), and both responses then fed the one
+    // shared _chunkBuf: on a real network their records interleave, desync the chunk-size
+    // parser, and one connection's 0\r\n\r\n terminates the other's res — 'end' fires early
+    // and silently with a corrupt body. https.get was immune only because it happens to
+    // guard with `if (!req.finished)`.
+    if (this.finished) { if (cb) this.once('finish', cb); return this; }
     if (data) this.write(data, encoding);
     this.finished = true;
     if (cb) this.once('finish', cb);
