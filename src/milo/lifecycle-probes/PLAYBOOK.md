@@ -966,7 +966,27 @@ first; a probe that passes both ways is the same vacuous-pass pattern this playb
 an error?" but "does the real world do this routinely?" I verified the fatal path fired on a
 genuine alert and never checked WHAT ELSE landed in it.
 
-## 5w. app gzip truncation: milo's gzip is CORRECT; the compression STREAM STALLS (2026-07-16)
+## 5w. SOLVED (2026-07-16): the app gzip truncation was a Writable.write()/'drain' bug.
+
+**FIXED in 5531a4f4107.** Root cause in stream.js, two coupled divergences from node:
+(1) write() computed its return value BEFORE dispatching to _write; node computes it AFTER
+(writeOrBuffer), so a synchronously-completing _write (ZlibTransform is fully sync) has
+already drained state.length and node returns TRUE — milo returned FALSE. (2) 'drain' was
+emitted SYNCHRONOUSLY inside write(); node defers to nextTick. Victim: tRPC's node-http
+adapter does `if (res.write(chunk)===false) await res.once('drain')`. milo returned false AND
+had already fired 'drain' before write() returned, so the await never resolved: the write
+loop, res.flush() and res.end() never ran, the gzip never got Z_FINISH -> truncated ~57KB
+body, matching the `n=1 write, no end` instrumentation exactly.
+Fix: compute ret/needDrain AFTER dispatch (node's writeOrBuffer order); defer both drain
+emits via _emitDrainTick() (nextTick + state re-check + dedup). Verified: live app webcams
+200/valid ~1MB (all 3 batch items complete), stream 70->73 (incl node's own
+test-stream-await-drain-...-recursion-write), http 102, probes 9/9, cpu-audit 0 spinning.
+**Lesson: every synthetic repro missed it** — res.json does one res.end() with no drain-wait;
+only an `await once('drain')` writer over a SYNC transform triggers it. The bug lived in the
+gap between what I could synthesize and what tRPC actually does. Found by a fresh-context
+subagent after i'd ruled out gzip/buffers/close-destroy and narrowed to "stream stall".
+
+## 5w-old. (original investigation, kept for the ruled-out list)
 
 A real express+compression+trpc app truncates a large gzipped response to ~57KB gzip /
 ~899KB decoded (node 65KB / 1011KB valid); the block renders blank. Instrumented milo's
