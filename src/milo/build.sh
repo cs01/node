@@ -109,7 +109,35 @@ P2=$!
     fi
 ) &
 P3=$!
-wait $P1 $P2 $P3 || exit 1
+(
+    # Node-API. 129 of 161 functions are node's OWN js_native_api_v8.cc compiled against our
+    # V8 — not a reimplementation. It is 3748 lines with one node:: reference and zero uv_
+    # ones, and node ships js_native_api_v8_internals.h as a porting seam for exactly this.
+    #
+    # The copies below are NOT a fork: `#include "env-inl.h"` resolves from the including
+    # file's own directory first, so a -I shim can never shadow node's. Putting verbatim
+    # copies next to our stub env-inl.h/util-inl.h is the only way to compile node's file
+    # unmodified. They regenerate every build, so node's source stays the source of truth.
+    NAPI="$OUT/napi"
+    mkdir -p "$NAPI"
+    cp "$NODE_DIR/src/milo/runtime/napi/js_native_api_v8_internals.h" "$NAPI/"
+    cp "$NODE_DIR/src/js_native_api_v8.cc" "$NODE_DIR/src/js_native_api_v8.h" "$NAPI/"
+    for stub in env-inl util-inl; do
+        printf '#pragma once\n#include "js_native_api_v8_internals.h"\n' > "$NAPI/$stub.h"
+    done
+    NAPI_INC="-I$NAPI -I$NODE_DIR/src -I$NODE_DIR/deps/v8/include"
+    if needs_rebuild "$NODE_DIR/src/js_native_api_v8.cc" "$OUT/js_native_api_v8.o" || \
+       needs_rebuild "$NODE_DIR/src/milo/runtime/napi/js_native_api_v8_internals.h" "$OUT/js_native_api_v8.o"; then
+        clang++ -c -std=c++20 $NAPI_INC -Wno-unused-parameter -Wno-deprecated-declarations \
+          -o "$OUT/js_native_api_v8.o" "$NAPI/js_native_api_v8.cc" || exit 1
+    fi
+    if needs_rebuild "$NODE_DIR/src/milo/runtime/napi/milo_node_api.cc" "$OUT/milo_node_api.o"; then
+        clang++ -c -std=c++20 $NAPI_INC -Wno-unused-parameter \
+          -o "$OUT/milo_node_api.o" "$NODE_DIR/src/milo/runtime/napi/milo_node_api.cc" || exit 1
+    fi
+) &
+P4=$!
+wait $P1 $P2 $P3 $P4 || exit 1
 
 echo "=== linking milo-node ==="
 clang++ -o "$OUT/milo-node" \
@@ -133,6 +161,8 @@ clang++ -o "$OUT/milo-node" \
   "$OUT/milo_zlib.o" \
   "$OUT/milo_vm.o" \
   "$OUT/v8capi.o" \
+  "$OUT/js_native_api_v8.o" \
+  "$OUT/milo_node_api.o" \
   -L"$OUT" -L"$OUT/gen/release" \
   -lv8_base_without_compiler -lv8_compiler -lv8_libplatform -lv8_libbase \
   -lv8_init -lv8_initializers -lv8_snapshot -lv8_zlib -labseil \
