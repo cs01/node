@@ -55,6 +55,21 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### large gzipped trpc/express responses truncate at ~57KB gzip (~899KB decoded) — NOT YET FIXED
+A real app (express + compression + trpc): a single large procedure's gzipped response is cut
+to ~57KB gzip / ~899KB decoded (node: 65KB / 1014KB, valid); the gzip stream is truncated so
+it won't fully decompress and the block renders blank. NOT the batch and NOT the failing
+driveTime procedure — `webcams` alone truncates identically. Uncompressed is byte-perfect.
+RULED OUT (all deliver fully, verified vs oracle): raw net.Socket many-writes; http keep-alive
+many-writes; createGzip .pipe(res); createGzip write+Z_SYNC_FLUSH; bare express+compression
+res.json (494KB gzip delivered whole). The 3 truncation bugs fixed 2026-07-16 (zlib 16KB
+output cap x2, http Connection:close destroy-before-drain) did NOT fix this one.
+**KEY LEAD for next session:** instrumenting milo's ServerResponse chunked write path
+(MILO_RES_DEBUG) produced ZERO hits on the app's response — so express+compression+trpc writes
+the body through a DIFFERENT path than ServerResponse._chunked. Find that path first (likely a
+res.end(buffer) or a Content-Length branch, or express overriding res.write); the drop is
+there, not in the chunked framing every synthetic test exercised.
+
 ### [~] https server: POST bodies now buffer to Content-Length (PARTIAL fix 2026-07-16)
 Was the single worst lie: the hand-rolled parser fired 'request' + push(null) on the FIRST
 data chunk containing the header terminator, dropping any body in a later TLS record and
