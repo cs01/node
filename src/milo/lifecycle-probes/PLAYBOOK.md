@@ -597,7 +597,25 @@ node's resets both sides. That is why the readable reset above had to be done by
 net.js. Fixing `_undestroy` properly is probably the right move — but it is stream.js, so
 ladder net+http+timers after.
 
-## 5l. THE LAST 3 SPINS IN THE SUITE — tls.js needs a redesign, not a patch (2026-07-16)
+## 5l. SOLVED (2026-07-16, attempt 5). The spins are gone. Read the RESOLUTION first.
+
+**RESOLUTION: the WRITE spin was never the disease — net.js drained TLS sockets at the RAW
+TCP layer.** On EV_EOF, net.js called `recvBinary(fd)` directly, bypassing SSL, pushed null,
+and deregistered reads via `_stopReading()`. But SSL usually has NOT seen its own EOF yet
+(`sslRead` still reports WANT_READ), so the socket became unreadable forever and was never
+destroyed — pinned in `_sockets`, io=true, loop never exits (`socks=[8] srvs=[]`). The WRITE
+spin masked this by re-firing `_onReadable` until `sslRead` finally reported closed, so
+teardown DEPENDED on the busy-loop. Remove the spin and teardown broke — which is why
+attempts 1-4 each lost `connect-no-host` and looked like the spin was load-bearing.
+Fix: on EV_EOF, a TLS socket drains via `_onReadable()` (SSL) and is then destroyed
+unconditionally — TCP EOF ends the TLS session, there is no half-open TLS. With that in
+place the READ-only handshake lands clean: **tls 23 PASS held, OOM 3 -> 0, spin CPU
+9.2s -> 0.05s, net 57/5 unchanged, probes 9/9.**
+Lesson: four attempts blamed the mechanism that EXPOSED the bug. A masked defect looks like
+the unmasking change's fault. When removing X breaks Y, ask what X was silently doing FOR Y.
+
+**Historical (attempts 1-4) — the reasoning that was wrong, kept deliberately:**
+## 5l-old. THE LAST 3 SPINS — tls.js needs a redesign, not a patch (2026-07-16)
 
 `test-tls-inception`, `test-tls-on-empty-socket`, `test-tls-reuse-host-from-socket` are the
 ONLY spins left in 681 tests (everything else now sleeps). Signature:

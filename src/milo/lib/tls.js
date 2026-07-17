@@ -223,9 +223,7 @@ function connect(options, cb) {
     this._connecting = false;
     tcp.pollRemove(this._fd, tcp.EVFILT_WRITE);
     if (!this._startTLS()) return;
-    // Register for both read and write events — SSL handshake may need either
     tcp.pollAdd(this._fd, tcp.EVFILT_READ);
-    tcp.pollAdd(this._fd, tcp.EVFILT_WRITE);
   };
 
   if (net.isIP(host)) {
@@ -286,7 +284,6 @@ class Server extends net.Server {
 
       net._ensurePoll();
       tcp.pollAdd(clientFd, tcp.EVFILT_READ);
-      tcp.pollAdd(clientFd, tcp.EVFILT_WRITE);
       net.Socket._sockets.set(clientFd, sock);
 
       tlsServer._connections++;

@@ -55,6 +55,12 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### [x] tls busy-spin OOMs (FIXED 2026-07-16)
+Last 3 spins in the suite are gone: net.js drained TLS sockets with raw recvBinary on EV_EOF,
+bypassing SSL and deregistering reads, so the socket was never destroyed and pinned the loop;
+the WRITE spin was masking it by re-driving _onReadable. TLS EOF now drains via SSL + destroys,
+which unblocked the READ-only handshake. tls OOM 3 -> 0, 23 PASS held, spin CPU 9.2s -> 0.05s.
+
 ### [x] SECURITY: the TLS client verified no certificates (found + FIXED 2026-07-16)
 Fixed: SSL_get_verify_result + per-connection `ca:` store + rejectUnauthorized enforcement;
 createSecureContext no longer eats `ca`; server now sends its full intermediate chain
