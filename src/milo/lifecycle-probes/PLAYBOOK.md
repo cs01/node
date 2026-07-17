@@ -89,7 +89,8 @@ The premise this playbook was built on — "the hangs are busy-loops that OOM at
 remaining net+tls TIMEOUT was CPU-sampled at 6s and **all 15 sleep (0.04-0.09s CPU). Zero
 spin. Zero OOM.**
 ```
-net: 57 PASS / 0 OOM /  5 TIMEOUT      (start of grind: 44 PASS / 3 OOM / 12 TIMEOUT)
+net: 58 PASS / 0 OOM /  4 TIMEOUT      (start of grind: 44 PASS / 3 OOM / 12 TIMEOUT)
+     [end()-before-connect fixed 2026-07-17: _final now defers FIN to 'connect' when fd<0]
 tls: 23 PASS / 0 OOM / 10 TIMEOUT      (3 spin-OOMs killed by 5l)
 probes 9/9
 ```

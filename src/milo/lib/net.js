@@ -395,6 +395,10 @@ class Socket extends Duplex {
   }
 
   _final(cb) {
+    // end() before connect: no fd yet, so defer the FIN until 'connect' fires,
+    // else the shutdown is silently dropped and the peer never sees EOF (node
+    // lib/net.js does the same once('connect') deferral).
+    if (this._connecting) { this.once('connect', () => this._final(cb)); return; }
     if (this._fd >= 0) tcp.shutdown(this._fd, 1); // SHUT_WR
     cb();
   }
