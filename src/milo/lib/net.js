@@ -145,8 +145,12 @@ class Socket extends Duplex {
       isPipe = true;
     }
     if (isPipe) { const e = new Error('Pipe/Unix sockets not yet implemented'); e.code = 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM'; throw e; }
-    if (typeof host === 'function') { cb = host; host = '127.0.0.1'; }
-    if (!host) host = '127.0.0.1';
+    // node defaults connect()'s host to 'localhost', NOT 127.0.0.1 (lib/net.js). It matters:
+    // `client.connect(server.address())` passes {address, family, port} with no `host` key,
+    // so the default decides the family — and on this box localhost resolves to ::1. With
+    // 127.0.0.1 milo dialed v4 while the server sat on ::1 -> ECONNREFUSED.
+    if (typeof host === 'function') { cb = host; host = 'localhost'; }
+    if (!host) host = 'localhost';
     if (port !== undefined && typeof port !== 'number' && typeof port !== 'string') {
       const e = new TypeError(`The "options.port" option must be of type number or string. Received type ${typeof port} (${String(port)})`);
       e.code = 'ERR_INVALID_ARG_TYPE'; throw e;
@@ -197,6 +201,11 @@ class Socket extends Duplex {
       }
       lookupFn(host, { family: _familyOpt || 0, hints: _hintsOpt }, (err, ip, family) => {
         this.emit('lookup', err, ip, family, host); // node emits this even on error
+        // autoSelectFamily (node's default is TRUE, verified: getDefaultAutoSelectFamily()).
+        // 'localhost' resolves to ::1 on this box, so a v6-first connect to a v4-only
+        // listener is refused; node tries the other family before giving up. Remember how to
+        // retry, unless the caller pinned a family.
+        if (!_familyOpt && family === 6) this._afFallback = { host, port, lookupFn };
         if (this.destroyed || !this._connecting) return; // destroyed while resolving
         if (err) {
           if (!err.host) err.host = host;
@@ -253,6 +262,25 @@ class Socket extends Duplex {
       soErr = (tcp.soError ? tcp.soError(this._fd) : 0) || 61;
     } else if (tcp.soError) {
       soErr = tcp.soError(this._fd);
+    }
+    if (soErr > 0 && this._afFallback && !this._afTried) {
+      // autoSelectFamily: retry once on the other family before reporting failure
+      this._afTried = true;
+      const { host, port, lookupFn } = this._afFallback;
+      this._afFallback = null;
+      const fd = this._fd;
+      try { tcp.pollRemove(fd, EVFILT_WRITE); } catch {}
+      try { tcp.pollRemove(fd, EVFILT_READ); } catch {}
+      if (Socket._sockets.get(fd) === this) Socket._sockets.delete(fd);
+      try { tcp.close(fd); } catch {}
+      this._fd = -1;
+      this._connecting = true;
+      lookupFn(host, { family: 4 }, (e2, ip4) => {
+        if (this.destroyed) return;
+        if (e2 || !ip4) { const er = new Error(`connect ECONNREFUSED ${host}:${port}`); er.code = 'ECONNREFUSED'; er.syscall = 'connect'; this.destroy(er); return; }
+        this._doConnect(ip4, port);
+      });
+      return;
     }
     if (soErr > 0) {
       const code = _CONNECT_ERRNO[soErr] || ('UNKNOWN');
@@ -557,6 +585,21 @@ class Server extends EventEmitter {
     }
     if (cb) this.once('listening', cb);
 
+    // node resolves a hostname before binding: listen(0,'localhost') binds ::1, it does not
+    // hand 'localhost' to bind(). milo passed it straight through, buildSockAddr correctly
+    // refused a non-literal, and the failure surfaced as a hardcoded 'bind EADDRINUSE'.
+    if (host && host !== DEFAULT_HOST && isIP(host) === 0) {
+      require('dns').lookup(host, (err, ip) => {
+        if (err) { err.syscall = 'listen'; this.emit('error', err); return; }
+        this._listenOn(ip, port, backlog);
+      });
+      return this;
+    }
+    this._listenOn(host, port, backlog);
+    return this;
+  }
+
+  _listenOn(host, port, backlog) {
     ensurePoll();
     // A ':' means an IPv6 literal, and the socket's family is fixed at socket() time —
     // long before bind() sees the host. Creating an AF_INET socket and then binding a v6
@@ -571,23 +614,25 @@ class Server extends EventEmitter {
     this._fd = tcp.socket(family);
     if (this._fd < 0) {
       process.nextTick(() => this.emit('error', new Error('socket() failed')));
-      return this;
+      return;
     }
 
     if (tcp.bind(this._fd, host, port) !== 0) {
       tcp.close(this._fd);
       this._fd = -1;
+      // NB the errno is a guess: tcp.bind only reports pass/fail, so a genuine EADDRINUSE
+      // and e.g. EAFNOSUPPORT are indistinguishable here. Make tcp.bind return -errno to fix.
       const err = new Error('bind EADDRINUSE ' + (host || '0.0.0.0') + ':' + port);
       err.code = 'EADDRINUSE'; err.errno = -48; err.syscall = 'bind'; err.address = '0.0.0.0'; err.port = port;
       process.nextTick(() => this.emit('error', err));
-      return this;
+      return;
     }
 
     if (tcp.listen(this._fd, backlog) !== 0) {
       tcp.close(this._fd);
       this._fd = -1;
       process.nextTick(() => this.emit('error', new Error('listen() failed')));
-      return this;
+      return;
     }
 
     this._listening = true;
@@ -602,7 +647,6 @@ class Server extends EventEmitter {
     // iterations so beforeExit can re-fire, rather than collapsing into one
     // nextTick drain.
     setImmediate(() => this.emit('listening'));
-    return this;
   }
 
   _onAcceptable() {
