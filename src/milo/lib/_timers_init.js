@@ -268,8 +268,9 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
       const ms = _tb.msUntilNext();
       if (ms >= 0) waitMs = Math.min(waitMs, ms);
     }
-    // poll worker queues promptly (cross-thread messages aren't I/O events)
-    if (hasWorkers) waitMs = Math.min(waitMs, 2);
+    // Workers no longer force a 2ms poll cap: a worker posting a message triggers EVFILT_USER
+    // (tcp.pollWake) which returns pollWait immediately, so the loop can block properly
+    // instead of waking 500x/second to busy-check queues that are almost always empty.
 
     if (waitMs < 1 && !hasImmediates && !hasPendingClose) waitMs = 1;
 

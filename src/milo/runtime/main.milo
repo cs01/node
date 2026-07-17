@@ -25,6 +25,9 @@ extern fn cfmakeraw(termios: *u8): void
 // ioctl is variadic in C — milo cannot call it directly on AArch64 (the compiler now
 // hard-errors on exactly this), so it is wrapped in binding_registry.c. See the fcntl fix.
 extern fn nm_ioctl_winsize(fd: i32, ws: *u8): i32
+// Wake the main loop after a worker posts to the parent — without this the loop had to poll
+// worker queues every 2ms because nothing could interrupt its kqueue wait.
+extern fn nm_kq_wake_main(): i32
 
 // Binding registry
 extern fn nm_binding_register(name: *u8, init: *u8): void
@@ -528,6 +531,11 @@ fn msgPush(chan: *WChannel, toParent: i32, bytes: *u8, len: i64, sabs: *u8): voi
             }
         }
         pthread_mutex_unlock(chan as *u8)
+        // Interrupt the parent's kqueue wait so it drains this message now rather than at
+        // the next timed poll. Unlock first: the wake can schedule the parent immediately.
+        if toParent != 0 {
+            nm_kq_wake_main()
+        }
     }
 }
 

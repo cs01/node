@@ -31,6 +31,11 @@ extern fn recvfrom(fd: i32, buf: *u8, len: i64, flags: i32, addr: *u8, addrlen: 
 
 // kqueue
 extern fn kqueue(): i32
+// Cross-thread loop wakeup (EVFILT_USER). C-side because kevent() must be callable from any
+// thread; it is the uv_async_send equivalent and what napi_threadsafe_function needs.
+extern fn nm_kq_wake_register(kq: i32): i32
+extern fn nm_kq_wake(kq: i32): i32
+extern fn nm_kq_set_main(kq: i32): void
 extern fn kevent(kq: i32, changelist: *u8, nchanges: i32, eventlist: *u8, nevents: i32, timeout: *u8): i32
 
 // inet_pton / inet_ntop / getsockname
@@ -685,8 +690,18 @@ fn pollInit(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     
         kq_fd = kqueue()
+        // Arm the wakeup channel up front so any thread can wake this loop.
+        nm_kq_wake_register(kq_fd)
+        // First caller is the main thread; workers must not steal the wake target.
+        nm_kq_set_main(kq_fd)
         ci.retI32(kq_fd)
     
+}
+
+// pollWake() — wake the loop from anywhere (EVFILT_USER trigger). Thread-safe.
+fn pollWake(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    ci.retI32(nm_kq_wake(kq_fd))
 }
 
 // pollAdd(fd, filter) — add fd to kqueue (filter: -1=read, -2=write)
@@ -1491,6 +1506,7 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "watchFile" as *u8, tcpWatchFile as *u8)
         c.setMethod(exp, "unwatchFile" as *u8, tcpUnwatchFile as *u8)
         c.setMethod(exp, "sslConnect" as *u8, sslConnect as *u8)
+        c.setMethod(exp, "pollWake" as *u8, pollWake as *u8)
         c.setMethod(exp, "sslConnectStart" as *u8, sslConnectStart as *u8)
         c.setMethod(exp, "sslVerifyResult" as *u8, sslVerifyResultOp as *u8)
         c.setMethod(exp, "sslConnectContinue" as *u8, sslConnectContinueOp as *u8)

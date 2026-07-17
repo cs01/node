@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/event.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <errno.h>
@@ -93,6 +94,45 @@ int nm_set_cloexec(int fd) {
 // this, which is how it was caught — wrap it here where the C ABI is correct.
 int nm_ioctl_winsize(int fd, void* ws) {
     return ioctl(fd, TIOCGWINSZ, ws);
+}
+
+// --- cross-thread event-loop wakeup (EVFILT_USER) -----------------------------------------
+// Until this existed there was NO way to wake milo's kqueue from another thread, so the loop
+// capped its poll at 2ms whenever workers existed and busy-checked their queues
+// (_timers_init.js). kevent() is thread-safe, so a triggered EVFILT_USER is the kqueue-native
+// equivalent of uv_async_send — and the primitive napi_threadsafe_function needs.
+#define NM_WAKE_IDENT 0x6d696c6f  /* 'milo' — cannot collide with an fd ident */
+
+int nm_kq_wake_register(int kq) {
+    struct kevent kev;
+    // EV_CLEAR = edge-triggered: one trigger, exactly one wakeup. A level-triggered wakeup
+    // would re-fire every poll and spin the loop to a v8 OOM — the exact failure this
+    // codebase already paid for with stale fd registrations.
+    EV_SET(&kev, NM_WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    return kevent(kq, &kev, 1, NULL, 0, NULL);
+}
+
+int nm_kq_wake(int kq);
+
+// kq_fd is thread_local in tcp.milo, so a worker thread cannot see the parent's kqueue.
+// The main loop publishes its kq here once (first pollInit wins — the main thread always
+// initialises poll before any worker exists) so any thread can wake it.
+static int g_main_kq = -1;
+
+void nm_kq_set_main(int kq) {
+    if (g_main_kq < 0) g_main_kq = kq;
+}
+
+// Wake the MAIN loop from any thread. No-op before the main loop has polled.
+int nm_kq_wake_main(void) {
+    return g_main_kq >= 0 ? nm_kq_wake(g_main_kq) : 0;
+}
+
+// Safe to call from ANY thread.
+int nm_kq_wake(int kq) {
+    struct kevent kev;
+    EV_SET(&kev, NM_WAKE_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    return kevent(kq, &kev, 1, NULL, 0, NULL);
 }
 
 int nm_set_nonblock(int fd) {
