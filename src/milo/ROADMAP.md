@@ -55,26 +55,18 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
-### chainControl/roadConditions route HANGS — post-fetch computation stall (NOT fixed)
-A real trpc route (`chainControl,roadConditions`) hangs forever in milo; node returns 236440
-valid in <1s. LOCALIZED with live-app instrumentation:
-- NOT fetch: traced milo's fetch — all 3 upstream fetches (cwwp2 cc d3/d10 + nvroads
-  roadconditions) START and RESOLVE (starts=3 resolves=3). The 6 exact URLs also complete
-  concurrently AND during a request in a faithful synthetic (~700ms).
-- NOT the response write: a raw net client gets **0 bytes on the wire** — res.write/end NEVER
-  fires for this request. So the handler hangs BEFORE writing anything.
-- Therefore the tRPC handler's POST-FETCH COMPUTATION stalls in milo but not node — a JS-level
-  op (regex / sort / Date / parse / some builtin) that hangs or infinite-loops on this data.
-- Distinct from the stream.write/drain bug (5531a4f4107, that route now works) — this never
-  reaches the write path.
-NEXT: instrument the chainControl + roadConditions resolvers (app: dist/chainControls.js /
-the v3 router) to find which operation hangs after the awaits resolve; then reduce to a
-minimal milo-vs-oracle repro of that JS op. chainControl ALONE works (served from cache);
-the stall needs the cold roadConditions computation.
-RULED OUT (tested milo vs oracle, identical): Intl.DateTimeFormat/toLocaleString+timeZone;
-decodePolyline (nevadaData.js:66, the encoded-polyline while-loop — same output, no hang).
-Resolver chain to walk: dist/nevadaData.js processRoadConditions + dist/routes/v3/trpc/
-trpcApi.js roadConditions/chainControl resolvers. Find the op after the awaits that loops/blocks.
+### [x] chainControl/roadConditions route hang — FIXED (0ae226c8c61)
+A PassThrough whose input finished before a consumer attached self-destroyed on writable
+'finish' while data was still buffered, so 'end' never fired. stream.js autoDestroy was gated
+on rState.ended (push(null) seen) instead of rState.endEmitted ('end' delivered). The app's
+node-fetch v2 pipes the response through res.pipe(new PassThrough()) and attaches
+data/end listeners LATER (on response.text()) — by then the body had arrived and the stream
+was destroyed with data stranded, so all 6 caltrans awaits hung and the resolver wrote 0
+bytes. One-line fix (stream.js:1007 endEmitted not ended). MY LOCALIZATION HAD A GAP: I traced
+GLOBAL fetch and proved "all fetches resolve", but this route uses node-fetch v2 (https.request
++ PassThrough), a path my instrument never saw. Live route now 200/236440 valid; probes 9/9;
+net 57. Same stream-lifecycle family as 5531a4f4107 but a distinct condition.
+
 
 ### large gzipped trpc/express responses truncate at ~57KB gzip (~899KB decoded) — NOT YET FIXED
 A real app (express + compression + trpc): a single large procedure's gzipped response is cut
