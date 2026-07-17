@@ -69,6 +69,15 @@ Fix: honour the contract — sleep `timeout` when there is no kqueue.
 After: idle 2.52s -> **0.03s** (node 0.05s); idle worker 2.57s -> **0.07s**. Ladder unchanged
 (net 57/5, tls 25/6, probes 9/9) — no test covers idle CPU.
 
+**`cpu-audit.sh` now guards this** (9 shapes: timer, interval, httpsrv, idleconn, immediate,
+stdin, promise, worker, fswatch — each vs the oracle, >1.0s CPU in 3s = SPIN). All 9 match
+the oracle today. Run it alongside run-probes.sh after ANY loop change; it is the only thing
+in the tree that watches idle cost, and no test ever will.
+Watch the dir artifact: an early fswatch reading of 0.63s vs 0.02s was NOT a spin — it was
+/tmp (22,324 entries, constant churn) and FSWatcher's O(entries) readdir+stat rescan per
+vnode event. Real inefficiency (node uses FSEvents, no rescan) but not a loop bug; the audit
+watches a small quiet dir so it measures idle, not scan cost.
+
 **Lesson: an exit criterion is only as good as its sample.** "Zero spins" was measured over
 the failing tests, so it could only ever find spins in failing tests. This one lived in
 PASSING programs. When auditing for a resource bug, sample the SUCCESS path too.

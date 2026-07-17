@@ -55,6 +55,11 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### fs.watch rescans the whole directory on every event
+FSWatcher does readdirSync + statSync-per-entry per vnode event, so watching a large dir
+costs O(entries) per change (/tmp with 22k entries: 0.63s cpu vs node's 0.02s). node uses
+FSEvents and does not rescan. Not a loop bug — correctness is fine, cost is not.
+
 ### [x] every timer-only program burned 100% CPU (FIXED 2026-07-16)
 net._pollOnce returned 0 instantly when no kqueue existed (created lazily by the first
 socket) instead of waiting its timeout, so `setTimeout` with no sockets spun at 1.58M
