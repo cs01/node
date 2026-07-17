@@ -1070,22 +1070,23 @@ fn udpSendOp(info: *u8, _ud: *u8): void {
             ci.arg(3).writeUtf8(iso, host_buf as *u8, 256)
         }
 
-        var addr: [u8; 16] = [0; 16]
-        addr[0] = 16
-        addr[1] = 2
-        let port_n = htons(port)
-        addr[2] = (port_n & 0xff) as u8
-        addr[3] = ((port_n >> 8) & 0xff) as u8
-
-        if host_buf[0] != 0 {
-            inet_pton(2, host_buf as *u8, (addr as *u8 as i64 + 4) as *u8)
-        } else {
-            // 127.0.0.1 as default
-            addr[4] = 127
-            addr[7] = 1
+        // Same treatment as udpSendBinary: an empty host still means loopback (not
+        // INADDR_ANY), so the default is spelled out rather than left to buildSockAddr.
+        var addr: [u8; 28] = [0; 28]
+        var host_p = host_buf as *u8
+        if host_buf[0] == 0 {
+            host_p = "127.0.0.1" as *u8
         }
-
-        let n = sendto(fd, dataBuf as *u8, dataLen as i64, 0, addr as *u8, 16)
+        var family = AF_INET
+        if hostIsV6(host_p) {
+            family = AF_INET6
+        }
+        let alen = buildSockAddr(host_p, port, addr as *u8, family)
+        if alen < 0 {
+            ci.retI32(-1)
+            return
+        }
+        let n = sendto(fd, dataBuf as *u8, dataLen as i64, 0, addr as *u8, alen as i32)
         ci.retI32(n as i32)
     }
 }
