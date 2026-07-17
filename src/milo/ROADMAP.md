@@ -94,7 +94,7 @@ serves {"ok":true}). No compat-number change (no suite test covers it); the -1 s
 flaky test-http-byteswritten timeout, unrelated (A/B confirmed it times out without the change
 too).
 
-### prettier fails: dynamic import()'s referrer is ALWAYS bootstrap.js (root cause found)
+### [HIGH PRIORITY] dynamic import()'s referrer is ALWAYS bootstrap.js — blocks webpack AND prettier
 `import('../internal/legacy-cli.mjs')` fails because milo cannot resolve a RELATIVE dynamic
 import against the importing module. ROOT CAUSE (confirmed): V8's DynamicImportCallback
 resource_name (deps/v8capi/src/v8capi.cc DynamicImportCallback) is ALWAYS the bootstrap eval
