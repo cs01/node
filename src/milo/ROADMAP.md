@@ -60,6 +60,7 @@ missed. Verified working under milo (output identical to ./out/Release/node):
   SERVERS/HTTP: express, fastify, koa, socket.io (real-time), ws, http/https/http2
   CLIENTS:      axios, undici, ioredis, node-fetch, native fetch
   TOOLS:        eslint, rollup, mocha
+  STREAMING:    csv-parse, tar (pack/gzip/extract), busboy
   MISC:         graphql, nodemailer, mqtt, node-cron (all work)
   DATA/CRYPTO:  pg (postgres client), jsonwebtoken, handlebars, sharp, @node-rs/argon2,
                 @napi-rs/uuid, sqlite3 (napi), prisma

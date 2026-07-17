@@ -200,6 +200,17 @@ class ZlibTransform extends Transform {
     this._handle = null;
     cb(err);
   }
+  // node-internal: synchronously run one chunk through zlib with the given flush flag and
+  // RETURN the output (minizlib — used by tar/node-tar — reaches into `handle._processChunk`
+  // for its sync path). streamWrite already loop-drains and returns the full output buffer.
+  _processChunk(chunk, flushFlag) {
+    if (!this._streamHandle) return Buffer.alloc(0);
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const input = new Uint8Array(buf.buffer, buf.byteOffset, buf.length);
+    const result = b.streamWrite(this._streamHandle, this._isCompress ? 1 : 0, input, flushFlag);
+    return (result && result.length > 0)
+      ? Buffer.from(result.buffer, result.byteOffset, result.byteLength) : Buffer.alloc(0);
+  }
   _transform(chunk, encoding, cb) {
     if (typeof chunk === 'string') chunk = Buffer.from(chunk, encoding);
     else if (chunk != null && !Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) {
