@@ -217,7 +217,9 @@ napi_status NAPI_CDECL napi_create_external_buffer(napi_env env,
                                                    void* finalize_hint,
                                                    napi_value* result) {
   if (env == nullptr || result == nullptr) return napi_set_last_error(env, napi_invalid_arg);
-  v8::HandleScope scope(env->isolate);
+  // NO HandleScope here: `*result` escapes to the addon, and a scope owned by this function
+  // dies on return, leaving a dangling napi_value that traps V8 the moment it is touched.
+  // The caller's scope owns the handle — node's implementations do the same.
   v8::Local<v8::ArrayBuffer> ab = v8::ArrayBuffer::New(env->isolate, length);
   if (data != nullptr && length > 0) memcpy(ab->Data(), data, length);
   napi_status st = MiloBufferFromBackingStore(env, ab, result);
@@ -231,7 +233,7 @@ napi_status NAPI_CDECL napi_create_buffer_copy(napi_env env,
                                                void** result_data,
                                                napi_value* result) {
   if (env == nullptr || result == nullptr) return napi_set_last_error(env, napi_invalid_arg);
-  v8::HandleScope scope(env->isolate);
+  // No HandleScope — see napi_create_external_buffer above; *result escapes to the addon.
   v8::Local<v8::ArrayBuffer> ab = v8::ArrayBuffer::New(env->isolate, length);
   if (data != nullptr && length > 0) memcpy(ab->Data(), data, length);
   if (result_data != nullptr) *result_data = ab->Data();

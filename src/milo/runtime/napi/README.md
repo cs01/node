@@ -46,11 +46,15 @@ node::OnScopeLeave from them). Nothing is forked into the tree; the copies regen
 - **async_hooks context** — `napi_create_async_work`'s async_resource/name and
   `napi_make_callback`'s async_context are accepted and IGNORED. Work executes correctly;
   only async-hooks introspection (async_id/triggerId/destroy) is absent.
-- **sharp crashes after succeeding.** `metadata()` AND `resize()` both work (libvips decodes
-  and resizes through napi_async_work), then a V8 fatal hits while delivering the result.
-  Suspect the drain path: completions run inside a V8 function callback, and resolving a
-  promise there re-enters microtasks. INSTRUMENT before guessing — the fatal message is
-  truncated by the stack dump; capture it first.
+- ~~sharp crashes after succeeding~~ **FIXED. sharp is byte-identical to the oracle**
+  (`metadata: png 4x4 channels=3` / `resized to 2x2: 97 bytes out`). My drain-path suspicion
+  was WRONG — the bug was a **dangling handle** in my own buffer creators: they opened a
+  `v8::HandleScope`, built the Buffer inside it and returned the handle in `*result`, so the
+  scope died on return and the addon held a dangling napi_value that trapped V8 the moment it
+  was touched. Isolating (`metadata()` alone rc=0 vs `toBuffer()` trapping inside
+  `b => b.length`) pinned it to the Buffer path in one step; the V8 fatal prints NO message,
+  only PushStackTraceAndDie ptrs, so chasing the message was a dead end.
+  **Rule: never open a HandleScope in a function whose handle escapes to the caller.**
 
 **`process.versions.napi` claims '10' (lib/_process_init.js:72) — still not fully true while
 threadsafe_function is missing.**
