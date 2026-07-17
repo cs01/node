@@ -841,17 +841,23 @@ class Writable extends Stream {
       chunk = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength); encoding = 'buffer';
     }
     this._writableState.length += (this._writableState.objectMode ? 1 : (chunk.length || 0));
-    const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : _defaultHWM;
-    const ret = this._writableState.length < hwm;
-    if (!ret) this._writableState.needDrain = true;
     if (this._writableState.corked > 0 || this._writableState.writing || (this._writev && this._write === Writable.prototype._write)) {
       this._writableState.buffered.push({ chunk, encoding: encoding || 'buffer', cb });
       this._writableState.bufferedRequestCount++;
       if (!this._writableState.corked && !this._writableState.writing) this._flushBuffered();
-      return ret;
+    } else {
+      this._writableState.writing = true;
+      this._doWrite(chunk, encoding || 'buffer', cb);
     }
-    this._writableState.writing = true;
-    this._doWrite(chunk, encoding || 'buffer', cb);
+    // Node computes the return value AFTER dispatching the write (writeOrBuffer):
+    // a synchronously-completing _write has already drained state.length, so
+    // write() returns true and no 'drain' round-trip is needed. Computing it
+    // before dispatch made big writes to sync writables (zlib) return false
+    // with the matching 'drain' already emitted — producers doing
+    // `if (!write()) once('drain')` then stall forever (trpc + compression).
+    const hwm = this._writableState.highWaterMark != null ? this._writableState.highWaterMark : _defaultHWM;
+    const ret = this._writableState.length < hwm;
+    if (!ret) this._writableState.needDrain = true;
     return ret && !this._writableState.errored;
   }
 
@@ -879,14 +885,26 @@ class Writable extends Stream {
         if (cb) cb(err);
       }
       this._flushBuffered();
-      if (!state.writing && !err && state.needDrain) {
-        const hwm = state.highWaterMark != null ? state.highWaterMark : _defaultHWM;
-        if (state.length < hwm || state.length === 0) {
-          state.needDrain = false;
-          this.emit('drain');
-        }
-      }
+      if (!state.writing && !err && state.needDrain) this._emitDrainTick();
       if (state.ending && state._tryFinish) state._tryFinish();
+    });
+  }
+
+  // 'drain' must never fire synchronously inside a write() call — a producer
+  // that sees write()===false and THEN attaches once('drain') would miss it
+  // and stall (node defers afterWrite to a tick for sync writes).
+  _emitDrainTick() {
+    const state = this._writableState;
+    if (state._drainScheduled) return;
+    state._drainScheduled = true;
+    process.nextTick(() => {
+      state._drainScheduled = false;
+      if (state._destroyed || state.errored || state.writing || !state.needDrain) return;
+      const hwm = state.highWaterMark != null ? state.highWaterMark : _defaultHWM;
+      if (state.length < hwm || state.length === 0) {
+        state.needDrain = false;
+        this.emit('drain');
+      }
     });
   }
 
@@ -917,10 +935,7 @@ class Writable extends Stream {
           for (const e of entries) { if (e.cb) e.cb(null); }
         }
         this._flushBuffered();
-        if (!state.writing && !err && state.needDrain) {
-          const hwm = state.highWaterMark != null ? state.highWaterMark : _defaultHWM;
-          if (state.length < hwm || state.length === 0) { state.needDrain = false; this.emit('drain'); }
-        }
+        if (!state.writing && !err && state.needDrain) this._emitDrainTick();
         if (state.ending && state._tryFinish) state._tryFinish();
       });
       return;
