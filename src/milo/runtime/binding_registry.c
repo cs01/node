@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <sys/time.h>
 #include <errno.h>
 
@@ -86,6 +87,14 @@ int nm_set_cloexec(int fd) {
 // per call site). Reads/accepts never noticed — they only run after kqueue reports
 // readiness — but a large write past the kernel sndbuf blocked the whole event loop,
 // deadlocking the reader that was supposed to drain it.
+// ioctl is variadic in C; declaring it fixed-arity in milo miscompiles silently on AArch64
+// (the callee reads the varargs off the stack, not the registers milo fills). Same class of
+// bug as the fcntl one that left every socket blocking. The milo compiler now hard-errors on
+// this, which is how it was caught — wrap it here where the C ABI is correct.
+int nm_ioctl_winsize(int fd, void* ws) {
+    return ioctl(fd, TIOCGWINSZ, ws);
+}
+
 int nm_set_nonblock(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;

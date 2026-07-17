@@ -22,10 +22,14 @@ extern fn atoi(s: *u8): i32
 extern fn tcgetattr(fd: i32, termios: *u8): i32
 extern fn tcsetattr(fd: i32, actions: i32, termios: *u8): i32
 extern fn cfmakeraw(termios: *u8): void
-extern fn ioctl(fd: i32, request: u64, arg: *u8): i32
+// ioctl is variadic in C — milo cannot call it directly on AArch64 (the compiler now
+// hard-errors on exactly this), so it is wrapped in binding_registry.c. See the fcntl fix.
+extern fn nm_ioctl_winsize(fd: i32, ws: *u8): i32
 
 // Binding registry
 extern fn nm_binding_register(name: *u8, init: *u8): void
+// Node-API addon loader (dlopen + napi_register_module_v1); C++ side in runtime/napi/
+extern fn nm_init_napi(iso: *u8, ctx: *u8, exports: i32): void
 extern fn nm_internal_binding(info: *u8, ud: *u8): void
 
 // Binding init functions
@@ -292,6 +296,7 @@ fn nativeLoadBuiltin(info: *u8, _ud: *u8): void {
 
 fn registerBuiltinBindings(): void {
     unsafe {
+        nm_binding_register("napi" as *u8, nm_init_napi as *u8)
         nm_binding_register("os" as *u8, nm_init_os as *u8)
         nm_binding_register("env" as *u8, nm_init_env as *u8)
         nm_binding_register("fs" as *u8, nm_init_fs as *u8)
@@ -452,7 +457,7 @@ fn ttyGetWindowSize(info: *u8, _ud: *u8): void {
     var ws: [u8; 8] = [0; 8]
     // TIOCGWINSZ = 0x40087468 on macOS
     unsafe {
-        let ret = ioctl(fd, 1074295912, ws as *u8)
+        let ret = nm_ioctl_winsize(fd, ws as *u8)
         if ret < 0 {
             ci.retUndefined()
             return
