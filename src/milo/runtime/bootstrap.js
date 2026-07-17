@@ -1113,7 +1113,7 @@
 
       // export default function/class — strip prefix, defer assignment to end of file
       if (!handled) {
-        m = line.match(/^\s*export\s+default\s+function\s+(\w+)/);
+        m = line.match(/^\s*export\s+default\s+(?:async\s+)?function\*?\s+(\w+)/);
         if (m) { transformed.push(line.replace(/^\s*export\s+default\s+/, '')); exports.push(`exports.default = ${m[1]};`); hasDefaultExport = true; handled = true; }
       }
       if (!handled) {
@@ -1201,7 +1201,9 @@
 
       // export function/class — strip and defer assignment
       if (!handled) {
-        m = line.match(/^\s*export\s+(function|class)\s+(\w+)/);
+        // also `export async function` and generators `export function*` (common; the regex
+        // previously matched only bare function/class and left `export` in place -> SyntaxError).
+        m = line.match(/^\s*export\s+(?:async\s+)?(function\*?|class)\s+(\w+)/);
         if (m) { transformed.push(line.replace(/^\s*export\s+/, '')); exports.push(`exports.${m[2]} = ${m[2]};`); handled = true; }
       }
       // export const/let/var — inline assignment is safe (single statement)
