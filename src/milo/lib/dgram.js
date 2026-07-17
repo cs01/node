@@ -3,6 +3,7 @@
 
 const EventEmitter = require('events');
 const tcp = internalBinding('tcp');
+const { isIP } = require('net');
 // macOS values; the tcp binding is macOS-only (kqueue). Linux would be 10.
 const AF_INET = 2;
 const AF_INET6 = 30;
@@ -40,23 +41,49 @@ class Socket extends EventEmitter {
       }
     }
 
-    const host = address || '0.0.0.0';
+    // A udp6 socket's "any" is ::, not 0.0.0.0 — the family is fixed at socket() time, so
+    // handing bind a v4 sockaddr for a v6 fd is rejected outright.
+    const host = address || (this.type === 'udp6' ? '::' : '0.0.0.0');
     const bindPort = port || 0;
-    const r = tcp.udpBind(this._fd, bindPort, host);
-    if (r < 0) {
-      const code = getSystemErrorName(r);
-      const err = new Error('bind ' + code + ' ' + host);
-      err.code = code; err.errno = r; err.syscall = 'bind'; err.address = host;
-      process.nextTick(() => this.emit('error', err));
-      return this;
+
+    const doBind = (ip) => {
+      const r = tcp.udpBind(this._fd, bindPort, ip);
+      if (r < 0) {
+        const code = getSystemErrorName(r);
+        const err = new Error('bind ' + code + ' ' + ip);
+        err.code = code; err.errno = r; err.syscall = 'bind'; err.address = ip;
+        this.emit('error', err);
+        return;
+      }
+      this._bound = true;
+      this._startReceiving();
+      if (cb) cb();
+      this.emit('listening');
+    };
+
+    // udpBind takes a numeric address: it builds the sockaddr with inet_pton, which does
+    // not resolve names. Node resolves in JS first (lib/dgram.js does lookup4/lookup6 then
+    // binds), so a hostname must be resolved here too.
+    //
+    // This used to "work" only by accident: inet_pton('localhost') failed, the binding
+    // discarded the failure, and the zeroed address bound INADDR_ANY — which does include
+    // localhost. Once the binding started reporting that failure, bind(0,'localhost')
+    // errored. The silent bug was load-bearing.
+    if (isIP(host)) {
+      process.nextTick(() => { if (!this._closed && this._fd >= 0) doBind(host); });
+    } else {
+      require('dns').lookup(host, { family: this.type === 'udp6' ? 6 : 4 }, (err, ip) => {
+        // Closed while resolving. The synchronous path had no such window, which is what
+        // test-dgram-bind-socket-close-before-lookup and -close-in-listening check.
+        if (this._closed || this._fd < 0) return;
+        if (err) {
+          if (!err.host) err.host = host;
+          this.emit('error', err);
+          return;
+        }
+        doBind(ip);
+      });
     }
-
-    this._bound = true;
-    this._startReceiving();
-
-    const addr = this.address();
-    if (cb) process.nextTick(cb);
-    process.nextTick(() => this.emit('listening'));
     return this;
   }
 
