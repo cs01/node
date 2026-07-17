@@ -729,6 +729,30 @@ Note `_wantWrite` bookkeeping gotcha if you rebuild it: the flag starts `undefin
 naive `if (on === !!this._writeRegistered) return;` early-returns on the first
 deregister-while-actually-registered and the fd spins anyway. Set the flag at EVERY pollAdd site.
 
+## 5q. THE 3 EX-SPIN TESTS NOW HANG FOR A PLAIN FEATURE GAP: tls.connect({socket}) (2026-07-16)
+
+After 5l killed the spins, `test-tls-inception`, `test-tls-on-empty-socket` and
+`test-tls-reuse-host-from-socket` TIMEOUT instead of OOM. **They are not lifecycle bugs.**
+Liveness dump shows them stalled mid-test, not at teardown — servers still open:
+```
+on-empty-socket:      io=true socks=[7,8,9]        srvs=[4]
+inception:            io=true socks=[6,9,10,11,12] srvs=[4,5]
+reuse-host-from-socket: io=true socks=[7,8,9]      srvs=[4]
+```
+Cause: **milo's `tls.connect()` never reads `options.socket`.** It unconditionally allocates
+its own fd (`tlsSock._fd = tcp.socket(family)`, tls.js ~:209), so a caller-supplied socket is
+silently ignored and the TLS socket connects nowhere -> nothing ever completes -> hang. All
+three tests use `tls.connect({socket})`. This is a real node feature (HTTP CONNECT proxies,
+STARTTLS, tls-over-anything) and the last thing keeping these three red.
+
+**Work needed (a real implementation, not a patch):** adopt the caller's socket instead of
+creating an fd — take `inner._fd`, transfer ownership in `net.Socket._sockets` (the fd-reuse
+race in section 0a is the trap here: whoever holds the map entry must be the live owner),
+re-register poll filters against the TLS socket, and handle the inner socket still being in
+`_connecting` (defer `_startTLS()` until its 'connect'). Note tls.js ALSO has a duplicate
+connect path that bypasses net.js (see 5l-old) — adopting `options.socket` is the natural
+moment to delete it and route everything through net.js.
+
 ## 5m. NEXT UP — scoped, not started (2026-07-16 end of session)
 
 Ranked by expected value. All verified against `./out/Release/node` unless noted.
