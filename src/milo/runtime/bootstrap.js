@@ -1793,6 +1793,12 @@
   globalThis.__dynamicImportHandler = function(specifier) {
     let resolved = specifier;
     if (resolved.startsWith('file://')) resolved = resolved.slice(7);
+    // Strip an ESM cache-busting ?query / #hash before hitting the filesystem — node's ESM
+    // loader does this. eslint dynamic-imports its config as `eslint.config.js?mtime=NNN`;
+    // without stripping, require() looked for a file literally named with the ?mtime suffix
+    // and failed MODULE_NOT_FOUND.
+    const _q = resolved.search(/[?#]/);
+    if (_q !== -1) resolved = resolved.slice(0, _q);
     const exports = require(resolved);
     const ns = Object.create(null);
     if (exports && typeof exports === 'object' && !Array.isArray(exports)) {
