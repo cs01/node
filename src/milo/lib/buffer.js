@@ -1160,6 +1160,17 @@ Buffer.prototype.latin1Write = function(str, offset, length) {
   for (let i = 0; i < len; i++) this[offset + i] = str.charCodeAt(i) & 0xff;
   return len;
 };
+
+// node's internal *Slice methods: return the [start,end) slice decoded in that encoding —
+// equivalent to toString(encoding, start, end). busboy (multer's multipart parser) calls
+// chunk.latin1Slice directly, so their absence crashed every file upload.
+Buffer.prototype.latin1Slice = function(start, end) { return this.toString('latin1', start, end); };
+Buffer.prototype.utf8Slice   = function(start, end) { return this.toString('utf8', start, end); };
+Buffer.prototype.asciiSlice  = function(start, end) { return this.toString('ascii', start, end); };
+Buffer.prototype.hexSlice    = function(start, end) { return this.toString('hex', start, end); };
+Buffer.prototype.ucs2Slice   = function(start, end) { return this.toString('ucs2', start, end); };
+Buffer.prototype.base64Slice = function(start, end) { return this.toString('base64', start, end); };
+Buffer.prototype.base64urlSlice = function(start, end) { return this.toString('base64url', start, end); };
 Buffer.prototype.utf8Write = function(str, offset, length) {
   if (offset === undefined) offset = 0;
   if (length === undefined) length = this.length - offset;
