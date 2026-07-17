@@ -104,11 +104,35 @@ fn vmRun(info: *u8, _ud: *u8): void {
     ci.ret(Value { slot: result })
 }
 
+// compileHere(code, filename): compile+run code in the CURRENT context with a
+// ScriptOrigin(filename), returning the result. Unlike (0,eval), the ScriptOrigin makes V8
+// hand `filename` to the dynamic-import callback, so a module's relative import('./x')
+// resolves against the MODULE, not bootstrap.js. No sandbox — this is for module loading.
+fn vmCompileHere(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 2 { ci.retUndefined(); return }
+    let iso = ci.isolate()
+    let ctx = ci.context()
+    let codeArg = ci.arg(0)
+    unsafe {
+        let need = codeArg.writeUtf8(iso, 0 as *u8, 0)
+        if need < 0 { ci.retUndefined(); return }
+        var fnameBuf: [u8; 4096] = [0; 4096]
+        ci.arg(1).writeUtf8(iso, fnameBuf as *u8, 4096)
+        let codeBuf = malloc((need + 1) as i64)
+        codeArg.writeUtf8(iso, codeBuf, need + 1)
+        let result = v8c_script_compile_run(ctx.ptr, codeBuf, need, fnameBuf as *u8)
+        free(codeBuf)
+        ci.ret(Value { slot: result })
+    }
+}
+
 fn nm_init_vm(iso: *u8, ctx: *u8, exports: i32): void {
     let c = Context { ptr: ctx }
     let exp = Value { slot: exports }
     unsafe {
         c.setMethod(exp, "createContext" as *u8, vmCreateContext as *u8)
         c.setMethod(exp, "run" as *u8, vmRun as *u8)
+        c.setMethod(exp, "compileHere" as *u8, vmCompileHere as *u8)
     }
 }

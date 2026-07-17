@@ -1435,7 +1435,17 @@
           // show `/path/file.js:13:5` instead of `eval at _loadModule <anonymous>`.
           // .call(mod.exports, ...) so top-level `this` === module.exports (Node semantics).
           const wrapped = '(function (exports, require, module, __filename, __dirname, primordials) { ' + src + '\n})\n//# sourceURL=' + resolved;
-          (0, eval)(wrapped).call(mod.exports, mod.exports, modRequire, mod, resolved, dname, primordials);
+          // Compile with the module's own filename as ScriptOrigin (not (0,eval), which
+          // inherits bootstrap's origin) so a relative dynamic import('./x') in this module
+          // resolves against THIS module, not src/milo/runtime. Fall back to eval if the vm
+          // binding is unavailable or returns a non-function — behaviour then matches before.
+          let _modFn;
+          try {
+            const _vm = (globalThis.__vmBinding || (globalThis.__vmBinding = internalBinding('vm')));
+            if (_vm && _vm.compileHere) _modFn = _vm.compileHere(wrapped, resolved);
+          } catch {}
+          if (typeof _modFn !== 'function') _modFn = (0, eval)(wrapped);
+          _modFn.call(mod.exports, mod.exports, modRequire, mod, resolved, dname, primordials);
         }
       };
       try {
