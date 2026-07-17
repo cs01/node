@@ -616,6 +616,30 @@ handshake from `_onReadable`, which `_pollOnce` invokes for BOTH filters, so the
 registration is load-bearing as a general wakeup — not merely SSL's WANT_WRITE signal.**
 Trade measured: 3 OOMs eliminated for 1 pass lost. Rejected (pass count must not regress).
 
+**SECOND ATTEMPT (2026-07-16), also reverted — but it measured the trade exactly.**
+Did the full redesign: READ-only on both the client (`_onConnected`) and server (accept)
+paths, WRITE added on demand via `_wantWrite(result === 3)` using entry.c's 2/3 signal.
+**It works: all 3 spins died, 9.2s CPU -> 0.05s, and the TLS round-trip is fine over v4 AND
+v6.** Measured: **tls 14 -> 12, OOM 3 -> 0** — i.e. -2 passes (test-tls-client-abort,
+test-tls-connect-no-host) for -3 crashes. Rejected under the no-regression rule, same as
+attempt 1 (-1 for -3). Consistency, not conviction: the rule exists to stop exactly this
+rationalisation.
+
+**Also found and reverted with it (SEPARABLE — worth redoing on its own):** `tls.connect` has
+a DUPLICATE connect path that bypasses net.js entirely — `tcp.socket()` with **no family**
+(v4-only), `'localhost'` hardcoded to `127.0.0.1`, and `dns.lookup(host, 4)` pinning family 4.
+So TLS silently misses all the dns / IPv6 / autoSelectFamily handling. Fixing it in isolation
+still costs test-tls-client-abort, so it needs its own investigation — but a duplicate connect
+path WILL keep drifting from the real one.
+
+**What the next attempt needs (in order):**
+1. Find why `client-abort` depends on the current connect path — it is the cheaper of the two.
+2. `checkServerIdentity` is absent (tls.js is 269 lines vs node's ~3000). `connect-no-host`
+   uses `ca: cert` with rejectUnauthorized defaulting TRUE, and likely passes today only
+   because milo skips validation and sets `authorized` unconditionally. Verify that before
+   trusting it as a canary.
+3. Then the READ-only handshake lands cleanly.
+
 **The real fix is node's model:** register READ; write only when SSL asks (WANT_WRITE), using
 the now-available signal from `nm_ssl_connect_continue`/`accept_continue` (2=want_read,
 3=want_write — landed, unused). That means restructuring tls.js's handshake so it does not
