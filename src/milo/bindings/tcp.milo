@@ -52,7 +52,7 @@ extern fn nm_fs_open(path: *u8, flags: i32, mode: i32): i32
 
 // TLS via OpenSSL (helpers in entry.c)
 extern fn nm_ssl_connect(fd: i32, hostname: *u8): i64
-extern fn nm_ssl_connect_start(fd: i32, hostname: *u8, caPem: *u8): i64
+extern fn nm_ssl_connect_start(fd: i32, hostname: *u8, caPem: *u8, verifyHost: *u8): i64
 extern fn nm_ssl_connect_continue(ssl: i64): i32
 extern fn nm_ssl_verify_result(ssl: i64): i64
 extern fn nm_ssl_read(ssl: i64, buf: *u8, len: i32): i32
@@ -892,7 +892,7 @@ fn sslConnect(info: *u8, _ud: *u8): void {
     }
 }
 
-// sslConnectStart(fd, hostname, caPem?) → ssl handle or -1 on error
+// sslConnectStart(fd, hostname, caPem?, verifyHost?) → ssl handle or -1 on error
 fn sslConnectStart(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     if ci.length() < 2 { return }
@@ -907,7 +907,12 @@ fn sslConnectStart(info: *u8, _ud: *u8): void {
         if ci.length() > 2 {
             ci.arg(2).writeUtf8(iso, caBuf, 65535)
         }
-        let ssl = nm_ssl_connect_start(fd, hostBuf as *u8, caBuf)
+        // arg 3 = the name the cert must be valid for; empty means skip the hostname check.
+        var vhBuf: [u8; 256] = [0; 256]
+        if ci.length() > 3 {
+            ci.arg(3).writeUtf8(iso, vhBuf as *u8, 255)
+        }
+        let ssl = nm_ssl_connect_start(fd, hostBuf as *u8, caBuf, vhBuf as *u8)
         free(caBuf)
         ci.retF64(ssl as f64)
     }

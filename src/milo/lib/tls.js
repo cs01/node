@@ -17,7 +17,7 @@ const X509_VERIFY_ERR = {
   19: 'SELF_SIGNED_CERT_IN_CHAIN',
   20: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
   21: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
-  62: 'HOSTNAME_MISMATCH',
+  62: 'ERR_TLS_CERT_ALTNAME_INVALID',
 };
 
 // `ca` accepts a string, a Buffer, or an array of either; OpenSSL wants one PEM blob.
@@ -69,7 +69,14 @@ class TLSSocket extends net.Socket {
 
   _startTLS() {
     const hostname = this._tlsOptions.servername || this._tlsOptions.host || '';
-    this._ssl = tcp.sslConnectStart(this._fd, hostname, _caFromOptions(this._tlsOptions));
+    // The cert must be valid for the name we asked for, not merely signed by a trusted CA.
+    // Skipped when the caller supplies its own checkServerIdentity (node lets that override
+    // the default identity check) or when verification is off entirely.
+    const o = this._tlsOptions;
+    const skipHostCheck = typeof o.checkServerIdentity === 'function' ||
+                          o.rejectUnauthorized === false;
+    const verifyHost = skipHostCheck ? '' : (o.servername || o.host || hostname || '');
+    this._ssl = tcp.sslConnectStart(this._fd, hostname, _caFromOptions(o), verifyHost);
     if (!this._ssl || this._ssl < 0) {
       this._ssl = 0;
       process.nextTick(() => this.emit('error', new Error('TLS handshake init failed')));

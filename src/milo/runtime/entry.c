@@ -415,7 +415,14 @@ long long nm_ssl_connect(int fd, const char* hostname) {
 
 // Non-blocking SSL_connect: create SSL, set fd, attempt connect.
 // Returns: SSL* if handshake complete, 0 if want_read/want_write (call nm_ssl_connect_continue), -1 on error
-long long nm_ssl_connect_start(int fd, const char* hostname, const char* ca_pem) {
+// verify_host: the name the cert must be valid FOR (empty = skip the hostname check, which
+// is what a caller-supplied checkServerIdentity means). Chain verification alone is NOT
+// enough — without this, ANY cert from a trusted CA is accepted for ANY host, so a valid
+// cert for evil.com passes for api.weather.gov and `authorized` still reports true.
+// SSL_set1_host folds the result into SSL_get_verify_result as X509_V_ERR_HOSTNAME_MISMATCH
+// (62), so the existing verify path reports it with no extra plumbing.
+long long nm_ssl_connect_start(int fd, const char* hostname, const char* ca_pem,
+                               const char* verify_host) {
     nm_ssl_ensure_init();
 
     // Verify socket is non-blocking
@@ -428,6 +435,21 @@ long long nm_ssl_connect_start(int fd, const char* hostname, const char* ca_pem)
     nm_ssl_apply_ca(ssl, ca_pem);
     SSL_set_fd(ssl, fd);
     if (hostname && hostname[0]) SSL_set_tlsext_host_name(ssl, hostname);
+    if (verify_host && verify_host[0]) {
+        // An IP literal must be matched against iPAddress SANs, not dNSName — SSL_set1_host
+        // would always fail for it.
+        // This OpenSSL exposes the X509_VERIFY_PARAM_* functions but not the SSL_set1_*
+        // convenience macros, so go through the param directly.
+        X509_VERIFY_PARAM* vp = SSL_get0_param(ssl);
+        struct in6_addr tmp6;
+        struct in_addr tmp4;
+        if (inet_pton(AF_INET, verify_host, &tmp4) == 1 ||
+            inet_pton(AF_INET6, verify_host, &tmp6) == 1) {
+            X509_VERIFY_PARAM_set1_ip_asc(vp, verify_host);
+        } else {
+            X509_VERIFY_PARAM_set1_host(vp, verify_host, 0);
+        }
+    }
 
     // Set connect state and attempt handshake
     SSL_set_connect_state(ssl);

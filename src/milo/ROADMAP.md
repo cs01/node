@@ -98,8 +98,12 @@ which unblocked the READ-only handshake. tls OOM 3 -> 0, 23 PASS held, spin CPU 
 Fixed: SSL_get_verify_result + per-connection `ca:` store + rejectUnauthorized enforcement;
 createSecureContext no longer eats `ca`; server now sends its full intermediate chain
 (SSL_CTX_use_certificate loads only the leaf — milo servers had always sent partial chains).
-tls 22->23 PASS, 8->7 TIMEOUT, zero regressions. Still missing: checkServerIdentity (hostname
-vs CN/SAN) — OpenSSL SSL_set1_host would fold it into the same verify result. Original report:
+tls 22->23 PASS, 8->7 TIMEOUT, zero regressions. [x] hostname verification landed 2026-07-16 too: chain verification ALONE accepted any
+CA-signed cert for any host (a valid evil.com cert passed for api.weather.gov, authorized=true).
+X509_VERIFY_PARAM_set1_host (set1_ip_asc for IP literals — an IP must match iPAddress SANs,
+not dNSName) folds the check into the same SSL_get_verify_result, reported as
+ERR_TLS_CERT_ALTNAME_INVALID exactly like node. Skipped when the caller supplies its own
+checkServerIdentity (node lets that override) or rejectUnauthorized:false. Original report:
 
 ### SECURITY: the TLS client verifies no certificates (found 2026-07-16)
 `tls.connect()` accepts a self-signed cert with rejectUnauthorized at its default (true) and
