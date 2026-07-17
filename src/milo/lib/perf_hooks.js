@@ -128,6 +128,41 @@ module.exports = {
   PerformanceObserver,
   PerformanceObserverEntryList,
   PerformanceEntry,
+  // Real recordable histogram (node's perf_hooks.createHistogram). Records values and
+  // computes min/max/mean/percentile on read — not a zeros-stub, so a lib that records into
+  // it and reads a summary back (piscina) gets real numbers. bigint inputs are coerced.
+  createHistogram: (options) => {
+    let vals = [];
+    let cnt = 0;
+    const num = (v) => typeof v === 'bigint' ? Number(v) : v;
+    return {
+      record(v) { v = num(v); if (v > 0) { vals.push(v); cnt++; } },
+      recordDelta() { /* needs a stored timestamp; the summary path piscina uses is record() */ },
+      add() {},
+      get count() { return cnt; },
+      get min() { return vals.length ? Math.min(...vals) : 0; },
+      get max() { return vals.length ? Math.max(...vals) : 0; },
+      get mean() { return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0; },
+      get stddev() {
+        if (vals.length < 2) return 0;
+        const m = vals.reduce((a, b) => a + b, 0) / vals.length;
+        return Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / vals.length);
+      },
+      get exceeds() { return 0; },
+      percentile(p) {
+        if (!vals.length) return 0;
+        const sorted = [...vals].sort((a, b) => a - b);
+        const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+        return sorted[idx];
+      },
+      get percentiles() {
+        const m = new Map();
+        for (const p of [50, 75, 90, 99]) m.set(p, this.percentile(p));
+        return m;
+      },
+      reset() { vals = []; cnt = 0; },
+    };
+  },
   monitorEventLoopDelay: (options) => {
     const histogram = {
       _enabled: false, min: 0, max: 0, mean: 0, stddev: 0, exceeds: 0,

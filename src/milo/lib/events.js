@@ -452,7 +452,31 @@ EventEmitter.addAbortListener = function(signal, listener) {
   return { [Symbol.dispose]: function() { signal.removeEventListener('abort', listener); } };
 };
 
+// EventEmitterAsyncResource (node): an EventEmitter that runs its listeners inside an
+// AsyncResource scope, so async_hooks/ALS see the right context. piscina, and any lib that
+// subclasses it, needs it — a missing export meant `class X extends
+// events.EventEmitterAsyncResource` failed with "Class extends value undefined".
+const _kAsyncRes = Symbol('kAsyncResource');
+class EventEmitterAsyncResource extends EventEmitter {
+  constructor(options) {
+    const opts = typeof options === 'string' ? { name: options } : (options || {});
+    super(opts);
+    const name = opts.name || new.target.name;
+    if (typeof name !== 'string') throw _ERR_INVALID_ARG_TYPE('options.name', 'string', name);
+    const { AsyncResource } = require('async_hooks');
+    this[_kAsyncRes] = new AsyncResource(name, { triggerAsyncId: opts.triggerAsyncId, requireManualDestroy: opts.requireManualDestroy });
+  }
+  // Run every emit inside the resource's async scope (node semantics).
+  emit(...args) { return this[_kAsyncRes].runInAsyncScope(EventEmitter.prototype.emit, this, ...args); }
+  emitDestroy() { this[_kAsyncRes].emitDestroy(); }
+  get asyncId() { return this[_kAsyncRes].asyncId(); }
+  get triggerAsyncId() { return this[_kAsyncRes].triggerAsyncId(); }
+  get asyncResource() { return this[_kAsyncRes]; }
+}
+EventEmitter.EventEmitterAsyncResource = EventEmitterAsyncResource;
+
 module.exports = EventEmitter;
+module.exports.EventEmitterAsyncResource = EventEmitterAsyncResource;
 module.exports.getMaxListeners = EventEmitter.getMaxListeners;
 module.exports.setMaxListeners = EventEmitter.setMaxListeners;
 module.exports.defaultMaxListeners = EventEmitter.defaultMaxListeners;

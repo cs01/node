@@ -60,6 +60,7 @@ missed. Verified working under milo (output identical to ./out/Release/node):
   SERVERS/HTTP: express, fastify, koa, socket.io (real-time), ws, http/https/http2
   CLIENTS:      axios, undici, ioredis, node-fetch, native fetch
   TOOLS:        eslint, rollup, mocha
+  MISC:         graphql, nodemailer, mqtt, node-cron (all work)
   DATA/CRYPTO:  pg (postgres client), jsonwebtoken, handlebars, sharp, @node-rs/argon2,
                 @napi-rs/uuid, sqlite3 (napi), prisma
   LOGGING:      pino
@@ -70,6 +71,13 @@ Minor: a type:module package required from CJS gives a confusing SyntaxError whe
 ERR_REQUIRE_ESM — milo tries to transform it instead of refusing. Low value.
 
 ## critical
+
+### piscina (worker pool) needs worker_threads MessagePort EventEmitter interface
+After adding EventEmitterAsyncResource + perf_hooks.createHistogram, piscina's MAIN thread
+loads and spawns a worker, but the WORKER fails: `port.on is not a function`
+(piscina/dist/worker.js:113). milo's worker-side MessagePort/parentPort lacks the EventEmitter
+methods (.on/.once/.emit). node's MessagePort extends EventTarget AND has EE-style on/once.
+Fix: give the worker MessagePort the EventEmitter surface. Then piscina should run.
 
 ### [x] http.Server.listen({port,host}, cb) fired no callback — fastify hung (FIXED)
 The options-object listen form was parsed as a positional port, so the object landed in
