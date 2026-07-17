@@ -648,7 +648,25 @@ landed, trace recorded.
 measured ~0-5 loop-flippable tests across 681 — but it structurally kills the bug class that
 produced 4 races today (incl. the fd-reuse race, which wore three different masks).
 
-## 5n. write-early-hints: 3 tests HANG with ZERO output — unreproducible in isolation
+## 5n. write-early-hints — SOLVED: a missing EVENT FORWARD, not any of my four theories
+
+**Cause:** `Http2Server` wraps a `net.Server` and forwarded only `'error'`. `'listening'`,
+`'close'` and `'connection'` fired on the INNER server and never reached the http2 one. The
+tests do all their work inside `server.on('listening')` -> zero bytes, all 3 blocks.
+
+**Why it survived four attempts:** `listen(0, cb)` works (the cb registers on the inner
+server), so every repro I wrote passed while the tests hung — I was comparing two different
+code paths without noticing. The four theories (writeEarlyHints missing, `:status` a string,
+IPv4-only listener, ENOTCONN) were each REAL bugs, all found and fixed, and none was this.
+
+**RULE (this has now cost me twice — see also the missing 'ready' event):** when a test emits
+NO output at all, suspect a missing EVENT before suspecting the subsystem under test. And
+when a repro passes but the test hangs, check that the repro uses the SAME API shape —
+callback form vs `.on(event)` are different code paths.
+**Sweep worth doing:** any class that wraps another and re-emits selectively is suspect. Grep
+for `_net.on(` / `this._server.on(` and compare the forwarded set against node's docs.
+
+### (historical) original notes below
 
 `test-http2-compat-write-early-hints{,-invalid-argument-type,-invalid-argument-value}`.
 Every ingredient verified working standalone against `./out/Release/node`:
