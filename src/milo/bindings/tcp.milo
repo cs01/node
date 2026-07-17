@@ -62,7 +62,7 @@ extern fn nm_ssl_read(ssl: i64, buf: *u8, len: i32): i32
 extern fn nm_ssl_write(ssl: i64, data: *u8, len: i32): i32
 extern fn nm_ssl_pending(ssl: i64): i32
 extern fn nm_ssl_shutdown(ssl: i64): void
-extern fn nm_ssl_server_ctx_new(cert: *u8, certLen: i32, key: *u8, keyLen: i32, minVer: *u8, maxVer: *u8, ciphers: *u8, cipherSuites: *u8): i64
+extern fn nm_ssl_server_ctx_new(cert: *u8, certLen: i32, key: *u8, keyLen: i32, minVer: *u8, maxVer: *u8, ciphers: *u8, cipherSuites: *u8, caPem: *u8, requestCert: i32, rejectUnauth: i32): i64
 extern fn nm_ssl_accept(ctx: i64, fd: i32): i64
 extern fn nm_ssl_accept_new(ctx: i64, fd: i32): i64
 extern fn nm_ssl_accept_continue(ssl: i64): i32
@@ -1114,7 +1114,8 @@ fn sslShutdown(info: *u8, _ud: *u8): void {
     }
 }
 
-// sslServerCtxNew(certStr, keyStr, minVersion?, maxVersion?, ciphers?, ciphersuites?)
+// sslServerCtxNew(certStr, keyStr, minVersion?, maxVersion?, ciphers?, ciphersuites?,
+//                 caPem?, requestCert?, rejectUnauthorized?)
 //   → ctx handle (f64), or 0 on failure
 fn sslServerCtxNew(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
@@ -1135,10 +1136,17 @@ fn sslServerCtxNew(info: *u8, _ud: *u8): void {
         if ci.length() > 3 { ci.arg(3).writeUtf8(iso, maxBuf as *u8, 31) }
         if ci.length() > 4 { ci.arg(4).writeUtf8(iso, csBuf, 4095) }
         if ci.length() > 5 { ci.arg(5).writeUtf8(iso, suBuf, 1023) }
+        // args 6-8: client-cert verification (mutual tls).
+        let sCaBuf = calloc(1, 65536)
+        if ci.length() > 6 { ci.arg(6).writeUtf8(iso, sCaBuf, 65535) }
+        let reqCert = ci.i32Arg(7, 0)
+        let rejUnauth = ci.i32Arg(8, 0)
         let ctx = nm_ssl_server_ctx_new(certBuf as *u8, certLen, keyBuf as *u8, keyLen,
-                                        minBuf as *u8, maxBuf as *u8, csBuf, suBuf)
+                                        minBuf as *u8, maxBuf as *u8, csBuf, suBuf,
+                                        sCaBuf, reqCert, rejUnauth)
         free(csBuf)
         free(suBuf)
+        free(sCaBuf)
         ci.retF64(ctx as f64)
     }
 }

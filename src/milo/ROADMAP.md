@@ -63,10 +63,16 @@ to every other connection), draining the whole PEM via SSL_add1_chain_cert so a 
 intermediate is sent too. Verified against node's requestCert server: `client cert: "agent1"`
 (was NONE), and a certless client still shows NONE — no identity leak.
 
-### tls server ignores requestCert / rejectUnauthorized
-The server never calls SSL_CTX_set_verify, so it does not ask for a client cert at all and
-cannot enforce one. `authorized` is now honest (it reports false when no cert arrived), but
-the server cannot yet DEMAND one — rejectUnauthorized:true does not drop an anonymous client.
+### [x] tls server honours requestCert / rejectUnauthorized (FIXED 2026-07-16)
+SSL_CTX_set_verify(PEER | FAIL_IF_NO_PEER_CERT) + the `ca` bundle as both the client trust
+store AND the advertised client_CA_list (without the list a client often cannot tell which
+cert to offer and sends none). Verified server-side: certless client never reaches the
+handler; a valid client is accepted as peer=agent1. Mutual TLS now works end to end.
+
+### tls server does not emit 'tlsClientError'
+When the server rejects a client handshake it drops the connection SILENTLY; node emits
+'tlsClientError' with the reason. So a milo server gives an operator no way to see WHY a
+client was refused. Found while verifying mTLS enforcement.
 
 ### [x] tls server honours minVersion/maxVersion/ciphers/ciphersuites (FIXED 2026-07-16)
 Was: nm_ssl_server_ctx_new took only cert+key, so a server built with {maxVersion:'TLSv1.2',

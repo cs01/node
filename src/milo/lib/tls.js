@@ -356,9 +356,13 @@ class Server extends net.Server {
     // with {maxVersion:'TLSv1.2', ciphers:'...'} still negotiated TLSv1.3 with the default
     // cipher list — the caller could not restrict its OWN server.
     const t = this._tlsOptions || {};
+    // requestCert/rejectUnauthorized were no-ops: the server never asked for a client cert
+    // and could not enforce one. `ca` here is the trust store for CLIENT chains.
     this._sslCtx = tcp.sslServerCtxNew(certStr, keyStr,
                                        t.minVersion || '', t.maxVersion || '',
-                                       t.ciphers || '', t.ciphersuites || '');
+                                       t.ciphers || '', t.ciphersuites || '',
+                                       _caToPem(t.ca), t.requestCert ? 1 : 0,
+                                       (t.requestCert && t.rejectUnauthorized !== false) ? 1 : 0);
     if (!this._sslCtx) {
       process.nextTick(() => this.emit('error', new Error('Failed to create SSL context')));
       return this;

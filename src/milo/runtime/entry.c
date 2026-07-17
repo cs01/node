@@ -730,10 +730,16 @@ static int nm_tls_ver(const char* v) {
 // {maxVersion:'TLSv1.2', ciphers:'...'} still negotiated TLSv1.3 with the default list, so a
 // caller could not restrict what its own server would accept. Only visible once
 // getProtocol()/getCipher() stopped returning hardcoded strings.
+// request_cert / reject_unauthorized / ca_pem were absent: the server never called
+// SSL_CTX_set_verify, so it never ASKED for a client certificate and could not enforce one —
+// requestCert:true was silently a no-op and rejectUnauthorized:true could not drop an
+// anonymous client.
 long long nm_ssl_server_ctx_new(const char* cert_pem, int cert_len,
                                  const char* key_pem, int key_len,
                                  const char* min_ver, const char* max_ver,
-                                 const char* ciphers, const char* ciphersuites) {
+                                 const char* ciphers, const char* ciphersuites,
+                                 const char* ca_pem, int request_cert,
+                                 int reject_unauthorized) {
     SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
     if (!ctx) return 0;
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
@@ -745,6 +751,35 @@ long long nm_ssl_server_ctx_new(const char* cert_pem, int cert_len,
     // 1.2 cipher silently still allows every 1.3 suite.
     if (ciphers && ciphers[0]) SSL_CTX_set_cipher_list(ctx, ciphers);
     if (ciphersuites && ciphersuites[0]) SSL_CTX_set_ciphersuites(ctx, ciphersuites);
+
+    // Client-certificate verification. The `ca` bundle is BOTH the trust store for the
+    // client's chain and the CA list advertised in the CertificateRequest — without the
+    // latter a client often cannot tell WHICH cert to offer and sends none.
+    if (ca_pem && ca_pem[0]) {
+        X509_STORE* store = nm_ssl_store_from_pem(ca_pem);
+        if (store) { SSL_CTX_set1_verify_cert_store(ctx, store); X509_STORE_free(store); }
+        BIO* bio = BIO_new_mem_buf(ca_pem, -1);
+        if (bio) {
+            STACK_OF(X509_NAME)* names = sk_X509_NAME_new_null();
+            X509* x;
+            while ((x = PEM_read_bio_X509(bio, NULL, NULL, NULL)) != NULL) {
+                X509_NAME* nm = X509_NAME_dup(X509_get_subject_name(x));
+                if (nm) sk_X509_NAME_push(names, nm);
+                X509_free(x);
+            }
+            BIO_free(bio);
+            ERR_clear_error();
+            if (sk_X509_NAME_num(names) > 0) SSL_CTX_set_client_CA_list(ctx, names);
+            else sk_X509_NAME_free(names);
+        }
+    }
+    if (request_cert) {
+        // VERIFY_PEER alone asks for a cert but accepts none offered; FAIL_IF_NO_PEER_CERT is
+        // what makes rejectUnauthorized actually reject. Node splits these the same way.
+        int mode = SSL_VERIFY_PEER;
+        if (reject_unauthorized) mode |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
+        SSL_CTX_set_verify(ctx, mode, NULL);
+    }
 
     // Load the leaf, then EVERY remaining cert in the PEM as chain certs. A cert file may
     // bundle intermediates (test/fixtures/keys/agent6-cert.pem is leaf + the ca3 intermediate);
