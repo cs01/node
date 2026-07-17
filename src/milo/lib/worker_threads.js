@@ -203,7 +203,12 @@ if (_isWorker) {
   }, enumerable: false });
 }
 
+// node 20.8+: flag an object so structuredClone/postMessage refuses it. Implemented in
+// bootstrap.js (a WeakSet checked by structuredClone), exposed here where undici imports it.
+const markAsUncloneable = globalThis.__markAsUncloneable || function(){};
+
 module.exports = {
+  markAsUncloneable,
   isMainThread: !_isWorker,
   parentPort,
   workerData,

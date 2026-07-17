@@ -809,6 +809,15 @@
   if (typeof Error.prepareStackTrace !== 'function') {
     Error.prepareStackTrace = function(error, frames) { return error.toString() + frames.map(f => '\n    at ' + f.toString()).join(''); };
   }
+  // node's worker_threads.markAsUncloneable: flag an object so structuredClone/postMessage
+  // refuse it (undici marks CacheStorage this way). A real WeakSet + a check in
+  // structuredClone, not a no-op — a no-op would let a marked object clone silently.
+  if (!globalThis.__milo_uncloneable) {
+    globalThis.__milo_uncloneable = new WeakSet();
+    globalThis.__markAsUncloneable = function markAsUncloneable(o) {
+      if (o !== null && typeof o === 'object') globalThis.__milo_uncloneable.add(o);
+    };
+  }
   if (typeof structuredClone === 'undefined') {
     globalThis.structuredClone = function structuredClone(value, options) {
       const seen = new Map();
@@ -818,6 +827,9 @@
             const e = new Error('could not be cloned'); e.name = 'DataCloneError'; e.code = 25; throw e;
           }
           return v;
+        }
+        if (globalThis.__milo_uncloneable.has(v)) {
+          const e = new Error('could not be cloned'); e.name = 'DataCloneError'; e.code = 25; throw e;
         }
         if (seen.has(v)) return seen.get(v);
         if (v instanceof ArrayBuffer) { const c = v.slice(0); seen.set(v, c); return c; }
