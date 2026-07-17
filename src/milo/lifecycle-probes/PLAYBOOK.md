@@ -986,6 +986,27 @@ only an `await once('drain')` writer over a SYNC transform triggers it. The bug 
 gap between what I could synthesize and what tRPC actually does. Found by a fresh-context
 subagent after i'd ruled out gzip/buffers/close-destroy and narrowed to "stream stall".
 
+## 5y. SYSTEMATIC stub-hunt: silence is the failure mode (2026-07-16)
+
+The session's whole finding: milo fails by LOOKING LIKE SUCCESS. A real app found 8 bugs the
+2143-test suite missed — every one PASSED because a stub returned a plausible value instead
+of doing the work or failing. `python3 src/milo/lifecycle-probes/stub-audit.py` enumerates the
+no-op/const-return stubs in lib/*.js (32 today). **Do NOT blind-throw** — classify each:
+- **THROW** — feature absent, fake success = garbage/hang, no caller depends on the lie.
+  Done: node:test `mock.timers` (enable/tick/runAll) now throws ERR_NOT_IMPLEMENTED instead of
+  no-op'ing enable() and returning a resolved promise from tick() claiming time passed.
+- **IMPLEMENT** — a request is silently dropped; a throw would break working callers. These
+  need the real thing, recorded in ROADMAP: http.Agent addRequest (keepAlive/maxSockets
+  ignored), http2 settings()/priority() (gRPC config ignored), setRecvBufferSize (done for
+  dgram), worker_threads stdout/stderr when {stdout:true} is passed.
+- **KEEP** — the no-op/const is genuinely correct: cork/uncork (advisory), writableCorked 0
+  (uncorked), worker.stdout null BY DEFAULT (only wrong when stdout:true), flushHeaders no-op.
+The lesson from the getters fixed earlier (getPeerCertificate {}, getCipher hardcoded,
+authorized=true, versions.napi '10', getRecvBufferSize 65536): a stub that returns a plausible
+RESULT is worse than one that throws — it passes tests a clean failure would fail, and hides
+the defect until a real app trips on it. Prefer honest value > implementation > loud throw;
+never silent plausible garbage.
+
 ## 5x. stream-audit.sh — guards the stream-lifecycle family (2026-07-16)
 
 Two stream bugs shipped this session (5531a4f4107 write()/drain returned false+fired drain

@@ -177,11 +177,18 @@ const mock = {
   },
   reset() {},
   restoreAll() {},
+  // mock.timers was a silent lie: enable() no-op'd, tick(ms) returned a resolved promise
+  // claiming `ms` elapsed. A test that enables mock timers then ran against REAL timers and
+  // asserted garbage or hung with no hint. Node's mock.timers is real; milo has not
+  // implemented it. Throw loudly (ERR_NOT_IMPLEMENTED semantics) so the test fails with a
+  // clear reason instead of a vacuous pass — silence is the failure mode this whole runtime
+  // is being hardened against. Implement for real (timers are JS-driven in _timers_init.js)
+  // to make these tests pass honestly.
   timers: {
-    enable() {},
+    enable() { const e = new Error('t.mock.timers is not implemented in milo (would run against real timers and lie)'); e.code = 'ERR_NOT_IMPLEMENTED'; throw e; },
     reset() {},
-    tick(ms) { return Promise.resolve(); },
-    runAll() { return Promise.resolve(); },
+    tick() { const e = new Error('t.mock.timers.tick is not implemented in milo'); e.code = 'ERR_NOT_IMPLEMENTED'; throw e; },
+    runAll() { const e = new Error('t.mock.timers.runAll is not implemented in milo'); e.code = 'ERR_NOT_IMPLEMENTED'; throw e; },
   },
 };
 
