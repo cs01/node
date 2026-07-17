@@ -68,25 +68,28 @@ node::OnScopeLeave from them). Nothing is forked into the tree; the copies regen
 **`process.versions.napi` claims '10' (lib/_process_init.js:72) — still not fully true while
 threadsafe_function is missing.**
 
-## Conformance: 17/17
+## Conformance: 28/31 (node's own js-native-api suite)
 
-`test/js-native-api` — node's own Node-API conformance suite — **17 PASS / 0 FAIL** of the 17
-that build with plain clang (no node-gyp): 2_function_arguments, 3_callbacks, 4_object_factory,
-5_function_factory, 7_factory_wrap, 8_passing_wrapped, test_array, test_bigint,
-test_conversions, test_date, test_error, test_exception, test_handle_scope, test_new_target,
-test_number, test_promise, test_sharedarraybuffer.
-
-Build them (node-gyp is not wired up):
+Build every addon without node-gyp, then run:
 ```bash
-for d in test/js-native-api/*/; do n=$(basename "$d"); mkdir -p "$d/build/Release"
-  clang++ -shared -undefined dynamic_lookup -fPIC -x c++ -std=c++17 \
-    -Isrc -Itest/js-native-api -o "$d/build/Release/$n.node" \
-    $(find "$d" -maxdepth 1 \( -name '*.c' -o -name '*.cc' \)) 2>/dev/null
-done
+python3 src/milo/lifecycle-probes/build-napi-tests.py     # 38 addons, 0 failures
+for d in test/js-native-api/*/; do ./out/Release/milo-node "$d/test.js"; done
 ```
-(Run that under **bash** — zsh does not word-split `$srcs` and every build silently fails.)
-15 of 33 dirs need C++ node-addon-api headers or gyp-specific flags and do not build this way;
-they are untested, not known-broken.
+**28 PASS / 3 FAIL of 31 runnable dirs.** The 3 all pass under the oracle, so they are REAL
+gaps, not harness artifacts:
+- `test_function` — "Mismatched noop function calls. Expected exactly 1, actual 0"
+- `test_instance_data` — MODULE_NOT_FOUND (multi-target dir; check which target test.js wants)
+- `test_typedarray` — assertion failure
+
+**The builder encodes three traps that cost real time:**
+1. Each binding.gyp has MULTIPLE targets with their own sources/defines (6_object_wrap builds
+   3 addons from overlapping files). Compiling a directory's files together yields duplicate
+   `_Init`/`_napi_register_module_v1` and fails to link.
+2. `.c` must compile as C. Forcing `-x c++` turns legal C (`char* p = malloc(..)`) into an error.
+3. `NAPI_EXPERIMENTAL` is PER-TARGET, not global — it changes `node_api_basic_finalize` to take
+   a `const napi_env`, so defining it everywhere breaks every test written against the stable
+   signature. Only 5 dirs ask for it.
+Also: run loops under **bash**; zsh does not word-split `$srcs` and every build silently fails.
 
 ## First milestone
 
