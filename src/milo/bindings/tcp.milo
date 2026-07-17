@@ -1257,6 +1257,9 @@ fn udpRecvOp(info: *u8, _ud: *u8): void {
 
 // udpSetOpt(fd, optName, value) — generic setsockopt for UDP
 // optName: 1=SO_BROADCAST, 2=IP_TTL, 3=IP_MULTICAST_TTL
+// udpSetOpt(fd, opt, val) -> 0, or -1 if the setsockopt failed / opt is unknown.
+// Returning the result is the point: every one of these used to return void, so the JS
+// side's `if (r < 0)` compared `undefined < 0` and no failure could ever surface.
 fn udpSetOpt(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     let fd = ci.i32Arg(0, -1)
@@ -1264,18 +1267,24 @@ fn udpSetOpt(info: *u8, _ud: *u8): void {
     let val = ci.i32Arg(2, 0)
     unsafe {
         var optVal: [i32; 1] = [val]
+        var r: i32 = -1
         if opt == 1 {
             // SO_BROADCAST: SOL_SOCKET=0xffff, SO_BROADCAST=0x20
-            setsockopt(fd, 0xffff, 0x20, optVal as *u8, 4)
+            r = setsockopt(fd, 0xffff, 0x20, optVal as *u8, 4)
         }
         if opt == 2 {
             // IP_TTL: IPPROTO_IP=0, IP_TTL=4
-            setsockopt(fd, 0, 4, optVal as *u8, 4)
+            r = setsockopt(fd, 0, 4, optVal as *u8, 4)
         }
         if opt == 3 {
             // IP_MULTICAST_TTL: IPPROTO_IP=0, IP_MULTICAST_TTL=10
-            setsockopt(fd, 0, 10, optVal as *u8, 4)
+            r = setsockopt(fd, 0, 10, optVal as *u8, 4)
         }
+        if opt == 4 {
+            // IP_MULTICAST_LOOP: IPPROTO_IP=0, IP_MULTICAST_LOOP=11
+            r = setsockopt(fd, 0, 11, optVal as *u8, 4)
+        }
+        ci.retI32(r)
     }
 }
 
@@ -1294,12 +1303,21 @@ fn udpAddMembership(info: *u8, _ud: *u8): void {
 
         // ip_mreq: multicast addr (4 bytes) + interface addr (4 bytes)
         var mreq: [u8; 8] = [0; 8]
-        inet_pton(2, mcastBuf as *u8, mreq as *u8)
+        // inet_pton returns 1 on success. Discarding it meant "256.256.256.256" left mreq
+        // zeroed and joined INADDR_ANY instead of failing — the same silent-parse bug that
+        // made listen(0, '::1') bind 0.0.0.0.
+        if inet_pton(2, mcastBuf as *u8, mreq as *u8) != 1 {
+            ci.retI32(-1)
+            return
+        }
         if ifBuf[0] != 0 {
-            inet_pton(2, ifBuf as *u8, (mreq as *u8 as i64 + 4) as *u8)
+            if inet_pton(2, ifBuf as *u8, (mreq as *u8 as i64 + 4) as *u8) != 1 {
+                ci.retI32(-1)
+                return
+            }
         }
         // IP_ADD_MEMBERSHIP: IPPROTO_IP=0, IP_ADD_MEMBERSHIP=12
-        setsockopt(fd, 0, 12, mreq as *u8, 8)
+        ci.retI32(setsockopt(fd, 0, 12, mreq as *u8, 8))
     }
 }
 
@@ -1316,12 +1334,111 @@ fn udpDropMembership(info: *u8, _ud: *u8): void {
             ci.arg(2).writeUtf8(iso, ifBuf as *u8, 256)
         }
         var mreq: [u8; 8] = [0; 8]
-        inet_pton(2, mcastBuf as *u8, mreq as *u8)
+        if inet_pton(2, mcastBuf as *u8, mreq as *u8) != 1 {
+            ci.retI32(-1)
+            return
+        }
         if ifBuf[0] != 0 {
-            inet_pton(2, ifBuf as *u8, (mreq as *u8 as i64 + 4) as *u8)
+            if inet_pton(2, ifBuf as *u8, (mreq as *u8 as i64 + 4) as *u8) != 1 {
+                ci.retI32(-1)
+                return
+            }
         }
         // IP_DROP_MEMBERSHIP: IPPROTO_IP=0, IP_DROP_MEMBERSHIP=13
-        setsockopt(fd, 0, 13, mreq as *u8, 8)
+        ci.retI32(setsockopt(fd, 0, 13, mreq as *u8, 8))
+    }
+}
+
+// udpSetMulticastInterface(fd, addr, family) -> 0 / -1.
+// The two families disagree about what "interface" even means: IPv4 takes an in_addr, IPv6
+// takes a u_int interface index (from the "%zone" suffix). Same option number (9), totally
+// different payload — so this can't ride on udpSetOpt's i32 value, and family must come
+// from the caller rather than be guessed from the string.
+fn udpSetMulticastInterface(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let fd = ci.i32Arg(0, -1)
+    unsafe {
+        var addrBuf: [u8; 256] = [0; 256]
+        ci.arg(1).writeUtf8(iso, addrBuf as *u8, 256)
+        let family = ci.i32Arg(2, AF_INET)
+
+        if family == AF_INET6 {
+            var addrPart: [u8; 256] = [0; 256]
+            var zonePart: [u8; 256] = [0; 256]
+            if !splitZone(addrBuf as *u8, addrPart as *u8, zonePart as *u8) {
+                ci.retI32(-1)
+                return
+            }
+            // No zone means "default selection" (index 0), which the test accepts; but an
+            // empty address is a plain EINVAL.
+            var idxVal: [u32; 1] = [0]
+            if zonePart[0] != 0 {
+                idxVal[0] = if_nametoindex(zonePart as *u8)
+            } else {
+                if addrPart[0] == 0 {
+                    ci.retI32(-1)
+                    return
+                }
+            }
+            // IPPROTO_IPV6=41, IPV6_MULTICAST_IF=9
+            ci.retI32(setsockopt(fd, IPPROTO_IPV6, 9, idxVal as *u8, 4))
+            return
+        }
+
+        var ia: [u8; 4] = [0; 4]
+        // A v6 literal ("::") fails here rather than silently selecting 0.0.0.0; the test
+        // accepts EINVAL for that case on a udp4 socket.
+        if inet_pton(2, addrBuf as *u8, ia as *u8) != 1 {
+            ci.retI32(-1)
+            return
+        }
+        // IPPROTO_IP=0, IP_MULTICAST_IF=9
+        ci.retI32(setsockopt(fd, 0, 9, ia as *u8, 4))
+    }
+}
+
+// udpSetSourceMembership(fd, mcast, source, iface, add) -> 0 / -1.
+// ip_mreq_source is {multiaddr, sourceaddr, interface} — source comes BEFORE interface,
+// which is the reverse of what the argument order suggests (checked against netinet/in.h).
+fn udpSetSourceMembership(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    let iso = ci.isolate()
+    let fd = ci.i32Arg(0, -1)
+    unsafe {
+        var mcastBuf: [u8; 256] = [0; 256]
+        ci.arg(1).writeUtf8(iso, mcastBuf as *u8, 256)
+        var srcBuf: [u8; 256] = [0; 256]
+        ci.arg(2).writeUtf8(iso, srcBuf as *u8, 256)
+        var ifBuf: [u8; 256] = [0; 256]
+        if ci.length() > 3 {
+            ci.arg(3).writeUtf8(iso, ifBuf as *u8, 256)
+        }
+        let add = ci.i32Arg(4, 1)
+
+        var mreq: [u8; 12] = [0; 12]
+        let base = mreq as *u8 as i64
+        if inet_pton(2, mcastBuf as *u8, mreq as *u8) != 1 {
+            ci.retI32(-1)
+            return
+        }
+        if inet_pton(2, srcBuf as *u8, (base + 4) as *u8) != 1 {
+            ci.retI32(-1)
+            return
+        }
+        if ifBuf[0] != 0 {
+            if inet_pton(2, ifBuf as *u8, (base + 8) as *u8) != 1 {
+                ci.retI32(-1)
+                return
+            }
+        }
+        // IPPROTO_IP=0; IP_ADD_SOURCE_MEMBERSHIP=70, IP_DROP_SOURCE_MEMBERSHIP=71 (macOS;
+        // Linux uses 39/40).
+        var opt: i32 = 71
+        if add == 1 {
+            opt = 70
+        }
+        ci.retI32(setsockopt(fd, 0, opt, mreq as *u8, 12))
     }
 }
 
@@ -1374,6 +1491,8 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "udpSetOpt" as *u8, udpSetOpt as *u8)
         c.setMethod(exp, "udpAddMembership" as *u8, udpAddMembership as *u8)
         c.setMethod(exp, "udpDropMembership" as *u8, udpDropMembership as *u8)
+        c.setMethod(exp, "udpSetSourceMembership" as *u8, udpSetSourceMembership as *u8)
+        c.setMethod(exp, "udpSetMulticastInterface" as *u8, udpSetMulticastInterface as *u8)
 
         // constants
         let i = Isolate { ptr: _iso }

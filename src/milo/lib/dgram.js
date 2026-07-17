@@ -8,7 +8,27 @@ const { isIP } = require('net');
 const AF_INET = 2;
 const AF_INET6 = 30;
 const net = require('net');
-const { getSystemErrorName } = require('util');
+const { getSystemErrorName, inspect } = require('util');
+
+// Node renders the offender as `Received type <typeof> (<inspect>)`, but drops the type
+// clause entirely for null/undefined ("Received undefined"). The tests match the message
+// exactly, so both shapes matter.
+function invalidArgType(name, expected, actual) {
+  const got = (actual === null || actual === undefined)
+    ? `Received ${actual}`
+    : `Received type ${typeof actual} (${inspect(actual)})`;
+  const e = new TypeError(`The "${name}" argument must be of type ${expected}. ${got}`);
+  e.code = 'ERR_INVALID_ARG_TYPE';
+  return e;
+}
+
+function validateString(v, name) {
+  if (typeof v !== 'string') throw invalidArgType(name, 'string', v);
+}
+
+function validateNumber(v, name) {
+  if (typeof v !== 'number') throw invalidArgType(name, 'number', v);
+}
 
 class Socket extends EventEmitter {
   constructor(type, listener) {
@@ -300,22 +320,73 @@ class Socket extends EventEmitter {
     this.send(buffer, offset, length, port, address, cb);
   }
 
-  setBroadcast(flag) { if (this._fd >= 0) tcp.udpSetOpt(this._fd, 1, flag ? 1 : 0); }
-  setTTL(ttl) { if (this._fd >= 0) tcp.udpSetOpt(this._fd, 2, ttl); }
-  setMulticastTTL(ttl) { if (this._fd >= 0) tcp.udpSetOpt(this._fd, 3, ttl); }
+  _healthCheck() {
+    if (this._closed || this._fd < 0) {
+      const e = new Error('Not running');
+      e.code = 'ERR_SOCKET_DGRAM_NOT_RUNNING';
+      throw e;
+    }
+  }
+
+  // Node opens the fd lazily in bind(), so an option set on a never-bound socket reaches a
+  // handle with no fd and fails EBADF. We open the fd in the constructor, where setsockopt
+  // would just succeed — so the _bound gate is what preserves the observable behavior.
+  _setOpt(name, opt, val) {
+    this._healthCheck();
+    if (!this._bound) throw new Error(`${name} EBADF`);
+    if (tcp.udpSetOpt(this._fd, opt, val) < 0) throw new Error(`${name} EINVAL`);
+  }
+
+  setBroadcast(flag) { this._setOpt('setBroadcast', 1, flag ? 1 : 0); }
+  setTTL(ttl) {
+    validateNumber(ttl, 'ttl');
+    this._setOpt('setTTL', 2, ttl);
+    return ttl;
+  }
+  setMulticastTTL(ttl) {
+    validateNumber(ttl, 'ttl');
+    this._setOpt('setMulticastTTL', 3, ttl);
+    return ttl;
+  }
+  setMulticastLoopback(flag) {
+    this._setOpt('setMulticastLoopback', 4, flag ? 1 : 0);
+    return flag;
+  }
+  setMulticastInterface(iface) {
+    validateString(iface, 'multicastInterface');
+    this._healthCheck();
+    if (tcp.udpSetMulticastInterface(this._fd, iface, this.type === 'udp6' ? AF_INET6 : AF_INET) < 0) {
+      const e = new Error('setMulticastInterface EINVAL');
+      e.code = 'EINVAL';
+      throw e;
+    }
+  }
   addMembership(mcast, iface) {
     if (mcast === undefined) { const e = new TypeError('The "multicastAddress" argument must be specified'); e.code = 'ERR_MISSING_ARGS'; throw e; }
-    if (this._closed) { const e = new Error('Not running'); e.code = 'ERR_SOCKET_DGRAM_NOT_RUNNING'; throw e; }
-    const r = tcp.udpAddMembership(this._fd, mcast, iface || '');
-    if (r < 0) throw new Error('addMembership EINVAL');
+    this._healthCheck();
+    if (tcp.udpAddMembership(this._fd, mcast, iface || '') < 0) throw new Error('addMembership EINVAL');
   }
   dropMembership(mcast, iface) {
     if (mcast === undefined) { const e = new TypeError('The "multicastAddress" argument must be specified'); e.code = 'ERR_MISSING_ARGS'; throw e; }
-    if (this._closed) { const e = new Error('Not running'); e.code = 'ERR_SOCKET_DGRAM_NOT_RUNNING'; throw e; }
-    const r = tcp.udpDropMembership(this._fd, mcast, iface || '');
-    if (r < 0) throw new Error('dropMembership EINVAL');
+    this._healthCheck();
+    if (tcp.udpDropMembership(this._fd, mcast, iface || '') < 0) throw new Error('dropMembership EINVAL');
   }
-  setMulticastLoopback() {}
+  _sourceMembership(name, sourceAddress, groupAddress, iface, add) {
+    validateString(sourceAddress, 'sourceAddress');
+    validateString(groupAddress, 'groupAddress');
+    this._healthCheck();
+    if (tcp.udpSetSourceMembership(this._fd, groupAddress, sourceAddress, iface || '', add) < 0) {
+      const e = new Error(`${name} EINVAL`);
+      e.code = 'EINVAL';
+      throw e;
+    }
+  }
+  addSourceSpecificMembership(sourceAddress, groupAddress, iface) {
+    this._sourceMembership('addSourceSpecificMembership', sourceAddress, groupAddress, iface, 1);
+  }
+  dropSourceSpecificMembership(sourceAddress, groupAddress, iface) {
+    this._sourceMembership('dropSourceSpecificMembership', sourceAddress, groupAddress, iface, 0);
+  }
   ref() { return this; }
   unref() { return this; }
   setRecvBufferSize() {}
