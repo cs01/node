@@ -255,19 +255,17 @@ if (!process.dlopen) {
       e.code = 'ERR_DLOPEN_FAILED';
       throw e;
     }
-    try {
-      napi.dlopen(module, filename, flags);
-      // A loaded addon can post work from other threads (napi_threadsafe_function,
-      // napi_async_work), and those wake the loop with EVFILT_USER — which only exists once
-      // a kqueue does. Without this the loop falls back to an UNINTERRUPTIBLE sleep and
-      // completions are delayed to the next 100ms tick (measured: 60ms posts delivered at
-      // 106/212/314ms instead of 65/130/195). Costs one fd per addon-using process.
-      try { require('net')._ensurePoll(); } catch {}
-    } catch (err) {
-      const e = new Error('Cannot load native addon ' + filename + ': ' + err.message);
-      e.code = 'ERR_DLOPEN_FAILED';
-      throw e;
-    }
+    // Nothing is wrapped here: an addon's own Init exception must reach the caller with its
+    // message intact (test/js-native-api/test_exception asserts exactly that), and the
+    // binding already tags its own loader failures with code ERR_DLOPEN_FAILED. Wrapping
+    // corrupted both cases into 'Cannot load native addon <path>: <msg>'.
+    napi.dlopen(module, filename, flags);
+    // A loaded addon can post work from other threads (napi_threadsafe_function,
+    // napi_async_work), and those wake the loop with EVFILT_USER — which only exists once a
+    // kqueue does. Without this the loop falls back to an UNINTERRUPTIBLE sleep and
+    // completions are delayed to the next 100ms tick (measured: 60ms posts delivered at
+    // 106/212/314ms instead of 65/130/195). Costs one fd per addon-using process.
+    try { require('net')._ensurePoll(); } catch {}
   };
 }
 if (!process.execPath) {

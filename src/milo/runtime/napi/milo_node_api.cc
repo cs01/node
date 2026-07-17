@@ -19,6 +19,30 @@ extern "C" int nm_kq_wake_main(void);
 
 namespace {
 
+
+// Loader failures carry code ERR_DLOPEN_FAILED, matching node. Tagging here means the JS
+// wrapper can rethrow everything untouched — an addon's own Init exception must reach the
+// caller with its message intact (test/js-native-api/test_exception asserts exactly that).
+// The message embeds `filename` by concatenation, never as a printf format, so a path
+// containing %s cannot corrupt it.
+inline void ThrowDlopenError(v8::Isolate* isolate, v8::Local<v8::Context> context,
+                             const std::string& msg) {
+  v8::Local<v8::Value> err = v8::Exception::Error(
+      v8::String::NewFromUtf8(isolate, msg.c_str()).ToLocalChecked());
+  err.As<v8::Object>()
+      ->Set(context,
+            v8::String::NewFromUtf8(isolate, "code").ToLocalChecked(),
+            v8::String::NewFromUtf8(isolate, "ERR_DLOPEN_FAILED").ToLocalChecked())
+      .Check();
+  isolate->ThrowException(err);
+}
+
+// After CallIntoModule rethrows, V8 has the exception scheduled; stop and let it propagate.
+inline bool try_catch_pending(v8::Isolate* isolate) {
+  return isolate->IsExecutionTerminating() || isolate->HasPendingException();
+}
+
+
 // node's node_napi_env__ derives its env from node::Environment. milo has none, so this is
 // the whole subclass: napi_env__ leaves exactly one pure virtual, CallFinalizer.
 class MiloNapiEnv : public napi_env__ {
@@ -612,9 +636,8 @@ void nm_napi_dlopen(void* info_ptr, void* rt_data) {
   void* handle = dlopen(*filename, RTLD_LAZY);
   if (handle == nullptr) {
     const char* err = dlerror();
-    std::string msg = std::string("dlopen failed: ") + (err ? err : "unknown");
-    isolate->ThrowException(v8::Exception::Error(
-        v8::String::NewFromUtf8(isolate, msg.c_str()).ToLocalChecked()));
+    ThrowDlopenError(isolate, context,
+                     std::string("dlopen failed: ") + (err ? err : "unknown"));
     return;
   }
 
@@ -625,12 +648,11 @@ void nm_napi_dlopen(void* info_ptr, void* rt_data) {
   using VersionFn = int32_t (*)(void);
   InitFn init = reinterpret_cast<InitFn>(dlsym(handle, "napi_register_module_v1"));
   if (init == nullptr) {
-    isolate->ThrowException(v8::Exception::Error(
-        v8::String::NewFromUtf8(
-            isolate,
-            "not a Node-API addon: napi_register_module_v1 not found (legacy "
-            "node_register_module_v* and napi_module_register are unsupported)")
-            .ToLocalChecked()));
+    ThrowDlopenError(isolate, context,
+                     std::string("not a Node-API addon: napi_register_module_v1 not found in ") +
+                         *filename +
+                         " (legacy node_register_module_v* and napi_module_register are "
+                         "unsupported)");
     return;
   }
 
@@ -652,7 +674,13 @@ void nm_napi_dlopen(void* info_ptr, void* rt_data) {
   napi_value exports =
       reinterpret_cast<napi_value>(*v8::Local<v8::Value>(exports_val));
 
-  napi_value ret = init(env, exports);
+  // Init must run inside CallIntoModule, not raw: an addon that throws during Init records
+  // the error in env->last_exception, and CallIntoModule is what rethrows it into V8 so it
+  // propagates out of require(). Calling init() directly swallowed it — the addon then
+  // looked like it loaded successfully with half-initialised exports.
+  napi_value ret = nullptr;
+  env->CallIntoModule([&](napi_env e) { ret = init(e, exports); });
+  if (try_catch_pending(isolate)) return;
 
   // An addon may return a different object than the one handed to it; honour that.
   if (ret != nullptr) {

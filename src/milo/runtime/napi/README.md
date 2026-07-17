@@ -68,6 +68,26 @@ node::OnScopeLeave from them). Nothing is forked into the tree; the copies regen
 **`process.versions.napi` claims '10' (lib/_process_init.js:72) — still not fully true while
 threadsafe_function is missing.**
 
+## Conformance: 17/17
+
+`test/js-native-api` — node's own Node-API conformance suite — **17 PASS / 0 FAIL** of the 17
+that build with plain clang (no node-gyp): 2_function_arguments, 3_callbacks, 4_object_factory,
+5_function_factory, 7_factory_wrap, 8_passing_wrapped, test_array, test_bigint,
+test_conversions, test_date, test_error, test_exception, test_handle_scope, test_new_target,
+test_number, test_promise, test_sharedarraybuffer.
+
+Build them (node-gyp is not wired up):
+```bash
+for d in test/js-native-api/*/; do n=$(basename "$d"); mkdir -p "$d/build/Release"
+  clang++ -shared -undefined dynamic_lookup -fPIC -x c++ -std=c++17 \
+    -Isrc -Itest/js-native-api -o "$d/build/Release/$n.node" \
+    $(find "$d" -maxdepth 1 \( -name '*.c' -o -name '*.cc' \)) 2>/dev/null
+done
+```
+(Run that under **bash** — zsh does not word-split `$srcs` and every build silently fails.)
+15 of 33 dirs need C++ node-addon-api headers or gyp-specific flags and do not build this way;
+they are untested, not known-broken.
+
 ## First milestone
 
 `test/js-native-api/2_function_arguments` — `assert(addon.add(3,5) === 8)`. Needs only
