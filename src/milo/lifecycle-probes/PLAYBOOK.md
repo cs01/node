@@ -668,7 +668,24 @@ spin re-fires `_onReadable` continuously, and THAT is what re-drives a stalled a
 handshake to completion. Removing the spin doesn't create the bug — it exposes it. This is
 why all three attempts lost the same test. The spin is a splint over a missing EOF path.
 
-**A fourth attempt must fix the accept path FIRST, then go READ-only:**
+**FOURTH ATTEMPT (2026-07-16) — the EOF-destroy prerequisite LANDED (a62e28329c6) and did
+NOT unblock READ-only. `connect-no-host` still hangs. Do not assume it is now clear.**
+With EOF-destroy committed, re-applying READ-only again gives: 3 spins dead (0.05s CPU) and
+`connect-no-host` HUNG, `socks=[8] srvs=[]`. **No EV_EOF event arrives on fd 8 at all**, so
+the EOF-destroy fix never fires. The pin is therefore NOT the mid-handshake EOF case.
+
+**Next hypothesis to test (NOT yet confirmed — instrument before trusting):** fd 8 is the
+server-ACCEPTED socket. The test's callback demonstrably runs (`srvs=[]` proves server.close()
+executed, and the client asserted `authorized` and destroyed). So the client's fd closed and a
+FIN went out — yet fd 8 sees no EOF. Either (a) fd 8's READ registration is already gone by
+then, or (b) fd 8 ended normally (push(null) + _stopReading) but **nothing ever destroys it**
+— net.js's EV_EOF path ends a socket without destroying it, and an orphaned accepted socket
+whose server has closed has no one left to call destroy(). Under the spin it survives because
+the WRITE re-fires keep driving it. Check (b) first: does milo auto-destroy on 'end' the way
+node does (allowHalfOpen=false -> autoDestroy)? A TLSSocket may be missing that wiring.
+Instrument fd 8's registration state + destroy path before writing any more code.
+
+**Superseded plan (the accept path did NOT need this — see CORRECTION above):**
 - detect peer-gone during handshake (`sslAcceptContinue` needs to distinguish a clean EOF /
   ECONNRESET from WANT_READ — the C side can check `SSL_get_error` for SSL_ERROR_ZERO_RETURN
   and SSL_ERROR_SYSCALL with a 0 read, and return a new code, e.g. -2)
