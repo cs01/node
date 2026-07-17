@@ -7,6 +7,12 @@ const tcp = internalBinding('tcp');
 // macOS values; the tcp binding is macOS-only (kqueue). Linux would be 10.
 const AF_INET = 2;
 const AF_INET6 = 30;
+// listen() with no host binds dual-stack, as Node does: '::' with IPV6_V6ONLY off, so one
+// listener answers both v4 and v6 clients (the kernel presents v4 peers as v4-mapped).
+// This defaulted to '0.0.0.0', which is v4-only — and once DNS started resolving localhost
+// to ::1, listen(0) + connect('localhost') had the client reaching an address the listener
+// was not on. An explicit listen(port, '0.0.0.0') is still v4.
+const DEFAULT_HOST = '::';
 
 const EVFILT_READ = tcp.EVFILT_READ;   // -1
 const EVFILT_WRITE = tcp.EVFILT_WRITE; // -2
@@ -213,7 +219,12 @@ class Socket extends Duplex {
 
   _doConnect(ip, port) {
     ensurePoll();
-    this._fd = tcp.socket();
+    // The family is fixed at socket() time, before connect() ever sees the address — so it
+    // must be derived from the resolved ip here. (listen() does the same at net.js:554.)
+    // Without this the socket is AF_INET and a v6 literal fails: inet_pton(AF_INET, "::1")
+    // returns 0, the sockaddr stays zeroed, and the connect goes to 0.0.0.0 -> ECONNREFUSED.
+    const family = (ip && ip.includes(':')) ? AF_INET6 : AF_INET;
+    this._fd = tcp.socket(family);
     if (this._fd < 0) {
       process.nextTick(() => this.emit('error', new Error('socket() failed')));
       return;
@@ -506,7 +517,7 @@ class Server extends EventEmitter {
 
   listen(port, host, backlog, cb) {
     if (typeof port === 'function') {
-      cb = port; port = 0; host = '0.0.0.0'; backlog = 128;
+      cb = port; port = 0; host = DEFAULT_HOST; backlog = 128;
     } else if (typeof port === 'object' && port !== null) {
       cb = typeof host === 'function' ? host : cb;
       const opts = port;
@@ -519,7 +530,7 @@ class Server extends EventEmitter {
         return this;
       }
       port = opts.port;
-      host = opts.host || '0.0.0.0';
+      host = opts.host || DEFAULT_HOST;
       backlog = opts.backlog || 128;
     } else if (typeof port === 'string' && !Number.isFinite(+port)) {
       // Pipe path as first arg: listen('/tmp/sock')
@@ -530,10 +541,10 @@ class Server extends EventEmitter {
       process.nextTick(() => this.emit('error', e));
       return this;
     } else {
-      if (typeof host === 'function') { cb = host; host = '0.0.0.0'; backlog = 128; }
+      if (typeof host === 'function') { cb = host; host = DEFAULT_HOST; backlog = 128; }
       if (typeof backlog === 'function') { cb = backlog; backlog = 128; }
     }
-    if (!host) host = '0.0.0.0';
+    if (!host) host = DEFAULT_HOST;
     if (!backlog) backlog = 128;
     if (port !== undefined && port !== null && port !== '') {
       port = +port;
@@ -551,7 +562,12 @@ class Server extends EventEmitter {
     // long before bind() sees the host. Creating an AF_INET socket and then binding a v6
     // sockaddr to it is rejected by the kernel, which is how '::1' used to end up as
     // 0.0.0.0: the old code discarded inet_pton's failure and bound the zeroed address.
-    const family = (host && host.includes(':')) ? AF_INET6 : AF_INET;
+    // No host means dual-stack, matching Node: bind :: with V6ONLY off so one listener
+    // answers both v4 and v6 clients (the kernel presents v4 peers as v4-mapped). Binding
+    // v4-only here is what made listen(0) + connect('localhost') hang once DNS started
+    // resolving localhost to ::1 — the listener simply was not on the address the client
+    // reached for.
+    const family = (!host || host.includes(':')) ? AF_INET6 : AF_INET;
     this._fd = tcp.socket(family);
     if (this._fd < 0) {
       process.nextTick(() => this.emit('error', new Error('socket() failed')));

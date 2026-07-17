@@ -279,6 +279,16 @@ fn tcpSocket(info: *u8, _ud: *u8): void {
     unsafe {
         let family = ci.i32Arg(0, AF_INET)
         let fd = socket(family, 1, 0)
+        if fd >= 0 && family == AF_INET6 {
+            // Dual-stack: a :: listener answers v4 clients as v4-mapped, which is what
+            // makes Node's listen(0) + connect('127.0.0.1') work. Set explicitly rather
+            // than inherit the platform default (macOS and Linux disagree, and the sysctl
+            // is tunable). The kernel does the v4-mapping on accept — nothing here has to
+            // build ::ffff: addresses, which matters because inet_pton(AF_INET6,
+            // "127.0.0.1") returns 0 and would not produce one anyway.
+            var v6only: [i32; 1] = [0]
+            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, v6only as *u8, 4)
+        }
         if fd < 0 {
             ci.retI32(-1)
             return
