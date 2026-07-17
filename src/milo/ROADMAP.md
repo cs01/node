@@ -109,6 +109,13 @@ spec, __filename)` so the referrer is the correct module path (fragile: import( 
 (b) give each eval'd module correct host-defined-options carrying its resource_name (proper).
 import.meta.url/.dirname/.filename and the ESM createRequire pattern now work (marked still fails on an export form the regex misses — complex ESM, needs the real loader). eslint now FULLY WORKS (lints real code, output identical to node) after the ?query strip below; tsc needs a real ESM loader (below). Found running real CLI tools.
 
+### top-level await is unsupported (part of the ESM-loader gap)
+milo wraps every module in a sync `(function(){...})`, so `const x = await foo()` at module
+top is a SyntaxError. node runs it (ESM async module eval). A partial fix (async wrapper) is
+UNSAFE: it would make `require()` return before a required module's TLA finished, so exports
+set after the await are missing — the CJS/ESM sync-vs-async mismatch. Correct only via a real
+ESM loader (async module graph). Blocks execa and any modern ESM-only tool that uses TLA.
+
 ### milo has no real ESM loader — only a regex CJS transform
 `_esmToCjs` (bootstrap.js) line-by-line regexes import/export into require/exports. It now
 also runs as a fallback when a .js file fails as CJS with a SyntaxError and contains
