@@ -55,12 +55,18 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
-### prettier fails: dynamic import() of a relative .mjs does not resolve
-`prettier --no-config file.ts` → `Cannot find module '../internal/legacy-cli.mjs'` via
-__dynamicImportHandler (bootstrap.js:1708). milo's dynamic import() handler does not resolve
-a relative .mjs specifier the way node does (relative to the importing module + .mjs
-extension). eslint --version WORKS; tsc fails (complex ESM, above). Found running real CLI
-tools under milo. Fix: __dynamicImportHandler must resolve .mjs relative paths like require.
+### prettier fails: dynamic import()'s referrer is ALWAYS bootstrap.js (root cause found)
+`import('../internal/legacy-cli.mjs')` fails because milo cannot resolve a RELATIVE dynamic
+import against the importing module. ROOT CAUSE (confirmed): V8's DynamicImportCallback
+resource_name (deps/v8capi/src/v8capi.cc DynamicImportCallback) is ALWAYS the bootstrap eval
+context, not the importing module — because milo loads every module via (0,eval)(wrapper) and
+does not give each module its own host-defined-options/resource_name. Even a MAIN-module
+`import('./x.mjs')` resolves to src/milo/runtime/x.mjs. Plumbing resource_name through to the
+handler (tried, reverted) does NOT help — the value itself is wrong. Two real fixes, both
+non-trivial: (a) rewrite `import(` in each loaded module's source to `__dynamicImportHandler(
+spec, __filename)` so the referrer is the correct module path (fragile: import( in strings);
+(b) give each eval'd module correct host-defined-options carrying its resource_name (proper).
+eslint --version WORKS; tsc needs a real ESM loader (below). Found running real CLI tools.
 
 ### milo has no real ESM loader — only a regex CJS transform
 `_esmToCjs` (bootstrap.js) line-by-line regexes import/export into require/exports. It now
