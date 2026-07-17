@@ -24,19 +24,36 @@ node's. The build therefore copies the two files VERBATIM into `build/napi/` nex
 `env-inl.h` / `util-inl.h` (both just include the seam; the .cc only needs CHECK* +
 node::OnScopeLeave from them). Nothing is forked into the tree; the copies regenerate.
 
+## Done since
+
+- **dlopen + napi_register_module_v1** — `require('./foo.node')` loads addons.
+- **napi_async_work** — a 4-thread pool (matching libuv's default) runs `execute` off-thread;
+  `complete` is handed back to the LOOP thread via the EVFILT_USER wakeup, because calling
+  V8 from a pool thread would corrupt the isolate. Pending work keeps the loop alive
+  (`asyncBusy()` feeds the exit condition) — exiting while an addon is owed a callback would
+  silently drop it. Verified end-to-end: a 200ms off-thread sleep resolves its promise in
+  209ms.
+- **Buffers** — `napi_create_buffer{,_copy}` / `napi_create_external_buffer` build a REAL
+  Buffer via `Buffer.from(arrayBuffer)` on a V8 backing store, not a Uint8Array wearing the
+  name. external_buffer copies (milo cannot adopt foreign memory into a JS Buffer) and runs
+  the finalizer immediately: semantically safe, one copy more than node.
+- **napi_make_callback / napi_fatal_error**.
+
 ## What is NOT done
 
-- `node_api.cc`'s 32 node-specific functions (module registration, buffers, async).
-- **The async tier is blocked on infrastructure milo lacks**: no threadpool (pthread_create
-  appears once, for worker_threads) and no cross-thread event-loop wakeup (worker messaging
-  is a mutex-guarded list the loop POLLS every 2ms; no EVFILT_USER, no self-pipe, libuv is
-  not linked). `napi_async_work` needs a pool; `napi_threadsafe_function` needs an
-  `uv_async_send` equivalent — EVFILT_USER on the existing kqueue is the natural fit.
-- `dlopen` + `napi_register_module_v1` lookup. Today `.node` is a hard throw
-  (lib/module.js:82, lib/_process_init.js:245).
+- **`napi_threadsafe_function`** (7 fns) — the EVFILT_USER primitive now exists, so this is
+  unblocked, just unwritten.
+- **async_hooks context** — `napi_create_async_work`'s async_resource/name and
+  `napi_make_callback`'s async_context are accepted and IGNORED. Work executes correctly;
+  only async-hooks introspection (async_id/triggerId/destroy) is absent.
+- **sharp crashes after succeeding.** `metadata()` AND `resize()` both work (libvips decodes
+  and resizes through napi_async_work), then a V8 fatal hits while delivering the result.
+  Suspect the drain path: completions run inside a V8 function callback, and resolving a
+  promise there re-enters microtasks. INSTRUMENT before guessing — the fatal message is
+  truncated by the stack dump; capture it first.
 
-**`process.versions.napi` already claims '10' (lib/_process_init.js:72) — that is a lie until
-the above lands.** Same vacuous-claim pattern as tls's old hardcoded `authorized = true`.
+**`process.versions.napi` claims '10' (lib/_process_init.js:72) — still not fully true while
+threadsafe_function is missing.**
 
 ## First milestone
 

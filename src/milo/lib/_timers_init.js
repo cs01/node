@@ -213,8 +213,15 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
   let net = null;
   try { net = require('net'); } catch {}
   const poll = net && net._pollOnce;
+  // Native-addon async work (napi_queue_async_work). Absent if no addon ever loaded, so the
+  // whole path costs one null check per turn.
+  let _napi = null;
+  try { _napi = internalBinding('napi'); } catch {}
   const tick = () => { if (process.processTicksAndRejections) process.processTicksAndRejections(); };
-  const drainAll = () => { tick(); _tb.drainMicrotasks(); tick(); };
+  // Completion callbacks for addon work run HERE, on the loop thread — the pool thread that
+  // ran `execute` must never touch V8. Drain before ticks so a completion's microtasks are
+  // picked up in the same turn.
+  const drainAll = () => { if (_napi) _napi.drainAsync(); tick(); _tb.drainMicrotasks(); tick(); };
   let _lcIter = 0;
 
   for (;;) {
@@ -239,6 +246,10 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
     const hasTicks = process._nextTickQueue && process._nextTickQueue.length > 0;
     const hasImmediates = _hasRefImmediate();
     const hasPendingClose = _pendingCloseRefs > 0;
+    // Native addon work submitted to the napi threadpool. It keeps the loop alive exactly
+    // like an unfinished I/O request would: exiting while an addon is still owed its
+    // completion callback would silently drop the callback.
+    const hasAsyncWork = _napi ? _napi.asyncBusy() : false;
     _lcIter++;
     if (_LC_DEBUG && _now() - _lcLastDump >= _LC_MS) {
       _lcLastDump = _now();
@@ -247,7 +258,7 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
       if (globalThis.__lcTrace && globalThis.__lcTrace.length) { _lcLog('TRACE: ' + globalThis.__lcTrace.join(' | ')); globalThis.__lcTrace.length = 0; }
       _lcLog(`iter=${_lcIter} timers=${hasTimers} io=${hasIO} ticks=${hasTicks} imm=${hasImmediates} pclose=${_pendingCloseRefs} workers=${hasWorkers} socks=[${socks}] srvs=[${srvs}]`);
     }
-    if (!hasTimers && !hasIO && !hasTicks && !hasImmediates && !hasPendingClose && !hasWorkers) {
+    if (!hasTimers && !hasIO && !hasTicks && !hasImmediates && !hasPendingClose && !hasWorkers && !hasAsyncWork) {
       if (process._emitBeforeExit) process._emitBeforeExit();
       drainAll();
       if (globalThis.__pumpParentWorkers) globalThis.__pumpParentWorkers();
@@ -258,7 +269,8 @@ Object.defineProperty(globalThis, '__runEventLoop', { value: function __runEvent
       const hasImmediates2 = _hasRefImmediate();
       const hasPendingClose2 = _pendingCloseRefs > 0;
       const hasWorkers2 = globalThis.__hasActiveWorkers ? globalThis.__hasActiveWorkers() : false;
-      if (!hasTimers2 && !hasIO2 && !hasTicks2 && !hasImmediates2 && !hasPendingClose2 && !hasWorkers2) break;
+      const hasAsync2 = _napi ? _napi.asyncBusy() : false;
+      if (!hasTimers2 && !hasIO2 && !hasTicks2 && !hasImmediates2 && !hasPendingClose2 && !hasWorkers2 && !hasAsync2) break;
     }
 
     let waitMs = 100;
