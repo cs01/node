@@ -55,6 +55,15 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### [x] http.Server.listen({port,host}, cb) fired no callback — fastify hung (FIXED)
+The options-object listen form was parsed as a positional port, so the object landed in
+`port`, got passed to net.listen as a bogus arg, and the callback was lost. fastify (and most
+frameworks) call listen({port,host}) and await that callback — so fastify.listen() hung
+forever after boot. Now the object form is parsed. fastify fully works (boots, listens,
+serves {"ok":true}). No compat-number change (no suite test covers it); the -1 seen was a
+flaky test-http-byteswritten timeout, unrelated (A/B confirmed it times out without the change
+too).
+
 ### prettier fails: dynamic import()'s referrer is ALWAYS bootstrap.js (root cause found)
 `import('../internal/legacy-cli.mjs')` fails because milo cannot resolve a RELATIVE dynamic
 import against the importing module. ROOT CAUSE (confirmed): V8's DynamicImportCallback

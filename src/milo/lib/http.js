@@ -448,8 +448,18 @@ class Server extends EventEmitter {
   }
   listen(...args) {
     const cb = typeof args[args.length - 1] === 'function' ? args.pop() : null;
-    const port = args[0] || 0;
-    const host = args[1] || '0.0.0.0';
+    // Accept the options-object form listen({port, host}, cb) — fastify and most frameworks
+    // use it. Previously only the positional form (port, host) was parsed, so an options
+    // object landed in `port`, was passed to net.listen as a bogus first arg, and the
+    // callback never fired — fastify's listen() hung forever waiting on it.
+    let port, host;
+    if (args[0] && typeof args[0] === 'object') {
+      port = args[0].port || 0;
+      host = args[0].host || '0.0.0.0';
+    } else {
+      port = args[0] || 0;
+      host = args[1] || '0.0.0.0';
+    }
     this._sockets = new Set();
     this._closing = false;
     this._server = net.createServer({ allowHalfOpen: true }, (socket) => {
