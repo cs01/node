@@ -632,7 +632,38 @@ So TLS silently misses all the dns / IPv6 / autoSelectFamily handling. Fixing it
 still costs test-tls-client-abort, so it needs its own investigation — but a duplicate connect
 path WILL keep drifting from the real one.
 
-**What the next attempt needs (in order):**
+**THIRD ATTEMPT (2026-07-16) — REVERTED, but it finally found the ROOT CAUSE. Read this
+before attempting a fourth.**
+Steps 1 and 2 below were cleared first: client-abort was fixed by the destroyed-guard, and
+verification now exists (5p), so `connect-no-host` is a REAL pass, not a vacuous one. Landed
+READ-only + `_wantWrite(result === 3)` on both paths. Result: **all 3 spins died (9.2s CPU ->
+0.06s, OOM 3 -> 0)** and `connect-no-host` STILL broke (PASS -> TIMEOUT). tls 23 -> 22.
+Reverted under the no-regression rule — third time.
+
+**ROOT CAUSE (instrumented, not guessed).** Traced with MILO_TLS_DEBUG + MILO_LIFECYCLE_DEBUG:
+```
+[tls] _onReadable fd=8 pendAcc=true   <- server handshake STILL PENDING when the client left
+[lc] iter=18 io=true socks=[8] srvs=[]  <- fd 8 pinned forever, loop cannot exit
+```
+The client completes (`result=1`, verify OK) and destroys. The SERVER's accept handshake is
+still at `result=2` (WANT_READ) and never completes: **the accept path has no EOF/stall
+handling.** When the peer vanishes mid-handshake, `sslAcceptContinue` reports WANT_READ
+forever, the socket is never destroyed, never leaves `_sockets`, and `io=true` pins the loop.
+
+**Therefore the WRITE spin is LOAD-BEARING.** A connected socket is always writable, so the
+spin re-fires `_onReadable` continuously, and THAT is what re-drives a stalled accept
+handshake to completion. Removing the spin doesn't create the bug — it exposes it. This is
+why all three attempts lost the same test. The spin is a splint over a missing EOF path.
+
+**A fourth attempt must fix the accept path FIRST, then go READ-only:**
+- detect peer-gone during handshake (`sslAcceptContinue` needs to distinguish a clean EOF /
+  ECONNRESET from WANT_READ — the C side can check `SSL_get_error` for SSL_ERROR_ZERO_RETURN
+  and SSL_ERROR_SYSCALL with a 0 read, and return a new code, e.g. -2)
+- on that code, destroy the socket so it leaves `_sockets` and stops pinning the loop
+- only then remove the WRITE registration; the spin will no longer be needed as a wakeup
+A/B proof this is real: pre-5l tls.js exits clean on the same repro; READ-only pins fd 8.
+
+**What the earlier attempts needed (steps 1-2 now DONE, kept for history):**
 1. Find why `client-abort` depends on the current connect path — it is the cheaper of the two.
 2. `checkServerIdentity` is absent (tls.js is 269 lines vs node's ~3000). `connect-no-host`
    uses `ca: cert` with rejectUnauthorized defaulting TRUE, and likely passes today only
