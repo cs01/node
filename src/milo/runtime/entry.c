@@ -694,13 +694,32 @@ int nm_ssl_connect_continue(long long ssl_ptr) {
     return -1;
 }
 
+// Returns: n>0 data | 0 clean EOF | -2 WANT_READ/WRITE | -1 FATAL (peer sent a real alert).
+//
+// The -1 path must stay NARROW. OpenSSL 3 reports a peer that closes the TCP connection
+// WITHOUT a close_notify as SSL_ERROR_SSL / UNEXPECTED_EOF_WHILE_READING — that is not an
+// attack, it is how a large slice of the real internet behaves (roads.dot.ca.gov,
+// cwwp2.dot.ca.gov ...), and node tolerates it. Reporting those as fatal turned ordinary
+// responses into ERR_SSL_HANDSHAKE_FAILURE. Only genuine protocol failures are fatal here.
 int nm_ssl_read(long long ssl_ptr, char* buf, int len) {
     SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
+    ERR_clear_error();  // a stale queue entry would be misread as THIS call's reason
     int n = SSL_read(ssl, buf, len);
     if (n <= 0) {
         int err = SSL_get_error(ssl, n);
         if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) return -2;
-        if (err == SSL_ERROR_ZERO_RETURN) return 0;
+        if (err == SSL_ERROR_ZERO_RETURN) return 0;   // proper close_notify
+        if (err == SSL_ERROR_SYSCALL) return 0;       // TCP closed under us — plain EOF
+        if (err == SSL_ERROR_SSL) {
+            unsigned long e = ERR_peek_error();
+            int reason = ERR_GET_REASON(e);
+            // Benign end-of-stream shapes, treated as EOF exactly as node does.
+            if (reason == SSL_R_UNEXPECTED_EOF_WHILE_READING ||
+                reason == SSL_R_SHUTDOWN_WHILE_IN_INIT) {
+                ERR_clear_error();
+                return 0;
+            }
+        }
         return -1;
     }
     return n;
