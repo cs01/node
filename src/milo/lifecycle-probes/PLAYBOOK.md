@@ -966,6 +966,32 @@ first; a probe that passes both ways is the same vacuous-pass pattern this playb
 an error?" but "does the real world do this routinely?" I verified the fatal path fired on a
 genuine alert and never checked WHAT ELSE landed in it.
 
+## 5w. app gzip truncation: milo's gzip is CORRECT; the compression STREAM STALLS (2026-07-16)
+
+A real express+compression+trpc app truncates a large gzipped response to ~57KB gzip /
+~899KB decoded (node 65KB / 1011KB valid); the block renders blank. Instrumented milo's
+ServerResponse.write/end and ran the LIVE app. Definitive findings:
+- **milo's gzip is NOT the bug.** gzipSync AND createGzip of the EXACT captured 1011005-byte
+  response both produce 65071 bytes that roundtrip perfectly. Verified vs oracle.
+- The app calls ServerResponse.write EXACTLY ONCE with **57284 bytes** (`[w] n=1 len=57284
+  chunked=true`) — a truncated-but-decodable gzip prefix — and **res.end() NEVER fires** (no
+  `[end]` log line). So the compression gzip stream emits ~57KB of output, then STALLS: it
+  never emits the remaining ~8KB + trailer and never calls res.end().
+- **Every synthetic repro delivers 65071 whole**: res.json, createGzip.pipe(res), write+
+  Z_SYNC_FLUSH, and express+compression serving the EXACT captured data. Only the live
+  trpc+compression app stalls.
+
+**Strong hypothesis for next session:** a backpressure/'drain' stall. milo's
+ServerResponse.write ALWAYS returns true (http.js ~:400 `return true`) — it never signals
+backpressure — so any writer that DOES check the return (trpc's streaming writer, or a
+compression path that respects it) behaves differently than one that floods. Inversely, if
+some path pauses the gzip stream on a false return that milo never gives, or waits for a
+'drain'/'finish' milo never emits, the stream stalls after one write. Trace: does milo's
+ServerResponse emit 'drain' after socket backpressure? does res.write's always-true return
+desync trpc's writer? Reproduce by driving res.write from an async loop that awaits 'drain'.
+The 3 truncation bugs fixed earlier (zlib 16KB cap x2, http close destroy) are real but
+orthogonal — this is a stream lifecycle stall, not a buffer cap.
+
 ## 5m. NEXT UP — scoped, not started (2026-07-16 end of session)
 
 Ranked by expected value. All verified against `./out/Release/node` unless noted.
