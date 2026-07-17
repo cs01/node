@@ -102,9 +102,29 @@ class Http2Stream extends Duplex {
     // if END_STREAM was already sent (e.g. no-body request/response via HEADERS),
     // don't emit a second END_STREAM via an empty DATA frame (protocol error).
     if (this._localEnded) { cb(); return; }
+    // waitForTrailers: the body is done but END_STREAM must ride the TRAILERS frame, not
+    // this DATA frame — otherwise the stream closes and trailers can never be sent.
+    if (this._waitForTrailers && !this._trailersSent) {
+      this.session._sendData(this.id, Buffer.alloc(0), false);
+      this._finalCb = cb;
+      this.emit('wantTrailers');
+      // If the handler did not call sendTrailers(), close normally rather than hang.
+      if (!this._trailersSent) { this._localEnded = true; this.session._sendData(this.id, Buffer.alloc(0), true); this._finalCb = null; cb(); }
+      return;
+    }
     this._localEnded = true;
     this.session._sendData(this.id, Buffer.alloc(0), true);
     cb();
+  }
+
+  // Send a trailing HEADERS block carrying END_STREAM. gRPC puts its status here.
+  sendTrailers(headers = {}) {
+    if (this._trailersSent) throw new Error('ERR_HTTP2_TRAILERS_ALREADY_SENT');
+    this._trailersSent = true;
+    this._localEnded = true;
+    this.session._sendHeaders(this.id, objectToHeaders({ ...headers }, []), true);
+    const cb = this._finalCb; this._finalCb = null;
+    if (cb) cb();
   }
   _read() {}
   close(code = 0, cb) {
@@ -154,6 +174,9 @@ class ServerHttp2Stream extends Http2Stream {
     const status = rest[':status'] || 200;
     delete rest[':status'];
     const list = objectToHeaders(rest, [[':status', String(status)]]);
+    // waitForTrailers must NOT set END_STREAM here: the stream stays open so _final can
+    // emit 'wantTrailers' and the handler can send them.
+    this._waitForTrailers = !!options.waitForTrailers;
     this.session._sendHeaders(this.id, list, !!options.endStream);
     if (options.endStream) this._localEnded = true;
   }
@@ -298,6 +321,15 @@ class Http2Session extends EventEmitter {
     if (this.type === constants.NGHTTP2_SESSION_SERVER) {
       let s = this.streams.get(streamId);
       if (!s) { s = new ServerHttp2Stream(this, streamId); s.pending = false; this.streams.set(streamId, s); }
+      else if (s._headersDone) {
+        // A second HEADERS on a live stream is TRAILERS, not a new request. This fell
+        // through to `emit('stream')` and re-delivered the request.
+        s._trailers = obj;
+        s.emit('trailers', obj, 0);
+        if (endStream) s._end();
+        return;
+      }
+      s._headersDone = true;
       if (endStream) s._end();
       // A throw in the user handler must not hang the peer: RST the stream and
       // surface the error (matches Node, which sends an internal error).
@@ -309,9 +341,19 @@ class Http2Session extends EventEmitter {
         // An informational (1xx) response is NOT the final response: node emits 'headers'
         // for it and keeps the stream waiting for the real one. Emitting 'response' here
         // would resolve the request with a 103 and drop the actual reply.
+        // A second HEADERS after the response is TRAILERS (HTTP/2 allows exactly one
+        // trailing HEADERS block after DATA). This re-emitted 'response' instead, so the
+        // trailers were never surfaced and no error was raised — gRPC carries its status
+        // here, so every call completed with no status.
+        if (s._responseDone) {
+          s._trailers = obj;
+          s.emit('trailers', obj, 0);
+          if (endStream) s._end();
+          return;
+        }
         const st = Number(obj[':status']);
         if (st >= 100 && st < 200) { s.emit('headers', obj, 0); return; }
-        s.pending = false; s.emit('response', obj, 0); if (endStream) s._end();
+        s.pending = false; s._responseDone = true; s.emit('response', obj, 0); if (endStream) s._end();
       }
     }
   }
@@ -480,8 +522,16 @@ class Http2ServerRequest extends Readable {
     stream.on('error', (e) => this.emit('error', e));
   }
   _read() {}
-  get trailers() { return {}; }
-  get rawTrailers() { return []; }
+  // These returned {} and [] unconditionally — reporting "no trailers" rather than admitting
+  // none were ever parsed. Now they reflect what actually arrived.
+  get trailers() { return this._trailers || {}; }
+  get rawTrailers() {
+    const t = this._trailers;
+    if (!t) return [];
+    const out = [];
+    for (const k of Object.keys(t)) { out.push(k, String(t[k])); }
+    return out;
+  }
   // node: a no-op once the request/response is closed (compat.js:434, :871) — the test
   // asserts a post-'finish' setTimeout is mustNotCall. The stream's 'timeout' is also
   // forwarded onto this object (compat.js:303 onStreamTimeout), because listeners are

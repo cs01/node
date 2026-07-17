@@ -55,7 +55,18 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
-### http2 silently drops trailers — breaks gRPC
+### [x] http2 trailers — FIXED 2026-07-16 (gRPC status now works)
+Three defects: _onHeaders treated a trailing HEADERS block as a second response (so trailers
+vanished with no event and no error); sendTrailers/waitForTrailers/'wantTrailers' did not
+exist, so a server could not send them either; and get trailers() returned {} unconditionally,
+which is indistinguishable from a legitimate response with no trailers. Verified identical to
+the oracle in both directions. Ladder-neutral (http2 43 PASS both sides of an A/B, zero
+per-test diffs — no test in the suite covers trailers).
+TRAP: with waitForTrailers, END_STREAM must ride the TRAILERS frame, NOT the final DATA frame
+— set it on DATA and the stream closes before trailers can be sent, so the fix looks
+implemented and does nothing.
+
+### (original report) http2 silently drops trailers — breaks gRPC
 A server calling `stream.sendTrailers({'grpc-status':'0'})` produces NO 'trailers' event on
 the client and no error: node fires it with the values. **gRPC carries its status in
 trailers**, so every gRPC call would complete with no status. `get trailers() { return {} }`
