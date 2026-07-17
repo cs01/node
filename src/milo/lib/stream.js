@@ -999,7 +999,12 @@ class Writable extends Stream {
       this.emit('finish');
       if (this._writableState.autoDestroy) {
         const rState = this._readableState;
-        if (!rState || rState.ended) process.nextTick(() => { if (!this.destroyed) this.destroy(); });
+        // endEmitted, not ended: push(null) may land while chunks are still
+        // buffered (consumer not attached yet). Destroying then strands the
+        // buffer — _flow() bails on _destroyed and 'end' never fires (node-fetch
+        // text() hang). The readable end-emission paths destroy once 'end' is
+        // actually delivered and the writable side is finished.
+        if (!rState || rState.endEmitted) process.nextTick(() => { if (!this.destroyed) this.destroy(); });
       }
     };
     // Event-driven finish: re-checked from each write/writev completion.
