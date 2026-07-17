@@ -556,6 +556,14 @@ class Server extends EventEmitter {
     } else if (typeof port === 'object' && port !== null) {
       cb = typeof host === 'function' ? host : cb;
       const opts = port;
+      if (opts.fd !== undefined) {
+        // listen({fd}): adopt an existing fd as the server socket instead of
+        // creating+binding one. Milo used to ignore opts.fd and bind a random
+        // port, silently "succeeding" on fd 0 (stdin) where node errors EINVAL.
+        if (cb) this.once('listening', cb);
+        this._listenOnFd(opts.fd, opts.backlog || 128);
+        return this;
+      }
       if (opts.path) {
         // Unix socket / pipe path
         if (cb) this.once('listening', cb);
@@ -653,6 +661,28 @@ class Server extends EventEmitter {
     // match Node: a beforeExit handler that listens+closes must span loop
     // iterations so beforeExit can re-fire, rather than collapsing into one
     // nextTick drain.
+    setImmediate(() => this.emit('listening'));
+  }
+
+  _listenOnFd(fd, backlog) {
+    ensurePoll();
+    this._fd = fd;
+    if (tcp.listen(this._fd, backlog) !== 0) {
+      this._fd = -1;
+      // tcp.listen reports only pass/fail, not errno (same gap as bind above).
+      // Adopting a non-socket fd (fd 0 = stdin) fails EINVAL on macOS; node
+      // reports EINVAL here and the test accepts EINVAL or ENOTSOCK.
+      const err = new Error('listen EINVAL');
+      err.code = 'EINVAL'; err.errno = -22; err.syscall = 'listen';
+      process.nextTick(() => this.emit('error', err));
+      return;
+    }
+    this._listening = true;
+    this._handle = { fd: this._fd };
+    tcp.pollAdd(this._fd, EVFILT_READ);
+    Server._servers.set(this._fd, this);
+    const addr = this.address();
+    if (addr) this._connectionKey = `${addr.family === 'IPv6' ? '6' : '4'}:${addr.address}:${addr.port}`;
     setImmediate(() => this.emit('listening'));
   }
 
