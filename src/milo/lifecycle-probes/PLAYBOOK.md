@@ -543,9 +543,19 @@ for prop in $(grep -oE 'this\.[a-zA-Z_][a-zA-Z0-9_]* =' src/milo/lib/http.js | s
   [ "$u" -le "$a" ] && echo "$prop (assigns=$a, other-uses=$((u-a)))"
 done
 ```
-Found so far: `maxConnections` (servers accepted unboundedly), `keepAliveTimeout` +
-`maxRequestsPerSocket` (no Connection/Keep-Alive header ever sent), `sendDate` (**no Date
-header on ANY response** — RFC 7231 7.1.1.2 requires it).
+**7 for 7.** Found: `maxConnections` (servers accepted unboundedly); `keepAliveTimeout` +
+`maxRequestsPerSocket` (no Connection/Keep-Alive header ever sent); `sendDate` (**no Date
+header on ANY response** — RFC 7231 requires it); `localAddress`/`localPort` (undefined
+though getSockName already worked); `METHODS` (35 of them, unused — the parser accepted
+"GARBAGE NOT HTTP" as a request line); and **`_authority` — MY OWN**, in a fix I had already
+shipped: the `:authority` default read a field nothing ever set, so it silently never fired.
+**That last one is the point: a fix that reads a field into existence looks identical to one
+that works.** Run this sweep on code you just wrote, not only on legacy.
+
+**Sibling sweep — wrapper re-emits selectively (2 for 2):** `grep -n "_net\.on(\|_server\.on(" src/milo/lib/*.js`
+then diff the forwarded set against node's documented events. Http2Server forwarded only
+'error' (cost 4 attempts and made a whole test file emit ZERO bytes); http.Server likewise
+never emitted 'connection'. **Any class wrapping another and re-emitting by hand is suspect.**
 Caveats: plenty of false positives — public API props that only USERS read (`writableEnded`,
 `headersSent`), and cross-file readers (`_unref` is read in `_timers_init.js`, not net.js).
 Always confirm against `./out/Release/node` before "fixing". Still unswept: the Agent
