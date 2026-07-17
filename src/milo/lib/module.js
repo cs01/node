@@ -79,7 +79,11 @@ class Module {
       const content = fs.readFileSync(filename, 'utf8');
       module.exports = JSON.parse(content);
     },
-    '.node': function() { throw new Error('.node addons not supported'); },
+    // Node-API addons. process.dlopen runs the addon's napi_register_module_v1 and
+    // populates module.exports in place.
+    '.node': function(module, filename) {
+      return process.dlopen(module, filename);
+    },
   };
 
   _compile(content, filename) {

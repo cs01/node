@@ -243,13 +243,25 @@ if (!process.execve) {
 }
 if (!process.title) process.title = 'milo-node';
 if (!process.dlopen) {
-  // milo can't load native .node addons. Always fail, but with the filename
-  // embedded literally (not via a printf-style format) so a path containing
-  // `%s` can't corrupt the message — the security property this guards.
   process.dlopen = function dlopen(module, filename, flags) {
-    const e = new Error('Cannot load native addon ' + filename + ': native addons are not supported');
-    e.code = 'ERR_DLOPEN_FAILED';
-    throw e;
+    // Errors embed `filename` literally, never as a printf-style format string, so a path
+    // containing `%s` cannot corrupt the message — the security property the old
+    // always-throw stub guarded, kept now that loading actually happens.
+    let napi;
+    try {
+      napi = internalBinding('napi');
+    } catch {
+      const e = new Error('Cannot load native addon ' + filename + ': napi binding unavailable');
+      e.code = 'ERR_DLOPEN_FAILED';
+      throw e;
+    }
+    try {
+      napi.dlopen(module, filename, flags);
+    } catch (err) {
+      const e = new Error('Cannot load native addon ' + filename + ': ' + err.message);
+      e.code = 'ERR_DLOPEN_FAILED';
+      throw e;
+    }
   };
 }
 if (!process.execPath) {

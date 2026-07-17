@@ -1353,7 +1353,11 @@
             si = idx + 1;
             if (idx === 0) continue;
             const ce = _base.slice(idx);
-            if (_ext[ce] && ce !== '.js' && ce !== '.json' && ce !== '.node') { _customExt = ce; break; }
+            // '.node' rides this path too now that addons load: the dispatch happens
+            // before fileSrc is touched, so the binary is never handed to eval (it is read
+            // as a Buffer and would blow up as a SyntaxError). Its handler in module.js
+            // calls process.dlopen.
+            if (_ext[ce] && ce !== '.js' && ce !== '.json') { _customExt = ce; break; }
           }
         }
       } catch {}
