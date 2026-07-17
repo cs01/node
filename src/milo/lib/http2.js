@@ -230,7 +230,12 @@ class Http2Session extends EventEmitter {
   _handleFrame(fr) {
     switch (fr.type) {
       case F.FRAME.SETTINGS:
-        if (fr.flags & F.FLAG.ACK) break;
+        if (fr.flags & F.FLAG.ACK) {
+          // The peer acked OUR settings — that is what makes them local-and-live. node
+          // emits 'localSettings' here (core.js:885); milo dropped the ack on the floor.
+          this.emit('localSettings', this.localSettings || { ...DEFAULT_SETTINGS });
+          break;
+        }
         Object.assign(this.remoteSettings, F.unpackSettings(fr.payload));
         this._send(F.serializeFrame(F.FRAME.SETTINGS, F.FLAG.ACK, 0, Buffer.alloc(0)));
         this.emit('remoteSettings', this.remoteSettings);
@@ -411,6 +416,9 @@ class ClientHttp2Session extends Http2Session {
     // send HEADERS immediately so they precede any body DATA the caller writes
     this._sendHeaders(id, list, !hasBody);
     s.pending = false;
+    // node emits 'ready' once the stream is attached and writable (core.js:2117). Deferred
+    // a tick so a listener attached right after request() still sees it.
+    process.nextTick(() => { if (!s.destroyed) s.emit('ready'); });
     if (!hasBody) s._localEnded = true;
     return s;
   }
