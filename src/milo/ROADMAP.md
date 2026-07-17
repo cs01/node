@@ -55,6 +55,23 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### chainControl/roadConditions route HANGS — post-fetch computation stall (NOT fixed)
+A real trpc route (`chainControl,roadConditions`) hangs forever in milo; node returns 236440
+valid in <1s. LOCALIZED with live-app instrumentation:
+- NOT fetch: traced milo's fetch — all 3 upstream fetches (cwwp2 cc d3/d10 + nvroads
+  roadconditions) START and RESOLVE (starts=3 resolves=3). The 6 exact URLs also complete
+  concurrently AND during a request in a faithful synthetic (~700ms).
+- NOT the response write: a raw net client gets **0 bytes on the wire** — res.write/end NEVER
+  fires for this request. So the handler hangs BEFORE writing anything.
+- Therefore the tRPC handler's POST-FETCH COMPUTATION stalls in milo but not node — a JS-level
+  op (regex / sort / Date / parse / some builtin) that hangs or infinite-loops on this data.
+- Distinct from the stream.write/drain bug (5531a4f4107, that route now works) — this never
+  reaches the write path.
+NEXT: instrument the chainControl + roadConditions resolvers (app: dist/chainControls.js /
+the v3 router) to find which operation hangs after the awaits resolve; then reduce to a
+minimal milo-vs-oracle repro of that JS op. chainControl ALONE works (served from cache);
+the stall needs the cold roadConditions computation.
+
 ### large gzipped trpc/express responses truncate at ~57KB gzip (~899KB decoded) — NOT YET FIXED
 A real app (express + compression + trpc): a single large procedure's gzipped response is cut
 to ~57KB gzip / ~899KB decoded (node: 65KB / 1014KB, valid); the gzip stream is truncated so
