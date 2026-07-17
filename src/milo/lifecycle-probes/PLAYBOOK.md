@@ -939,6 +939,33 @@ https.get does. So suspect the difference in how fetch drives the request: it pa
 `res.on('end')`. Instrument chunk COUNT and total in both paths against a real remote host —
 something is ending the response early.
 
+## 5v. THE REGRESSION NO TEST CAUGHT — and the probe that FAILED to catch it (2026-07-16)
+
+I shipped a regression that broke a real app: sslRead was taught to surface FATAL alerts, but
+the fatal path was made far too wide. OpenSSL 3 reports a peer closing TCP **without a
+close_notify** as SSL_ERROR_SSL / UNEXPECTED_EOF_WHILE_READING. That is not an attack — it is
+how a large slice of the real internet behaves (roads.dot.ca.gov, cwwp2.dot.ca.gov). Every
+request to those hosts started failing with ERR_SSL_HANDSHAKE_FAILURE. Fixed in a49407dea53:
+SSL_ERROR_SYSCALL and the two benign reasons map to clean EOF; -1 stays for real protocol
+failures.
+
+**The whole ladder was green while it was broken** — tls 27/5 zero diffs, probes 9/9,
+cpu-audit 0 spinning. A real app found it in ONE run.
+
+**I then tried to add a probe for it and FAILED. Do not assume the obvious probe works:**
+- Attempt 1: a tls server calling `socket.destroy()`. **Passes on a KNOWN-BROKEN build** —
+  useless, a false guard. Reason: milo's destroy() calls sslShutdown(), which DOES send
+  close_notify, so the client sees a clean EOF. The condition never occurs.
+- Attempt 2: spawn a server child that `process.exit(0)`s so the OS tears the socket down
+  (no close_notify). Correct in principle — node passes it — but the milo run needs >7s
+  (spawn + handshake) and I did not get it validated against a broken build.
+**A probe is only a guard once you have watched it FAIL on the broken build.** Verify that
+first; a probe that passes both ways is the same vacuous-pass pattern this playbook is full of.
+
+**Lesson (the real one):** when widening what counts as an error, the question is not "is this
+an error?" but "does the real world do this routinely?" I verified the fatal path fired on a
+genuine alert and never checked WHAT ELSE landed in it.
+
 ## 5m. NEXT UP — scoped, not started (2026-07-16 end of session)
 
 Ranked by expected value. All verified against `./out/Release/node` unless noted.
