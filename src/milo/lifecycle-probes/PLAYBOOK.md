@@ -797,6 +797,16 @@ alongside `super()` from net.Socket, so `_readableState` was never actually driv
 socket. Switching the producer to push() while the consumer side is still hand-rolled leaves
 neither path working. **Do not retry the one-liner.**
 
+**SECOND ATTEMPT ALSO FAILED (same day). Do not try a third variant of this.** Theory was
+that attempt 1 broke because `this.readable = false` ran BEFORE `push(null)`, flipping
+`_readableState.readable` so the push was swallowed. Removed the assignment, pushed cleanly.
+Result: on-empty-socket STILL hangs, inception STILL hangs, and it additionally broke
+test-tls-client-verify (PASS -> rc=1). Reverted. So the blocker is NOT the emit-vs-push site
+and NOT the readable assignment ordering — something else in TLSSocket's inheritance is
+preventing `_readableState` from ever driving it. **Instrument `_readableState`
+(flowing/ended/length) on a TLSSocket before touching this code again** — two blind fixes
+have now cost more than the finding is worth.
+
 **What it actually needs:** make TLSSocket a real Readable — stop assigning `this.readable`,
 let push()/push(null) drive `_readableState`, and delete the manual 'end' emit (push(null)
 produces it). That is a real refactor of tls.js's read path, and per the adapter-over-refactor
