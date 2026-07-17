@@ -24,7 +24,9 @@ fn zlibOp(info: *u8, _ud: *u8): void {
         let inputArr = ci.arg(0)
         let inputData = inputArr.typedArrayData(iso)
         let inputLen = inputArr.typedArrayByteLength(iso) as i32
-        if inputData as i64 == 0 { return }
+        // A zero-length input has a null data pointer but is valid: gzip(Buffer.alloc(0)) = 20
+        // bytes in node. Only null WITH bytes to read is a real failure.
+        if inputLen > 0 && inputData as i64 == 0 { return }
 
         let mode = ci.i32Arg(1, 0)
         let level = ci.i32Arg(2, -1)

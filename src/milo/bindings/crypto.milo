@@ -63,7 +63,10 @@ fn hashDigest(info: *u8, _ud: *u8): void {
 
     unsafe {
         let dataPtr = dataBuf.typedArrayData(iso)
-        if dataPtr as i64 == 0 { return }
+        // An empty Buffer has a null data pointer but is VALID input: sha256(Buffer.alloc(0))
+        // = e3b0c442... in node. Bailing on null crashed hashing/compressing an empty buffer.
+        // Only a null pointer WITH bytes to read is a real failure.
+        if dataLen > 0 && dataPtr as i64 == 0 { return }
 
         var hashLen: i32 = 32
         if algo == 0 { hashLen = 16 }

@@ -55,6 +55,15 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### [x] zero-length Buffer crashed crypto/zlib input paths (FIXED 2026-07-16)
+An empty Buffer has a null data pointer, but crypto.milo:66 and zlib.milo:27 treated null as
+failure and bailed, so sha256(Buffer.alloc(0)) and gzip(Buffer.alloc(0)) crashed where node
+returns e3b0c442... and 20 bytes — everyday ops (etag of empty body, compression of empty
+response, hash of empty file). Fixed: bail only when len>0 && ptr==0. Monotonic by
+construction — only empty-buffer inputs change path. Output/handle sites (outBuf/sigBuf/handle)
+were deliberately NOT touched: there a null is a real malloc/init failure. ~16 other sites
+share the `as i64 == 0` grep but are output sites — do not sweep them blindly.
+
 ### [x] http2 trailers — FIXED 2026-07-16 (gRPC status now works)
 Three defects: _onHeaders treated a trailing HEADERS block as a second response (so trailers
 vanished with no event and no error); sendTrailers/waitForTrailers/'wantTrailers' did not
