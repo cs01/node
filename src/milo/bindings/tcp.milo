@@ -47,8 +47,9 @@ extern fn nm_fs_open(path: *u8, flags: i32, mode: i32): i32
 
 // TLS via OpenSSL (helpers in entry.c)
 extern fn nm_ssl_connect(fd: i32, hostname: *u8): i64
-extern fn nm_ssl_connect_start(fd: i32, hostname: *u8): i64
+extern fn nm_ssl_connect_start(fd: i32, hostname: *u8, caPem: *u8): i64
 extern fn nm_ssl_connect_continue(ssl: i64): i32
+extern fn nm_ssl_verify_result(ssl: i64): i64
 extern fn nm_ssl_read(ssl: i64, buf: *u8, len: i32): i32
 extern fn nm_ssl_write(ssl: i64, data: *u8, len: i32): i32
 extern fn nm_ssl_pending(ssl: i64): i32
@@ -876,7 +877,7 @@ fn sslConnect(info: *u8, _ud: *u8): void {
     }
 }
 
-// sslConnectStart(fd, hostname) → ssl handle or -1 on error
+// sslConnectStart(fd, hostname, caPem?) → ssl handle or -1 on error
 fn sslConnectStart(info: *u8, _ud: *u8): void {
     let ci = CallbackInfo { ptr: info }
     if ci.length() < 2 { return }
@@ -885,8 +886,28 @@ fn sslConnectStart(info: *u8, _ud: *u8): void {
         let fd = ci.i32Arg(0, -1)
         var hostBuf: [u8; 256] = [0; 256]
         ci.arg(1).writeUtf8(iso, hostBuf as *u8, 255)
-        let ssl = nm_ssl_connect_start(fd, hostBuf as *u8)
+        // A ca bundle is far too big for a stack buffer. Left empty when absent — the C side
+        // reads an empty string as "no ca given" and keeps the default trust roots.
+        let caBuf = calloc(1, 65536)
+        if ci.length() > 2 {
+            ci.arg(2).writeUtf8(iso, caBuf, 65535)
+        }
+        let ssl = nm_ssl_connect_start(fd, hostBuf as *u8, caBuf)
+        free(caBuf)
         ci.retF64(ssl as f64)
+    }
+}
+
+// sslVerifyResult(sslHandle) → 0 = chain verified, -2 = peer sent no cert, else X509_V_ERR_*
+fn sslVerifyResultOp(info: *u8, _ud: *u8): void {
+    let ci = CallbackInfo { ptr: info }
+    if ci.length() < 1 { return }
+    let iso = ci.isolate()
+    unsafe {
+        var sslVal: [f64; 1] = [0.0]
+        ci.arg(0).toF64(iso, sslVal as *f64)
+        let r = nm_ssl_verify_result(sslVal[0] as i64)
+        ci.retI32(r as i32)
     }
 }
 
@@ -1471,6 +1492,7 @@ fn nm_init_tcp(_iso: *u8, ctx: *u8, exports: i32): void {
         c.setMethod(exp, "unwatchFile" as *u8, tcpUnwatchFile as *u8)
         c.setMethod(exp, "sslConnect" as *u8, sslConnect as *u8)
         c.setMethod(exp, "sslConnectStart" as *u8, sslConnectStart as *u8)
+        c.setMethod(exp, "sslVerifyResult" as *u8, sslVerifyResultOp as *u8)
         c.setMethod(exp, "sslConnectContinue" as *u8, sslConnectContinueOp as *u8)
         c.setMethod(exp, "sslRead" as *u8, sslRead as *u8)
         c.setMethod(exp, "sslWrite" as *u8, sslWrite as *u8)

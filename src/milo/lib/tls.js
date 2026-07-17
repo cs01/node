@@ -5,6 +5,54 @@ const EventEmitter = require('events');
 const net = require('net');
 const tcp = internalBinding('tcp');
 
+// X509_V_ERR_* -> node's authorizationError code string. -2 is our own sentinel for a peer
+// that sent no certificate at all (OpenSSL calls that X509_V_OK: nothing to verify).
+const X509_VERIFY_ERR = {
+  '-2': 'ERR_TLS_CERT_ALTNAME_INVALID',
+  2: 'UNABLE_TO_GET_ISSUER_CERT',
+  7: 'CERT_SIGNATURE_FAILURE',
+  9: 'CERT_NOT_YET_VALID',
+  10: 'CERT_HAS_EXPIRED',
+  18: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+  19: 'SELF_SIGNED_CERT_IN_CHAIN',
+  20: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  21: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  62: 'HOSTNAME_MISMATCH',
+};
+
+// `ca` accepts a string, a Buffer, or an array of either; OpenSSL wants one PEM blob.
+function _caToPem(ca) {
+  if (!ca) return '';
+  if (Array.isArray(ca)) return ca.map(_caToPem).join('\n');
+  return Buffer.isBuffer(ca) ? ca.toString('utf8') : String(ca);
+}
+
+// `ca` may arrive directly or inside a secureContext built by tls.createSecureContext().
+function _caFromOptions(o) {
+  if (o.ca) return _caToPem(o.ca);
+  if (o.secureContext && o.secureContext.ca) return _caToPem(o.secureContext.ca);
+  return '';
+}
+
+// Decide authorized/authorizationError from the chain result. Returns an Error to fail the
+// connection with, or null to proceed. rejectUnauthorized defaults TRUE, as in node: until
+// this existed milo set authorized = true unconditionally and accepted any certificate.
+function _checkVerify(sock) {
+  const code = tcp.sslVerifyResult(sock._ssl);
+  if (code === 0) {
+    sock.authorized = true;
+    sock.authorizationError = null;
+    return null;
+  }
+  sock.authorized = false;
+  const name = X509_VERIFY_ERR[code] || `CERT_VERIFY_ERROR_${code}`;
+  sock.authorizationError = name;
+  if (sock._tlsOptions.rejectUnauthorized === false) return null;
+  const err = new Error(name);
+  err.code = name;
+  return err;
+}
+
 class TLSSocket extends net.Socket {
   constructor(socket, options) {
     super();
@@ -21,7 +69,7 @@ class TLSSocket extends net.Socket {
 
   _startTLS() {
     const hostname = this._tlsOptions.servername || this._tlsOptions.host || '';
-    this._ssl = tcp.sslConnectStart(this._fd, hostname);
+    this._ssl = tcp.sslConnectStart(this._fd, hostname, _caFromOptions(this._tlsOptions));
     if (!this._ssl || this._ssl < 0) {
       this._ssl = 0;
       process.nextTick(() => this.emit('error', new Error('TLS handshake init failed')));
@@ -62,8 +110,9 @@ class TLSSocket extends net.Socket {
       const result = tcp.sslConnectContinue(this._ssl);
       if (result === 1) {
         this._pendingTlsConnect = false;
-        this.authorized = true;
         tcp.pollRemove(this._fd, tcp.EVFILT_WRITE);
+        const verifyErr = _checkVerify(this);
+        if (verifyErr) { this.destroy(verifyErr); return; }
         this.emit('secureConnect');
       } else if (result === -1) {
         this.destroy(new Error('TLS client handshake failed'));
@@ -271,7 +320,10 @@ module.exports = {
   Server: serverWrapper,
   connect,
   createServer,
-  createSecureContext: () => ({}),
+  // Returned object must retain the options: tls.connect({secureContext}) is how several
+  // tests pass `ca`, and a stub returning {} silently dropped it — the connection then had
+  // no trust roots and (once verification existed) failed for a bogus reason.
+  createSecureContext: (opts) => ({ ...(opts || {}) }),
   DEFAULT_MIN_VERSION: 'TLSv1.2',
   DEFAULT_MAX_VERSION: 'TLSv1.3',
   DEFAULT_CIPHERS: '',

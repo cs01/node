@@ -349,6 +349,8 @@ int nm_resolve_group(const char* name) {
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/pem.h>
+#include <openssl/x509v3.h>
 #include <fcntl.h>
 
 static SSL_CTX* g_ssl_client_ctx = NULL;
@@ -358,6 +360,36 @@ static void nm_ssl_ensure_init(void) {
     g_ssl_client_ctx = SSL_CTX_new(TLS_client_method());
     SSL_CTX_set_default_verify_paths(g_ssl_client_ctx);
     SSL_CTX_set_min_proto_version(g_ssl_client_ctx, TLS1_2_VERSION);
+}
+
+// Build an X509_STORE from a PEM bundle (the `ca:` option). NULL if it parses to no certs.
+static X509_STORE* nm_ssl_store_from_pem(const char* pem) {
+    if (!pem || !pem[0]) return NULL;
+    BIO* bio = BIO_new_mem_buf(pem, -1);
+    if (!bio) return NULL;
+    X509_STORE* store = X509_STORE_new();
+    X509* x;
+    int n = 0;
+    while ((x = PEM_read_bio_X509(bio, NULL, NULL, NULL)) != NULL) {
+        X509_STORE_add_cert(store, x);
+        X509_free(x);
+        n++;
+    }
+    BIO_free(bio);
+    // The read loop always terminates by failing to find another start line; that pushes a
+    // benign error which would otherwise surface as a bogus handshake failure later.
+    ERR_clear_error();
+    if (n == 0) { X509_STORE_free(store); return NULL; }
+    return store;
+}
+
+// Point an SSL at a `ca:` bundle. Node treats `ca` as "trust EXACTLY these" — it replaces
+// the default roots for this connection rather than adding to them.
+static void nm_ssl_apply_ca(SSL* ssl, const char* ca_pem) {
+    X509_STORE* store = nm_ssl_store_from_pem(ca_pem);
+    if (!store) return;
+    SSL_set1_verify_cert_store(ssl, store);  // takes its own ref
+    X509_STORE_free(store);
 }
 
 // Connect TLS over an already-connected fd. Blocks during handshake.
@@ -383,7 +415,7 @@ long long nm_ssl_connect(int fd, const char* hostname) {
 
 // Non-blocking SSL_connect: create SSL, set fd, attempt connect.
 // Returns: SSL* if handshake complete, 0 if want_read/want_write (call nm_ssl_connect_continue), -1 on error
-long long nm_ssl_connect_start(int fd, const char* hostname) {
+long long nm_ssl_connect_start(int fd, const char* hostname, const char* ca_pem) {
     nm_ssl_ensure_init();
 
     // Verify socket is non-blocking
@@ -393,6 +425,7 @@ long long nm_ssl_connect_start(int fd, const char* hostname) {
     }
 
     SSL* ssl = SSL_new(g_ssl_client_ctx);
+    nm_ssl_apply_ca(ssl, ca_pem);
     SSL_set_fd(ssl, fd);
     if (hostname && hostname[0]) SSL_set_tlsext_host_name(ssl, hostname);
 
@@ -404,6 +437,24 @@ long long nm_ssl_connect_start(int fd, const char* hostname) {
     if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) return (long long)ssl;
     SSL_free(ssl);
     return -1;
+}
+
+// X509_V_OK (0) if the peer's cert chain verified, else the X509_V_ERR_* code; -2 = peer
+// sent no certificate at all (OpenSSL reports X509_V_OK for that — nothing to verify —
+// so it must be caught separately or "no cert" would read as "verified").
+//
+// Nothing called this before: milo accepted ANY certificate, including self-signed, while
+// reporting authorized = true, so a MITM was undetectable and the API said otherwise.
+// Verification runs even under the default SSL_VERIFY_NONE — that mode only means "don't
+// abort the handshake", the chain result is still computed — so enforcement is the JS
+// layer's job via rejectUnauthorized, exactly as in node.
+long nm_ssl_verify_result(long long ssl_ptr) {
+    SSL* ssl = (SSL*)(intptr_t)ssl_ptr;
+    if (!ssl) return -1;
+    X509* cert = SSL_get_peer_certificate(ssl);
+    if (!cert) return -2;
+    X509_free(cert);
+    return SSL_get_verify_result(ssl);
 }
 
 // Continue non-blocking SSL handshake. Returns: 1=done, 0=want_read/write, -1=error
@@ -465,13 +516,25 @@ long long nm_ssl_server_ctx_new(const char* cert_pem, int cert_len,
     if (!ctx) return 0;
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
 
-    // Load cert from PEM string
+    // Load the leaf, then EVERY remaining cert in the PEM as chain certs. A cert file may
+    // bundle intermediates (test/fixtures/keys/agent6-cert.pem is leaf + the ca3 intermediate);
+    // sending only the leaf leaves a client unable to bridge leaf -> intermediate -> root, so
+    // it reports UNABLE_TO_GET_ISSUER_CERT_LOCALLY against a root it actually trusts. This was
+    // always broken — it only became visible once the client started verifying at all.
     BIO* cert_bio = BIO_new_mem_buf(cert_pem, cert_len);
     X509* cert = PEM_read_bio_X509(cert_bio, NULL, NULL, NULL);
-    BIO_free(cert_bio);
-    if (!cert) { SSL_CTX_free(ctx); return 0; }
-    if (SSL_CTX_use_certificate(ctx, cert) != 1) { X509_free(cert); SSL_CTX_free(ctx); return 0; }
+    if (!cert) { BIO_free(cert_bio); SSL_CTX_free(ctx); return 0; }
+    if (SSL_CTX_use_certificate(ctx, cert) != 1) {
+        X509_free(cert); BIO_free(cert_bio); SSL_CTX_free(ctx); return 0;
+    }
     X509_free(cert);
+    X509* extra;
+    while ((extra = PEM_read_bio_X509(cert_bio, NULL, NULL, NULL)) != NULL) {
+        // Takes ownership on success only.
+        if (SSL_CTX_add_extra_chain_cert(ctx, extra) != 1) X509_free(extra);
+    }
+    BIO_free(cert_bio);
+    ERR_clear_error();  // the read loop always ends on a benign "no start line"
 
     // Load private key from PEM string
     BIO* key_bio = BIO_new_mem_buf(key_pem, key_len);

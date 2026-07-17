@@ -55,6 +55,13 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### [x] SECURITY: the TLS client verified no certificates (found + FIXED 2026-07-16)
+Fixed: SSL_get_verify_result + per-connection `ca:` store + rejectUnauthorized enforcement;
+createSecureContext no longer eats `ca`; server now sends its full intermediate chain
+(SSL_CTX_use_certificate loads only the leaf — milo servers had always sent partial chains).
+tls 22->23 PASS, 8->7 TIMEOUT, zero regressions. Still missing: checkServerIdentity (hostname
+vs CN/SAN) — OpenSSL SSL_set1_host would fold it into the same verify result. Original report:
+
 ### SECURITY: the TLS client verifies no certificates (found 2026-07-16)
 `tls.connect()` accepts a self-signed cert with rejectUnauthorized at its default (true) and
 reports `authorized = true` (node: UNABLE_TO_VERIFY_LEAF_SIGNATURE). No SSL_get_verify_result

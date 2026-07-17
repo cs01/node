@@ -778,7 +778,23 @@ self-signed cert, rejectUnauthorized left at its default (TRUE):
 sites. A MITM is undetectable, and code that checks `socket.authorized` is actively misled.
 This is not a compat gap — do not run this TLS client against anything untrusted.
 
-**Fix shape:** `SSL_get_verify_result(ssl)` after the handshake completes (a small C wrapper
+**FIXED 2026-07-16** (tls 22->23 PASS, 8->7 TIMEOUT, zero regressions). Landing it required
+three fixes, inseparable — verification alone would have broken every `ca:` test:
+1. `nm_ssl_verify_result` + per-connection `ca:` via `SSL_set1_verify_cert_store`. Key point:
+   OpenSSL computes the chain result even under the default SSL_VERIFY_NONE (that mode only
+   means "don't abort the handshake"), so verify mode is untouched and enforcement stays in JS
+   under rejectUnauthorized, as in node.
+2. `createSecureContext: () => ({})` was a stub that ATE the ca — tests pass it via
+   `tls.connect({secureContext})`. The 5j stub trap again.
+3. **The server never sent its intermediate chain.** `SSL_CTX_use_certificate` loads only the
+   leaf; agent6-cert.pem is leaf + the ca3 intermediate. milo servers had ALWAYS sent
+   incomplete chains — clients could not bridge to a root they trusted and reported
+   UNABLE_TO_GET_ISSUER_CERT_LOCALLY. Verification is what made a long-standing bug visible.
+
+`test-tls-connect-no-host` still passes and is now a REAL pass (its `ca: cert` path works),
+so the 5l READ-only handshake no longer trades anything away — revisit it.
+
+**Original fix shape (kept for reference):** `SSL_get_verify_result(ssl)` after the handshake completes (a small C wrapper
 next to nm_ssl_connect_continue; X509_V_OK == 0). Set `authorized`/`authorizationError` from
 it, and when `rejectUnauthorized !== false`, destroy with the mapped error instead of
 emitting 'secureConnect'. Then port `checkServerIdentity` (hostname vs CN/altnames) — node's
