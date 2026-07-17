@@ -48,7 +48,23 @@ function _makeRequest(options, cb) {
     const dns = require('dns');
 
     const doConnect = (ip) => {
-      const tlsSock = tls.connect({ port, host: ip, servername: host }, () => {
+      // Forward the caller's TLS options. This used to pass ONLY {port, host, servername},
+      // silently dropping ca / cert / key / rejectUnauthorized / checkServerIdentity — so
+      // every https request ignored what the caller asked for. Harmless while nothing was
+      // verified; once verification landed it meant a custom `ca` could never be trusted.
+      // `host: ip` last: connect to the RESOLVED address, but keep servername for SNI.
+      const tlsOpts = Object.assign({}, opts, {
+        port,
+        host: ip,
+        servername: opts.servername || host,
+      });
+      // NODE_TLS_REJECT_UNAUTHORIZED=0 disables verification process-wide (node semantics).
+      // Only honour it when the caller did not state a preference explicitly.
+      if (tlsOpts.rejectUnauthorized === undefined &&
+          process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
+        tlsOpts.rejectUnauthorized = false;
+      }
+      const tlsSock = tls.connect(tlsOpts, () => {
         this.socket = tlsSock;
         this.headersSent = true;
         const body = this._body.length > 0 ? Buffer.concat(this._body) : null;

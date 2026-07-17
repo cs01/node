@@ -193,7 +193,14 @@ function connect(options, cb) {
   const host = options.host || options.hostname || 'localhost';
   const servername = options.servername || host;
 
-  const tlsSock = new TLSSocket(null, { servername, host, ...options });
+  // NODE_TLS_REJECT_UNAUTHORIZED=0 disables verification process-wide (node semantics), but
+  // only when the caller did not state a preference explicitly.
+  const _opts = { servername, host, ...options };
+  if (_opts.rejectUnauthorized === undefined &&
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
+    _opts.rejectUnauthorized = false;
+  }
+  const tlsSock = new TLSSocket(null, _opts);
   if (cb) tlsSock.once('secureConnect', cb);
 
   net._ensurePoll();

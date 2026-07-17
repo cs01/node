@@ -8,6 +8,7 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <deque>
+#include <utility>
 #include <cstring>
 #include <cstdio>
 #include <string>
@@ -323,6 +324,23 @@ class TsfnRegistry {
   std::deque<MiloTsfn*> all_;
 };
 
+// Process-exit cleanup hooks (napi_add_env_cleanup_hook).
+class MiloCleanupHooks {
+ public:
+  static MiloCleanupHooks& get() { static MiloCleanupHooks h; return h; }
+  void add(napi_cleanup_hook fn, void* arg) { hooks_.push_back({fn, arg}); }
+  void remove(napi_cleanup_hook fn, void* arg) {
+    for (auto it = hooks_.begin(); it != hooks_.end(); ++it)
+      if (it->first == fn && it->second == arg) { hooks_.erase(it); return; }
+  }
+  void run() {
+    // Reverse order, like node: later hooks may depend on earlier state.
+    while (!hooks_.empty()) { auto h = hooks_.back(); hooks_.pop_back(); h.first(h.second); }
+  }
+ private:
+  std::deque<std::pair<napi_cleanup_hook, void*>> hooks_;
+};
+
 }  // namespace
 
 // milo's Buffer is a JS-side class with no C++ constructor, but `Buffer.from(arrayBuffer)`
@@ -468,6 +486,77 @@ napi_status NAPI_CDECL napi_cancel_async_work(node_api_basic_env env, napi_async
     return napi_set_last_error((napi_env)env, napi_generic_failure);
   }
   return napi_clear_last_error((napi_env)env);
+}
+
+// --- buffers / env / misc -------------------------------------------------------------------
+// milo's Buffer is a JS-side Uint8Array subclass, so identity comes from Buffer.isBuffer
+// rather than a C++ type check.
+napi_status NAPI_CDECL napi_is_buffer(napi_env env, napi_value value, bool* result) {
+  if (env == nullptr || value == nullptr || result == nullptr) {
+    return napi_set_last_error(env, napi_invalid_arg);
+  }
+  v8::HandleScope scope(env->isolate);   // nothing escapes: only a bool leaves
+  v8::Local<v8::Value> v = *reinterpret_cast<v8::Local<v8::Value>*>(&value);
+  *result = v->IsUint8Array();
+  return napi_clear_last_error(env);
+}
+
+napi_status NAPI_CDECL napi_get_buffer_info(napi_env env,
+                                            napi_value value,
+                                            void** data,
+                                            size_t* length) {
+  if (env == nullptr || value == nullptr) return napi_set_last_error(env, napi_invalid_arg);
+  v8::HandleScope scope(env->isolate);
+  v8::Local<v8::Value> v = *reinterpret_cast<v8::Local<v8::Value>*>(&value);
+  if (!v->IsTypedArray()) return napi_set_last_error(env, napi_invalid_arg);
+  v8::Local<v8::TypedArray> ta = v.As<v8::TypedArray>();
+  if (data != nullptr) {
+    // Data() is the ArrayBuffer base; a Buffer is usually a VIEW into a shared pool, so the
+    // byte offset is mandatory — omitting it hands the addon the wrong bytes.
+    *data = static_cast<uint8_t*>(ta->Buffer()->Data()) + ta->ByteOffset();
+  }
+  if (length != nullptr) *length = ta->ByteLength();
+  return napi_clear_last_error(env);
+}
+
+// milo has NO libuv — there is no uv_loop_t to return. Fail loudly rather than hand back a
+// null/bogus loop the addon would dereference: a clean napi_generic_failure is debuggable, a
+// fake pointer is a segfault in someone else's code.
+napi_status NAPI_CDECL napi_get_uv_event_loop(node_api_basic_env env, struct uv_loop_s** loop) {
+  (void)loop;
+  return napi_set_last_error((napi_env)env, napi_generic_failure);
+}
+
+// Legacy self-registering entrypoint (deprecated in node). milo's loader looks for
+// napi_register_module_v1, so an addon calling this from a static initialiser has no live
+// context to register into. Accept and ignore rather than crash — such an addon is expected
+// to also export the v1 symbol.
+void NAPI_CDECL napi_module_register(napi_module* mod) { (void)mod; }
+
+napi_status NAPI_CDECL napi_add_env_cleanup_hook(node_api_basic_env env,
+                                                 napi_cleanup_hook fun,
+                                                 void* arg) {
+  if (env == nullptr || fun == nullptr) return napi_invalid_arg;
+  MiloCleanupHooks::get().add(fun, arg);
+  return napi_ok;
+}
+
+napi_status NAPI_CDECL napi_remove_env_cleanup_hook(node_api_basic_env env,
+                                                    napi_cleanup_hook fun,
+                                                    void* arg) {
+  if (env == nullptr || fun == nullptr) return napi_invalid_arg;
+  MiloCleanupHooks::get().remove(fun, arg);
+  return napi_ok;
+}
+
+// An exception from a context with no JS on the stack (a completion callback, a tsfn).
+// node emits it as uncaughtException; milo throws it into V8, which the loop surfaces.
+napi_status NAPI_CDECL napi_fatal_exception(napi_env env, napi_value err) {
+  if (env == nullptr || err == nullptr) return napi_set_last_error(env, napi_invalid_arg);
+  v8::HandleScope scope(env->isolate);
+  v8::Local<v8::Value> e = *reinterpret_cast<v8::Local<v8::Value>*>(&err);
+  env->isolate->ThrowException(e);
+  return napi_clear_last_error(env);
 }
 
 // --- napi_threadsafe_function public API -----------------------------------------------------
