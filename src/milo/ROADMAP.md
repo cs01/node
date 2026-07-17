@@ -53,7 +53,14 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ## quick wins (biggest compat % gain per effort)
 
-### error codes (cross-module) — see `## critical` for ground truth (2026-07-15)
+### error codes (cross-module) — see `## critical
+
+### SECURITY: the TLS client verifies no certificates (found 2026-07-16)
+`tls.connect()` accepts a self-signed cert with rejectUnauthorized at its default (true) and
+reports `authorized = true` (node: UNABLE_TO_VERIFY_LEAF_SIGNATURE). No SSL_get_verify_result
+call, no checkServerIdentity (0 hits in tls.js), `authorized` hardcoded at both handshake
+success sites. **MITM is undetectable and the API lies about it.** See lifecycle-probes/
+PLAYBOOK.md 5p for the fix shape. Also makes test-tls-connect-no-host a vacuous pass.` for ground truth (2026-07-15)
 - [x] ~~just adding `.code` to thrown errors~~ — STALE: `.code` now attached on most validation paths (ERR_OUT_OF_RANGE, ERR_UNKNOWN_ENCODING, ERR_ASSERTION all verified live). Remaining work is error *fidelity*, itemized in critical section.
 
 ### process (small remaining gaps)

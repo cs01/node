@@ -765,6 +765,30 @@ measured -2. Only the full ladder caught it. Reverting + writing down the exact 
 iteration and produced a clean landing; shipping it would have cost 2 tests and hidden the
 accounting bug. A reverted fix plus an accurate note beats a shipped regression.
 
+## 5p. SECURITY: milo's TLS client verifies NOTHING (2026-07-16)
+
+```
+self-signed cert, rejectUnauthorized left at its default (TRUE):
+  node:      REJECTED: UNABLE_TO_VERIFY_LEAF_SIGNATURE
+  milo-node: CONNECTED, authorized = true, authorizationError = undefined
+```
+**Every `tls.connect()` is effectively `rejectUnauthorized: false`, while the API reports
+`authorized = true`.** `checkServerIdentity` does not exist in tls.js (0 hits); nothing calls
+`SSL_get_verify_result`; `authorized` is set unconditionally at the two handshake-success
+sites. A MITM is undetectable, and code that checks `socket.authorized` is actively misled.
+This is not a compat gap — do not run this TLS client against anything untrusted.
+
+**Fix shape:** `SSL_get_verify_result(ssl)` after the handshake completes (a small C wrapper
+next to nm_ssl_connect_continue; X509_V_OK == 0). Set `authorized`/`authorizationError` from
+it, and when `rejectUnauthorized !== false`, destroy with the mapped error instead of
+emitting 'secureConnect'. Then port `checkServerIdentity` (hostname vs CN/altnames) — node's
+lives in lib/tls.js. `ca:` handling needs SSL_CTX_load_verify_* on the client ctx.
+
+**It also settles the 5l trade.** `test-tls-connect-no-host` asserts `socket.authorized` —
+which milo hardcodes true, so it **passes vacuously**. With test-tls-client-abort now fixed
+(the destroyed-guard), the READ-only handshake's real cost is ONE vacuous pass for THREE
+OOM crashes. Re-run that trade once verification lands and the pass means something.
+
 ## 5b. a real bug found outside node-milo (worth reporting upstream)
 
 `~/.local/bin/timeout` is a **milo-built** tool (`timeout (milo) 1.0.0`) and it does not
