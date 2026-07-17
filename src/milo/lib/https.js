@@ -241,38 +241,51 @@ class Server extends EventEmitter {
         }
       });
 
-      let buf = '';
-      socket.on('data', (chunk) => {
-        buf += chunk.toString();
-        const headerEnd = buf.indexOf('\r\n\r\n');
-        if (headerEnd === -1) return;
-        const headerPart = buf.substring(0, headerEnd);
-        const body = buf.substring(headerEnd + 4);
-        const lines = headerPart.split('\r\n');
-        const [method, url, version] = lines[0].split(' ');
-        const req = new http.IncomingMessage();
-        req.method = method;
-        req.url = url;
-        req.httpVersion = (version || '').replace('HTTP/', '');
-        for (let i = 1; i < lines.length; i++) {
-          const idx = lines[i].indexOf(':');
-          if (idx > 0) {
-            const key = lines[i].substring(0, idx).trim().toLowerCase();
-            const val = lines[i].substring(idx + 1).trim();
-            req.headers[key] = val;
-            req.rawHeaders.push(lines[i].substring(0, idx).trim(), val);
-          }
-        }
-        if (body) req.push(Buffer.from(body));
+      // A Buffer, not a string: `buf += chunk.toString()` mangles any non-UTF8 body byte.
+      // And headers are parsed once, then the body is accumulated until Content-Length is
+      // satisfied — the old code fired 'request' and push(null) on the FIRST chunk that
+      // contained \r\n\r\n, dropping any body that arrived in a later TLS record and
+      // answering 200 on an empty body. (This still assumes one request per connection; the
+      // https server does not yet reuse http.js's full parser — see ROADMAP.)
+      let buf = Buffer.alloc(0);
+      let headerEnd = -1;
+      let req = null, res = null, needBody = 0, bodyStart = 0, delivered = false;
+      const deliver = () => {
+        if (delivered) return;
+        delivered = true;
+        const body = buf.subarray(bodyStart);
+        if (body.length) req.push(body);
         req.push(null);
         req.complete = true;
         socket._httpActive = true;
-        const res = new http.ServerResponse(socket);
-        res.on('finish', () => {
-          socket._httpActive = false;
-          if (this._closing) socket.destroy();
-        });
+        res = new http.ServerResponse(socket);
+        res.on('finish', () => { socket._httpActive = false; if (this._closing) socket.destroy(); });
         this.emit('request', req, res);
+      };
+      socket.on('data', (chunk) => {
+        buf = Buffer.concat([buf, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
+        if (headerEnd === -1) {
+          headerEnd = buf.indexOf('\r\n\r\n');
+          if (headerEnd === -1) return;   // headers not complete yet
+          const lines = buf.subarray(0, headerEnd).toString('latin1').split('\r\n');
+          const [method, url, version] = lines[0].split(' ');
+          req = new http.IncomingMessage();
+          req.method = method; req.url = url;
+          req.httpVersion = (version || '').replace('HTTP/', '');
+          for (let i = 1; i < lines.length; i++) {
+            const idx = lines[i].indexOf(':');
+            if (idx > 0) {
+              const key = lines[i].substring(0, idx).trim().toLowerCase();
+              const val = lines[i].substring(idx + 1).trim();
+              req.headers[key] = val;
+              req.rawHeaders.push(lines[i].substring(0, idx).trim(), val);
+            }
+          }
+          needBody = parseInt(req.headers['content-length'], 10) || 0;
+          bodyStart = headerEnd + 4;
+        }
+        // Deliver once the whole declared body has arrived (or there is none).
+        if (buf.length - bodyStart >= needBody) deliver();
       });
     });
 

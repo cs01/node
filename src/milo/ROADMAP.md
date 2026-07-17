@@ -55,6 +55,17 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### [~] https server: POST bodies now buffer to Content-Length (PARTIAL fix 2026-07-16)
+Was the single worst lie: the hand-rolled parser fired 'request' + push(null) on the FIRST
+data chunk containing the header terminator, dropping any body in a later TLS record and
+answering 200 on an empty body; `buf += chunk.toString()` also mangled binary. Now
+accumulates a Buffer until Content-Length is satisfied. VERIFIED: 1000-byte POST 0->1000,
+3000-byte binary intact, GET unaffected. STILL a duplicate parser (https.js) separate from
+http.js's real one — so no chunked request bodies, one request per connection (buf not reset),
+duplicate headers collapsed. The right fix is to delete this parser and drive http.Server's
+connection listener over tls sockets; that is a session. The https CLIENT (https.js:91-156) is
+a THIRD parser that collapses set-cookie and pins IPv4 — also unfixed.
+
 ### [x] zero-length Buffer crashed crypto/zlib input paths (FIXED 2026-07-16)
 An empty Buffer has a null data pointer, but crypto.milo:66 and zlib.milo:27 treated null as
 failure and bailed, so sha256(Buffer.alloc(0)) and gzip(Buffer.alloc(0)) crashed where node
