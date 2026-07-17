@@ -55,6 +55,12 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### tls is fd-based (SSL_set_fd); node is BIO-pair based
+Blocks TLS-over-TLS (test-tls-inception), TLS over any non-fd duplex, and STARTTLS upgrades.
+All 4 SSL sites in entry.c use SSL_set_fd. Real fix is SSL_set_bio + memory BIO pair, pumping
+ciphertext from the underlying stream. Guarded for now (fails fast, was silent corruption).
+See lifecycle-probes/PLAYBOOK.md 5s.
+
 ### [x] tls.connect({socket}) — IMPLEMENTED 2026-07-16 (tls 23 -> 25, timeout 10 -> 7). Remaining: test-tls-inception (nested tls-over-tls), and tls.js still carries a duplicate connect path that bypasses net.js.
 ### (original) tls.connect({socket}) is ignored
 tls.connect always allocates its own fd and never reads options.socket, so a caller-supplied

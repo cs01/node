@@ -204,6 +204,18 @@ function connect(options, cb) {
   // on 'connect' in that case.
   if (options.socket) {
     const inner = options.socket;
+    // TLS-over-TLS (options.socket is itself a TLSSocket) cannot work here: adoption is
+    // fd-based, and that fd carries the OUTER session's ciphertext — running a second SSL on
+    // it (plus stealing the outer's _sockets entry) corrupts the outer session instead of
+    // tunnelling through it. Node manages this by driving SSL through a memory BIO pair
+    // rather than SSL_set_fd; milo is fd-based at all 4 SSL sites. Fail loudly rather than
+    // silently corrupt — see PLAYBOOK 5s.
+    if (inner && inner._ssl !== undefined) {
+      const e = new Error('tls.connect({socket}) over a TLSSocket (TLS-in-TLS) is not supported: milo drives SSL via SSL_set_fd, not a BIO pair');
+      e.code = 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM';
+      process.nextTick(() => tlsSock.emit('error', e));
+      return tlsSock;
+    }
     const adopt = () => {
       if (tlsSock.destroyed) return;
       tlsSock._fd = inner._fd;

@@ -836,6 +836,28 @@ rule it should WRAP net.Socket's existing push path rather than reinvent it. Ver
 BOTH on-empty-socket (hand-rolled `s.on('data')` consumer) and inception (pipe consumer) —
 they exercise the two halves and the one-liner traded one for the other.
 
+## 5s. test-tls-inception needs a BIO-PAIR architecture. It is NOT a lifecycle bug. (2026-07-16)
+
+inception is `tls.connect({socket})` where the socket is **itself a TLSSocket** — TLS-over-TLS.
+5q's adoption is **fd-based**: it takes `inner._fd`. For a TLSSocket that fd carries the OUTER
+session's ciphertext, so running a second SSL on it (and stealing the outer's `_sockets` entry)
+CORRUPTS the outer session rather than tunnelling through it.
+
+**Root cause: milo drives SSL with `SSL_set_fd` at all 4 sites (entry.c :403 :429 :560 :583);
+node drives it through a memory BIO pair.** A BIO pair is what lets node wrap TLS around ANY
+duplex stream (TLS-in-TLS, TLS over a unix pipe, STARTTLS upgrades). That is an architectural
+change to milo's TLS core, not a patch.
+
+Interim: `tls.connect({socket: <TLSSocket>})` now fails fast with
+ERR_FEATURE_UNAVAILABLE_ON_PLATFORM instead of hanging ~9s while corrupting the outer session
+(inception TIMEOUT -> FAIL; tls 25 PASS held, TIMEOUT 7 -> 6). Silent corruption is strictly
+worse than a loud error.
+
+**If someone does the BIO work:** SSL_set_bio(ssl, rbio, wbio) with BIO_new(BIO_s_mem());
+feed ciphertext in from the underlying stream's 'data', pump plaintext out via SSL_read, and
+drain SSL_write output from the wbio back to the stream's write(). It replaces SSL_set_fd
+everywhere and would also delete tls.js's duplicate connect path.
+
 ## 5m. NEXT UP — scoped, not started (2026-07-16 end of session)
 
 Ranked by expected value. All verified against `./out/Release/node` unless noted.
