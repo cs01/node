@@ -1139,7 +1139,7 @@
 
       // export { default as X } from 'source' / export { X } from 'source' / export { X, Y }
       if (!handled) {
-        m = line.match(/^\s*export\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/);
+        m = line.match(/^\s*export\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?\s*(?:\/\/.*)?$/);
         if (m) {
           const source = m[2];
           const specs = m[1].split(',').map(s => s.trim()).filter(Boolean);
@@ -1160,7 +1160,8 @@
 
       // export { X, Y } (local re-export, no from)
       if (!handled) {
-        m = line.match(/^\s*export\s+\{([^}]+)\}\s*;?\s*$/);
+        // tolerate a trailing line comment after the `;` (commander: `export { X }; // Deprecated`)
+        m = line.match(/^\s*export\s+\{([^}]+)\}\s*;?\s*(?:\/\/.*)?$/);
         if (m) {
           const specs = m[1].split(',').map(s => s.trim()).filter(Boolean);
           for (const spec of specs) {
