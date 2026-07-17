@@ -55,6 +55,20 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### tls client never SENDS its certificate — mutual TLS is broken
+`tls.connect({cert, key})` silently drops both: nm_ssl_connect_start has no cert/key args, so
+milo's client presents NO certificate. Proved against node's server with requestCert:true —
+it reports `SERVER saw client cert: NONE` for a milo client that passed cert+key. Any mTLS
+client (common for internal APIs, mTLS-gated databases) fails or silently connects
+unauthenticated. Fix mirrors nm_ssl_server_ctx_new: SSL_use_certificate + SSL_use_PrivateKey
+PER-SSL (the client ctx is shared — SSL_CTX_use_* would attach one caller's identity to every
+other connection in the process). Needs the full-chain drain too (see the leaf-only bug).
+
+### tls server ignores requestCert / rejectUnauthorized
+The server never calls SSL_CTX_set_verify, so it does not ask for a client cert at all and
+cannot enforce one. `authorized` is now honest (it reports false when no cert arrived), but
+the server cannot yet DEMAND one — rejectUnauthorized:true does not drop an anonymous client.
+
 ### [x] tls server honours minVersion/maxVersion/ciphers/ciphersuites (FIXED 2026-07-16)
 Was: nm_ssl_server_ctx_new took only cert+key, so a server built with {maxVersion:'TLSv1.2',
 ciphers:'...'} still negotiated TLSv1.3 with the default list — a caller could not restrict

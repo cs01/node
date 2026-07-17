@@ -103,7 +103,15 @@ class TLSSocket extends net.Socket {
       const result = tcp.sslAcceptContinue(this._ssl);
       if (result === 1) {
         this._pendingTlsAccept = false;
-        this.authorized = true;
+        // Server side: `authorized` must reflect the CLIENT's certificate, not be asserted.
+        // It was hardcoded true, so a server gating access on socket.authorized — the
+        // documented way to do mTLS — authorized a client that presented NO certificate at
+        // all. Same hardcoded-true shape as the old client-side hole.
+        // -2 = peer sent no cert (the usual case: requestCert was not set), 0 = verified.
+        const vr = tcp.sslVerifyResult(this._ssl);
+        this.authorized = (vr === 0);
+        this.authorizationError = vr === 0 ? null
+          : (X509_VERIFY_ERR[vr] || `CERT_VERIFY_ERROR_${vr}`);
         this.encrypted = true;
         tcp.pollRemove(this._fd, tcp.EVFILT_WRITE);
         if (this._tlsServer) this._tlsServer.emit('secureConnection', this);
