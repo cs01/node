@@ -783,7 +783,29 @@ re-register poll filters against the TLS socket, and handle the inner socket sti
 connect path that bypasses net.js (see 5l-old) — adopting `options.socket` is the natural
 moment to delete it and route everything through net.js.
 
-## 5r. test-tls-inception: TLSSocket is a HALF-STREAM. push() alone does NOT fix it (2026-07-16)
+## 5r. SOLVED (2026-07-16, attempt 3): TLSSocket is a real stream now. pipe() over TLS works.
+
+**pipe() over TLS received NOTHING before this** (40000 bytes -> 0). Now byte-identical to the
+oracle. No test in the suite covers it, so the ladder shows ZERO change (tls 25/7, net 57/5,
+probes 9/9) — the win is a real capability (`https.get(...).pipe(file)`), not a number.
+
+**The bug was a 3-way interaction; two blind attempts failed before instrumenting.**
+`push(null)` schedules 'end' on nextTick; stream.js gates that emit behind `!state._destroyed`
+(:253); and BOTH tls.js's read loop AND net.js's EV_EOF path destroyed synchronously right
+after. So 'end' was swallowed and every consumer waiting on it hung. Probe that cracked it:
+```
+DATA: "hello" flowing=true      <- data DID flow
+@1s ended=true endEmitted=FALSE destroyed=true   <- 'end' swallowed by the destroy
+```
+Fix: read loop pushes (never emits 'data'/'end' by hand) and lets the stream own shutdown;
+net.js's EV_EOF destroy is now skipped when `_readableState.ended` (autoDestroy finishes it).
+NOTE the earlier red herring: `own "readable" prop? true` looked like accessor shadowing, but
+milo's stream.js uses a plain `readable` property throughout (:173,:184,:212,:253) — that is
+its idiom, not the bug. Chasing it cost an attempt.
+
+**test-tls-inception STILL hangs** — it is a nested TLS-over-TLS proxy; separate problem.
+
+## 5r-old. (history: the two failed attempts)
 
 inception is a TLS proxy built on `pipe()` (`dest.pipe(socket); socket.pipe(dest)`, 40KB body),
 so it needs TLSSocket to behave as a real stream. It does not: the post-handshake read loop

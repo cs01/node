@@ -807,7 +807,13 @@ function _pollOnce(timeout) {
       // Today the WRITE spin masks this by driving _onReadable until sslRead reports closed.
       if (sock._ssl !== undefined) {
         try { sock._onReadable(); } catch (e) { _emitSocketError(sock, e); }
-        if (!sock.destroyed) { try { sock.destroy(); } catch (e) { _emitSocketError(sock, e); } }
+        // Destroy only if the stream did NOT take ownership of the shutdown. sslRead
+        // reporting closed makes _onReadable push(null), and stream.js gates its nextTick
+        // 'end' emit on !_destroyed — destroying here would swallow 'end' and hang any
+        // consumer waiting on it. When the stream ended, autoDestroy finishes the job.
+        if (!sock.destroyed && !(sock._readableState && sock._readableState.ended)) {
+          try { sock.destroy(); } catch (e) { _emitSocketError(sock, e); }
+        }
         continue;
       }
       if (!sock.destroyed && sock._readableState && !sock._readableState.ended) {

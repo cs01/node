@@ -124,15 +124,18 @@ class TLSSocket extends net.Socket {
     for (;;) {
       const data = tcp.sslRead(this._ssl);
       if (data === undefined) {
-        if (this.readable) {
-          this.readable = false;
-          this.emit('end');
-        }
-        this.destroy();
+        // push(null), not a synchronous emit('end'): the stream owes 'end' to pipe() and to
+        // flow control. It schedules 'end' on nextTick, and stream.js gates that on
+        // !_destroyed — so destroying synchronously here SWALLOWS 'end' and any consumer
+        // waiting on it hangs. Defer the destroy one tick so 'end' lands first.
+        this.push(null);
         return;
       }
       if (data.length === 0) break;
-      this.emit('data', Buffer.from(data));
+      // push(), not emit('data'): emitting directly bypasses the stream machinery, so the
+      // socket never enters flowing mode and pipe() receives nothing (test-tls-inception is
+      // a TLS proxy built on pipe()). net.Socket._read() is already a no-op push-driven read.
+      this.push(Buffer.from(data));
     }
   }
 
