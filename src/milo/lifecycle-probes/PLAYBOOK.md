@@ -886,6 +886,36 @@ feed ciphertext in from the underlying stream's 'data', pump plaintext out via S
 drain SSL_write output from the wbio back to the stream's write(). It replaces SSL_set_fd
 everywhere and would also delete tls.js's duplicate connect path.
 
+## 5u. OPEN BUG: fetch() over HTTPS intermittently truncates at TLS-record boundaries
+
+Found by running a REAL app (express + prisma + sqlite3 + trpc) — no test in the suite covers
+it. `Response.json()` throws `Unexpected non-whitespace character after JSON` /
+`Bad control character in string literal`, because the body is short.
+
+**It is a RACE, and it is fetch-specific.** Same URL, same process, three tries:
+```
+fetch:      146247 | 98304 (6 x 16KB) | 162631   <- varies run to run
+https.get:  162631 | 162631 | 162631              <- 3/3 correct, oracle-identical
+```
+Truncation is always an exact multiple of **16384 = the TLS max record size**.
+
+**Already ruled out** (do not re-test these):
+- NOT the TLS read path / my EV_EOF drain: `https.get` uses the same tls.js + net.js and is
+  reliable. Draining SSL to exhaustion on EOF changed nothing.
+- NOT chunked decoding: a LOCAL chunked https server serving 469791 bytes is byte-perfect
+  through fetch AND https.get.
+- NOT Response/ReadableStream/text(): the same 469791-byte body round-trips fine locally.
+- NOT gzip: milo sends no accept-encoding, so the server replies plain chunked (the oracle
+  negotiates gzip and gets the same bytes).
+Only the real network reproduces it — latency/segmentation matters.
+
+**Where to look next:** bootstrap.js:632 fetch -> `mod.request(opts)`; the body is collected
+with `res.on('data')` + `Buffer.concat` on `'end'`, which is exactly what the working
+https.get does. So suspect the difference in how fetch drives the request: it passes
+`hostname`+explicit `port` (https.get was given `host`), and its promise resolves from inside
+`res.on('end')`. Instrument chunk COUNT and total in both paths against a real remote host —
+something is ending the response early.
+
 ## 5m. NEXT UP — scoped, not started (2026-07-16 end of session)
 
 Ranked by expected value. All verified against `./out/Release/node` unless noted.

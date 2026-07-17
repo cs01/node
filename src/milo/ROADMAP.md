@@ -55,6 +55,12 @@ Overall: **milo 36%** (full run: 782/2143 pass, 1159 fail, 197 timeout, 5 OOM).
 
 ### error codes (cross-module) — see `## critical
 
+### fetch() over https intermittently truncates at 16KB (TLS record) multiples
+RACE. Same URL 3x: 146247 / 98304 / 162631. https.get on the same URL is 3/3 correct, so it
+is fetch-specific, not the tls read path. Only reproduces over the real network. Breaks any
+app using fetch against a remote https API. See lifecycle-probes/PLAYBOOK.md 5u for what is
+already ruled out.
+
 ### fs.watch rescans the whole directory on every event
 FSWatcher does readdirSync + statSync-per-entry per vnode event, so watching a large dir
 costs O(entries) per change (/tmp with 22k entries: 0.63s cpu vs node's 0.02s). node uses
