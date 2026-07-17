@@ -989,6 +989,12 @@ some path pauses the gzip stream on a false return that milo never gives, or wai
 'drain'/'finish' milo never emits, the stream stalls after one write. Trace: does milo's
 ServerResponse emit 'drain' after socket backpressure? does res.write's always-true return
 desync trpc's writer? Reproduce by driving res.write from an async loop that awaits 'drain'.
+RULED OUT (tested): `res.write(bigChunk, cb)` DOES fire its callback under backpressure, and a
+follow-up write + res.end() both complete (300154 bytes delivered) — so it is NOT a simple
+cb-never-fires stall for a single write. The stall is subtler: multiple gzip-chunk writes
+where a LATER cb/drain is missed, or a compression-internal wait on an event milo does not
+emit. Needs the live trpc+compression app with per-write cb logging to catch which write's
+completion is lost.
 The 3 truncation bugs fixed earlier (zlib 16KB cap x2, http close destroy) are real but
 orthogonal — this is a stream lifecycle stall, not a buffer cap.
 
