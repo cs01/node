@@ -1252,6 +1252,34 @@ parking on EVFILT_WRITE. Minor sibling bug noticed: milo's `dns.ADDRCONFIG`/`V4M
 are all 0 (node's are real bit flags 0x…), so `hints` sums differ — harmless here (the test
 regex `/Received \d+/` still matches) but worth fixing for dns correctness.
 
+**http SERVER keep-alive is BROKEN at the socket level — ROOT CAUSE + FIX located 2026-07-17
+(read-only diagnosis; NOT applied — http suite was unrunnable, an in-flight subagent held the
+net suite and concurrent suite runs cross-kill, trap 5b).** The server FINs the connection after
+EVERY response even on a `Connection: keep-alive` raw socket, so only the first request on a
+reused connection is ever answered. This blocks the whole raw-socket keep-alive cluster
+(test-http-keep-alive-max-requests, -pipeline-max-requests, -server-keep-alive-max-requests-null,
+-server-keep-alive-defaults, -keep-alive-drop-requests, and the https- variants).
+
+Trace (probe /tmp/mrps2.js, milo vs `./out/Release/node`): milo answers resp1 with
+`Connection: keep-alive` + `Keep-Alive: timeout=65, max=3` (header advertising works, §5f), then
+immediately sends a FIN; the client's 2nd request DOES reach the server ("SERVER got req GET /"
+prints AFTER "socket CLOSED"), but the socket is half-closed so no response goes back → hang.
+Node answers 3 requests, flipping resp3 to `Connection: close`. Reproduces WITH and WITHOUT
+`maxRequestsPerSocket` set, so it is NOT the max-requests path — it is plain server keep-alive.
+
+ROOT CAUSE: `ServerResponse.end()` at **http.js:413** calls `this._socket.end()`
+UNCONDITIONALLY (sends SHUT_WR) — even when `this.shouldKeepAlive` is true. The correctly-gated
+close already exists at http.js:588 (`res.on('finish', () => { if (this._closing ||
+req.headers['connection']==='close') socket.end(); })`), so line 413 pre-empts and defeats it.
+FIX (one line, http.js-only, no rebuild): gate line 413 — only `this._socket.end()` when the
+response is NOT keep-alive, e.g. `if (!this.shouldKeepAlive) this._socket.end();`, letting the
+:588 'finish' handler own the close decision (matches node: end() finishes the response and
+detaches; the socket stays open for the next request on keep-alive). VERIFY CAREFULLY: http is
+load-bearing (93 passing) — after applying, run the FULL `--module http` ladder (not just the
+keep-alive tests) because changing when the server socket closes can ripple. Also re-check that
+maxRequestsPerSocket enforcement (close on the Nth request) is still MISSING and add it per §5f
+(count requests per socket, force `shouldKeepAlive=false` on the limit-reaching response).
+
 ## 6. after the core fixes land (in order of expected yield)
 
 1. Re-run probes + net. Expect p01/p02/p04 green and several of these to flip:
