@@ -83,6 +83,14 @@ class Socket extends Duplex {
     // localAddress/localPort/localFamily are getters below — do NOT assign own properties
     // here or they shadow the getters (and throw in strict mode).
     if (options && options.signal) this._addAbortSignal(options.signal);
+    // Mirror node's onReadableStreamEnd (lib/net.js): !allowHalfOpen must end the writable
+    // side when the peer's FIN is consumed. stream.js only does this on the flowing/empty-
+    // buffer push(null) path; when EOF arrives while PAUSED with buffered data, 'end' is
+    // emitted later from the drain paths, which skip the auto-end — the FIN was never sent
+    // and both peers deadlocked waiting on each other (test-net-write-slow).
+    this.on('end', () => {
+      if (this.allowHalfOpen === false && this._writableState && !this._writableState.ended) this.end();
+    });
     if (this._fd >= 0) this._startReading();
   }
 

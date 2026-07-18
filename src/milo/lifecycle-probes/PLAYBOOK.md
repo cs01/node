@@ -89,7 +89,14 @@ The premise this playbook was built on — "the hangs are busy-loops that OOM at
 remaining net+tls TIMEOUT was CPU-sampled at 6s and **all 15 sleep (0.04-0.09s CPU). Zero
 spin. Zero OOM.**
 ```
-net: 61 PASS / 0 OOM /  1 TIMEOUT      (start of grind: 44 PASS / 3 OOM / 12 TIMEOUT)
+net: 62 PASS / 0 OOM /  0 TIMEOUT      (start of grind: 44 PASS / 3 OOM / 12 TIMEOUT)  ** CLEAN **
+     [write-slow fixed 2026-07-17: NOT the fcntl/blocking-write theory (§5e#1 is STALE — dead —
+      nm_set_nonblock works, EAGAIN backpressure already present + functional). Real cause: the
+      allowHalfOpen:false auto-end() only ran on stream.js's flowing/empty push(null) path; when
+      the peer FIN arrived while the socket was PAUSED with buffered data, 'end' emitted later
+      from a drain path with no auto-end, so the writable side never FIN'd and both peers
+      deadlocked. Fix: Socket ctor now has an on('end') that ends() the writable side when
+      !allowHalfOpen, mirroring node's onReadableStreamEnd. net.js only, no rebuild.]
      [end()-before-connect fixed 2026-07-17: _final now defers FIN to 'connect' when fd<0]
      [listen({fd}) fixed 2026-07-17: adopts the fd (was ignored); non-socket fd -> EINVAL]
      [socket reconnect fixed 2026-07-17 (§5k CLOSED): end() one-shot latches _finishing/
