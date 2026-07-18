@@ -410,7 +410,12 @@ class ServerResponse extends OutgoingMessage {
     this.finished = true;
     this.writable = false;
     this.writableEnded = true;
-    this._socket.end();
+    // Only FIN the socket when the connection is NOT keep-alive. Ending it unconditionally
+    // closed the write side after EVERY response, so a keep-alive client's 2nd request on a
+    // reused socket got no reply (server half-closed). The gated close in the res.on('finish')
+    // handler (see server 'request' wiring) owns the keep-alive/close decision instead — matching
+    // node, where end() finishes the response and detaches, leaving the socket open for reuse.
+    if (!this.shouldKeepAlive) this._socket.end();
     this.emit('finish');
     if (cb) cb();
     return this;

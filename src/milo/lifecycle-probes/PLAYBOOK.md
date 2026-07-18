@@ -1275,17 +1275,25 @@ Node answers 3 requests, flipping resp3 to `Connection: close`. Reproduces WITH 
 `maxRequestsPerSocket` set, so it is NOT the max-requests path — it is plain server keep-alive.
 
 ROOT CAUSE: `ServerResponse.end()` at **http.js:413** calls `this._socket.end()`
-UNCONDITIONALLY (sends SHUT_WR) — even when `this.shouldKeepAlive` is true. The correctly-gated
-close already exists at http.js:588 (`res.on('finish', () => { if (this._closing ||
-req.headers['connection']==='close') socket.end(); })`), so line 413 pre-empts and defeats it.
-FIX (one line, http.js-only, no rebuild): gate line 413 — only `this._socket.end()` when the
-response is NOT keep-alive, e.g. `if (!this.shouldKeepAlive) this._socket.end();`, letting the
-:588 'finish' handler own the close decision (matches node: end() finishes the response and
-detaches; the socket stays open for the next request on keep-alive). VERIFY CAREFULLY: http is
-load-bearing (93 passing) — after applying, run the FULL `--module http` ladder (not just the
-keep-alive tests) because changing when the server socket closes can ripple. Also re-check that
-maxRequestsPerSocket enforcement (close on the Nth request) is still MISSING and add it per §5f
-(count requests per socket, force `shouldKeepAlive=false` on the limit-reaching response).
+UNCONDITIONALLY (sends SHUT_WR) — even when `this.shouldKeepAlive` is true.
+**FIXED 2026-07-17: gated `if (!this.shouldKeepAlive) this._socket.end();`.** Verified: the
+socket now stays open across requests (repro answers 5/5, was 1/5), and a real express server
+behind a `keepAlive:true` Agent serves 3 requests on one connection. net 62 + probes 9/9
+unchanged; A/B'd response-statuscode/write-head failures are PRE-EXISTING, not caused by this.
+
+THE KEEP-ALIVE TEST CLUSTER STILL FAILS — but now on THREE separate downstream bugs (each its
+own future hypothesis; do NOT bundle):
+  1. **chunked-vs-Content-Length**: `res.end('body')` with the full body known sends
+     `transfer-encoding: chunked`; node sends `Content-Length: N`. The tests split the response
+     stream on \r\n\r\n and chunk framing misaligns the split. (http.js write/end path — when
+     end() has the whole body and no explicit CL, set Content-Length instead of chunking.)
+  2. **maxRequestsPerSocket not enforced**: milo advertises `max=N` but never closes on the Nth
+     request. Node flips resp N to `Connection: close` + sets maxRequestsOnConnectionReached.
+     (count requests per socket, force shouldKeepAlive=false on the limit response — §5f.)
+  3. header casing/order: milo emits `transfer-encoding: chunked` lowercase; node's is
+     `Transfer-Encoding`. Falls out of fixing #1 for these tests, but note the casing bug.
+  (Header emission itself WORKS — `Keep-Alive: timeout=65` is present with default max=0,
+   contra the earlier guess; verified byte-diff vs the oracle.)
 
 ## 6. after the core fixes land (in order of expected yield)
 
