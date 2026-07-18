@@ -248,11 +248,23 @@ class Socket extends Duplex {
       return;
     }
     this._handle = { fd: this._fd };
-    tcp.connect(this._fd, ip, port); // 0 or EINPROGRESS; readiness comes via EVFILT_WRITE
-    tcp.pollAdd(this._fd, EVFILT_WRITE);
-    Socket._sockets.set(this._fd, this);
     this.remoteAddress = ip;
     this.remotePort = port;
+    // -36 = EINPROGRESS: the expected non-blocking case, readiness comes via EVFILT_WRITE.
+    // Any OTHER negative is a synchronous connect failure (connect-to-port-0 returns
+    // EADDRNOTAVAIL immediately); surface it now — parking on EVFILT_WRITE would hang
+    // forever because no readiness event is coming. nextTick so a later .on('error') catches it.
+    const cr = tcp.connect(this._fd, ip, port);
+    if (cr < 0 && cr !== -36) {
+      const errno = -cr;
+      const code = _CONNECT_ERRNO[errno] || 'UNKNOWN';
+      const e = new Error(`connect ${code} ${ip}:${port}`);
+      e.code = code; e.errno = -errno; e.syscall = 'connect'; e.address = ip; e.port = port;
+      process.nextTick(() => this.destroy(e));
+      return;
+    }
+    tcp.pollAdd(this._fd, EVFILT_WRITE);
+    Socket._sockets.set(this._fd, this);
   }
 
   _onConnected(ev) {

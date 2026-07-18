@@ -9,6 +9,7 @@
 #include <sys/event.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
+#include <sys/socket.h>
 #include <errno.h>
 
 typedef void (*binding_init_fn)(void* iso, void* ctx, int32_t exports);
@@ -146,6 +147,15 @@ int nm_set_nonblock(int fd) {
 long nm_write(int fd, const void* buf, long len) {
     long n = write(fd, buf, len);
     return n >= 0 ? n : -errno;
+}
+
+// Capture errno like nm_write: on a non-blocking socket EINPROGRESS (-36) is the
+// expected "connection under way" case, but any OTHER negative is a real synchronous
+// failure — e.g. connect-to-port-0 returns EADDRNOTAVAIL immediately. Raw connect()
+// only returned -1, so JS couldn't tell the two apart and parked forever on EVFILT_WRITE.
+int nm_connect(int fd, const void* addr, int alen) {
+    int r = connect(fd, (const struct sockaddr*)addr, (socklen_t)alen);
+    return r == 0 ? 0 : -errno;
 }
 
 // libc utimes() takes a struct timeval[2] by pointer — awkward for the milo FFI
